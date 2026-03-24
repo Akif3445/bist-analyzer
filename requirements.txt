@@ -1,0 +1,21 @@
+# BIST Smart Investment Assistant - Dependencies
+# pip install -r requirements.txt
+
+streamlit>=1.28.0
+streamlit-option-menu>=0.3.6
+plotly>=5.18.0
+pandas>=2.0.0
+numpy>=1.24.0
+yfinance>=0.2.40
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+anthropic>=0.18.0
+feedparser>=6.0.0
+
+# Turkish NLP sentiment (BERT model)
+transformers>=4.36.0
+torch>=2.1.0
+
+# Optional: .env file support (not needed on Streamlit Cloud)
+# python-dotenv>=1.0.0
