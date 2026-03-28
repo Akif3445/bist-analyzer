@@ -1222,16 +1222,22 @@ def analyze_news(
     all_raw: list[NewsItem] = []
     with ThreadPoolExecutor(max_workers=6) as ex:
         futures = {ex.submit(fn, ticker, cutoff): fn.__name__ for fn in source_fns}
-        for future in as_completed(futures, timeout=20):
-            try:
-                items = future.result()
-                if items:
-                    all_raw.extend(items)
-                    src = items[0].source
-                    if src not in result.data_sources:
-                        result.data_sources.append(src)
-            except Exception as exc:
-                logger.warning(f"Kaynak exception: {exc}")
+        try:
+            for future in as_completed(futures, timeout=45):
+                try:
+                    items = future.result(timeout=15)
+                    if items:
+                        all_raw.extend(items)
+                        src = items[0].source
+                        if src not in result.data_sources:
+                            result.data_sources.append(src)
+                except Exception as exc:
+                    logger.warning(f"Kaynak exception: {exc}")
+        except TimeoutError:
+            logger.warning("Haber kaynaklari toplam timeout - mevcut sonuclarla devam ediliyor")
+            # Tamamlanmamış future'ları iptal et
+            for f in futures:
+                f.cancel()
 
     # ── Mükerrer tespiti ve duplicate_count artırımı ──────
     # Başlık benzerliğine göre grupla, her grupta en güvenilir kaynağı tut
