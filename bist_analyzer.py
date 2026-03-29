@@ -4086,6 +4086,11 @@ def create_candlestick_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
 def render_dashboard_page(ui_lang):
     title = "Piyasa Özeti (Dashboard)" if ui_lang == "TR" else "Market Overview"
     st.markdown(f"# {title}")
+    st.caption(
+        "Borsa İstanbul ve makroekonomik göstergelerin anlık özeti. Veriler 10-60 dk aralıklarla güncellenir."
+        if ui_lang == "TR" else
+        "Real-time summary of Borsa Istanbul and macroeconomic indicators. Data refreshes every 10-60 min."
+    )
 
     # ── Makroekonomik Göstergeler ─────────────────────────────────────────
     @st.cache_data(ttl=600, show_spinner=False)
@@ -5570,14 +5575,26 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                     raw.columns = raw.columns.get_level_values(0)
                 raw.index = pd.to_datetime(raw.index).tz_localize(None)
                 if raw.empty or "Close" not in raw.columns:
-                    st.error(f"{us_symbol}: No data available")
+                    st.error(
+                        f"**{us_symbol}** için veri bulunamadı. Hisse kodunu kontrol edin "
+                        f"(örn: AAPL, MSFT, GOOGL)."
+                        if ui_lang == "TR" else
+                        f"No data found for **{us_symbol}**. Please check the ticker symbol "
+                        f"(e.g., AAPL, MSFT, GOOGL)."
+                    )
                     return
                 if "Open"   not in raw.columns: raw["Open"]   = raw["Close"]
                 if "High"   not in raw.columns: raw["High"]   = raw["Close"]
                 if "Low"    not in raw.columns: raw["Low"]    = raw["Close"]
                 if "Volume" not in raw.columns: raw["Volume"] = 0.0
             except Exception as exc:
-                st.error(f"Error fetching {us_symbol}: {exc}")
+                st.error(
+                    f"**{us_symbol}** verisi alınırken hata oluştu. "
+                    f"İnternet bağlantınızı kontrol edin veya farklı bir hisse deneyin."
+                    if ui_lang == "TR" else
+                    f"Error fetching **{us_symbol}**. Check your internet connection or try a different ticker."
+                )
+                log.warning("US veri çekme hatası (%s): %s", us_symbol, exc)
                 return
 
         # Score
@@ -6756,11 +6773,24 @@ def render_portfolio_page(ui_lang):
     with st.form("portfolio_ekle_form", clear_on_submit=True):
         cp1, cp2, cp3, cp4 = st.columns([2, 1.5, 1.5, 1])
         with cp1:
-            p_tick = st.text_input("Hisse Kodu" if ui_lang == "TR" else "Ticker", placeholder="Örn: THYAO").strip().upper()
+            p_tick = st.text_input(
+                "Hisse Kodu" if ui_lang == "TR" else "Ticker",
+                placeholder="Örn: THYAO",
+                help="BIST kodu girin (örn: THYAO, GARAN). US hisseleri için AAPL:US formatı kullanın."
+                     if ui_lang == "TR" else "Enter BIST ticker (e.g. THYAO). For US stocks use AAPL:US format."
+            ).strip().upper()
         with cp2:
-            p_cost = st.number_input("Maliyet (TL)" if ui_lang == "TR" else "Cost (TL)", min_value=0.0, format="%.2f")
+            p_cost = st.number_input(
+                "Maliyet (TL)" if ui_lang == "TR" else "Cost (TL)",
+                min_value=0.0, format="%.2f",
+                help="Hisse başına ortalama alış fiyatınız" if ui_lang == "TR" else "Average cost per share"
+            )
         with cp3:
-            p_qty = st.number_input("Adet" if ui_lang == "TR" else "Quantity", min_value=0, step=1)
+            p_qty = st.number_input(
+                "Adet" if ui_lang == "TR" else "Quantity",
+                min_value=0, step=1,
+                help="Toplam adet (0 = sadece takip listesi)" if ui_lang == "TR" else "Total shares (0 = watchlist only)"
+            )
         with cp4:
             st.markdown("<br>", unsafe_allow_html=True)
             submitted = st.form_submit_button("Ekle (Add)", use_container_width=True)
@@ -6775,7 +6805,13 @@ def render_portfolio_page(ui_lang):
 
     portfolio_items = _history_db.get_portfolio()
     if not portfolio_items:
-        st.info("Portföyünüz boş. Yukarıdaki formu kullanarak hisse ekleyebilirsiniz." if ui_lang == "TR" else "Your portfolio is empty. Use the form above to add stocks.")
+        st.info(
+            "Portföyünüz henüz boş. Yukarıdaki formu kullanarak hisse ekleyebilir "
+            "veya **Hisse Analizi** sayfasında bir hisseyi analiz edip **Favorilere Ekle** butonuna basabilirsiniz."
+            if ui_lang == "TR" else
+            "Your portfolio is empty. Use the form above to add stocks, "
+            "or analyze a stock in the **Analysis** page and click **Add to Portfolio**."
+        )
         return
 
     # ── Gerçek zamanlı fiyatlar (5 dak. cache, toplu çekim) ──────────────
@@ -7144,9 +7180,10 @@ def render_analysis_page(ui_lang):
         st.markdown("---")
 
         analyst_target = st.number_input(
-            "Analyst Target Price (TL)",
+            "Analist Hedef Fiyat (TL)" if ui_lang == "TR" else "Analyst Target Price",
             min_value=0.0, value=0.0, step=0.5,
-            help="Optional broker target price",
+            help="Aracı kurum analist raporlarındaki hedef fiyat. Boş bırakırsanız prim skoru nötr (50) olur."
+                 if ui_lang == "TR" else "Broker target price. Leave 0 for neutral upside score (50).",
         )
         analyst_target = analyst_target if analyst_target > 0 else None
 
@@ -7211,18 +7248,77 @@ def render_analysis_page(ui_lang):
                         st.rerun()
 
         st.markdown("---")
-        st.markdown(
-            "*Bu uygulama yatirim tavsiyesi niteliginde degildir.*" if ui_lang == "TR"
-            else "*This app does not constitute investment advice.*"
-        )
 
     title_text = "BIST Akilli Yatirim Asistani" if ui_lang == "TR" else "BIST Smart Investment Assistant"
     st.markdown(f"# {title_text}")
 
     if not analyze_btn:
-        msg = "Sol menuden hisse kodu girin ve 'Analiz Et' butonuna basin." if ui_lang == "TR" \
-              else "Enter a stock code in the sidebar and click Analyze."
-        st.info(msg)
+        # ── İlk açılış / Onboarding ──────────────────────────
+        st.info(
+            "Sol menüden hisse kodu girin ve **Analiz Et** butonuna basın."
+            if ui_lang == "TR" else
+            "Enter a stock code in the sidebar and click **Analyze**."
+        )
+        with st.expander(
+            "Nasıl Çalışır? — Skor Sistemi Rehberi" if ui_lang == "TR" else
+            "How It Works — Scoring Guide", expanded=False
+        ):
+            st.markdown(
+                """
+**Skor Nasıl Hesaplanır?**
+Her hisse 0-100 arasında puanlanır. 4 bileşenden oluşur:
+
+| Bileşen | Ağırlık | Ne Ölçer? |
+|---|---|---|
+| Teknik Analiz | %35 | RSI, MACD, SMA trendleri, hacim |
+| Haber Sentiment | %35 | 20+ kaynaktan haber duygu analizi |
+| Prim Potansiyeli | %20 | Analist hedef fiyat karşılaştırması |
+| Değerleme | %10 | F/K, PD/DD, ROE oranları |
+
+**Sinyal Anlamları:**
+- **GÜÇLÜ AL** (72+): Teknik ve temel veriler güçlü pozitif
+- **AL** (57-71): Genel görünüm olumlu
+- **NÖTR** (43-56): Belirgin yön yok, bekleme
+- **SAT** (30-42): Olumsuz sinyaller ağırlıkta
+- **GÜÇLÜ SAT** (<30): Güçlü negatif sinyaller
+                """ if ui_lang == "TR" else
+                """
+**How Is the Score Calculated?**
+Each stock is rated 0-100, composed of 4 components:
+
+| Component | Weight | What It Measures |
+|---|---|---|
+| Technical Analysis | 35% | RSI, MACD, SMA trends, volume |
+| News Sentiment | 35% | Sentiment from 20+ news sources |
+| Upside Potential | 20% | Analyst target price comparison |
+| Valuation | 10% | P/E, P/B, ROE ratios |
+
+**Signal Meanings:**
+- **STRONG BUY** (72+): Strong positive technicals and fundamentals
+- **BUY** (57-71): Generally positive outlook
+- **NEUTRAL** (43-56): No clear direction, hold
+- **SELL** (30-42): Negative signals dominate
+- **STRONG SELL** (<30): Strong negative signals
+                """
+            )
+        return
+
+    # ── Input validation ──────────────────────────────────
+    if not ticker_input or len(ticker_input) < 2:
+        st.warning(
+            "Lütfen geçerli bir hisse kodu girin (örn: THYAO, GARAN)."
+            if ui_lang == "TR" else
+            "Please enter a valid stock ticker (e.g., THYAO, GARAN)."
+        )
+        return
+    # Sadece harf ve rakam kabul et
+    import re as _re
+    if not _re.match(r'^[A-Z0-9]+$', ticker_input):
+        st.warning(
+            "Hisse kodu sadece harf ve rakam içermelidir."
+            if ui_lang == "TR" else
+            "Stock ticker must contain only letters and numbers."
+        )
         return
 
     start_time = time.time()
@@ -7338,19 +7434,23 @@ def render_analysis_page(ui_lang):
                 _history_db.add_portfolio(ticker_input, score.stock.current_price, 0)
                 st.success(f"{ticker_input} portföyünüze/favorilerinize eklendi!" if ui_lang == "TR" else f"{ticker_input} added!")
 
-    # ── Top Metrics ───────────────────────────────────────
+    # ── Top Metrics (responsive: 3+3 layout) ─────────────
     t = score.technical
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
     metrics = [
-        (f"{score.stock.current_price:.2f}", "Fiyat (TL)"),
+        (f"{score.stock.current_price:.2f}", "Fiyat (TL)" if ui_lang == "TR" else "Price"),
         (f"{t.rsi:.1f}", "RSI (14)"),
-        (f"{t.adx:.1f}", "ADX (Trend Gücü)"),
+        (f"{t.adx:.1f}", "ADX" + (" (Trend Gücü)" if ui_lang == "TR" else " (Trend)")),
         (f"{t.stoch_k:.1f} / {t.stoch_d:.1f}", "Stochastic %K/%D"),
-        (f"{score.stock.pe_ratio:.1f}x" if score.stock.pe_ratio else "N/A", "F/K Oranı"),
+        (f"{score.stock.pe_ratio:.1f}x" if score.stock.pe_ratio else "N/A",
+         "F/K Oranı" if ui_lang == "TR" else "P/E Ratio"),
         (f"%{score.valuation.prim_pct:.1f}" if score.valuation.prim_pct is not None else "—",
-         "Prim Potansiyeli"),
+         "Prim Potansiyeli" if ui_lang == "TR" else "Upside"),
     ]
-    for col, (val, label) in zip([col1, col2, col3, col4, col5, col6], metrics):
+    # İlk satır 3 metrik, ikinci satır 3 metrik (mobilde daha okunur)
+    row1 = st.columns(3)
+    row2 = st.columns(3)
+    all_cols = row1 + row2
+    for col, (val, label) in zip(all_cols, metrics):
         with col:
             st.markdown(
                 f'<div class="metric-card">'
@@ -7372,15 +7472,36 @@ def render_analysis_page(ui_lang):
         st.plotly_chart(create_gauge_chart(score.total_score), use_container_width=True)
 
     with col_detail:
-        st.markdown("#### Sub-component Scores")
-        for label, (val, weight) in {
+        st.markdown(
+            "#### " + ("Skor Bileşenleri" if ui_lang == "TR" else "Score Components")
+        )
+        _sub_labels = {
+            "TR": {
+                "Technical Analysis": ("Teknik Analiz", "RSI, MACD, SMA, hacim trendleri"),
+                "News Sentiment":     ("Haber Sentiment", "20+ kaynaktan duygu analizi"),
+                "Upside Potential":   ("Prim Potansiyeli", "Analist hedef fiyat karşılaştırması"),
+                "Valuation":          ("Değerleme", "F/K, PD/DD, ROE oranları"),
+            },
+            "EN": {
+                "Technical Analysis": ("Technical Analysis", "RSI, MACD, SMA, volume trends"),
+                "News Sentiment":     ("News Sentiment", "Sentiment from 20+ sources"),
+                "Upside Potential":   ("Upside Potential", "Analyst target price comparison"),
+                "Valuation":          ("Valuation", "P/E, P/B, ROE ratios"),
+            },
+        }
+        _labels = _sub_labels.get(ui_lang, _sub_labels["EN"])
+        for key, (val, weight) in {
             "Technical Analysis": (score.teknik_score,    WEIGHTS["teknik"]),
             "News Sentiment":     (score.sentiment_score, WEIGHTS["sentiment"]),
             "Upside Potential":   (score.prim_score,      WEIGHTS["prim"]),
             "Valuation":          (score.deger_score,     WEIGHTS["deger"]),
         }.items():
-            st.markdown(f"**{label}** (weight {weight}%)")
-            st.progress(int(val), text=f"{val:.0f}/100")
+            loc_label, loc_desc = _labels.get(key, (key, ""))
+            _val_int = max(0, min(100, int(val)))
+            _quality = ("Güçlü" if val >= 65 else "Zayıf" if val < 40 else "Orta") if ui_lang == "TR" \
+                       else ("Strong" if val >= 65 else "Weak" if val < 40 else "Moderate")
+            st.markdown(f"**{loc_label}** — {_quality} ({weight}%)", help=loc_desc)
+            st.progress(_val_int, text=f"{val:.0f}/100")
 
     # ── Chart ─────────────────────────────────────────────
     st.markdown("---")
@@ -7957,6 +8078,20 @@ def run_app():
 
         display_sidebar_alerts(ui_lang)
         st.markdown("---")
+        # ── Global Disclaimer ──────────────────────────────────
+        st.markdown(
+            "<div style='background:#1a1a2e;border:1px solid #f97316;border-radius:8px;"
+            "padding:8px 12px;margin-top:8px;font-size:11px;color:#f97316;text-align:center'>"
+            + (
+                "⚠️ Bu uygulama <b>yatırım tavsiyesi</b> niteliğinde değildir. "
+                "Tüm kararlar kullanıcının sorumluluğundadır."
+                if ui_lang == "TR" else
+                "⚠️ This app does <b>not</b> constitute investment advice. "
+                "All decisions are the user's responsibility."
+            )
+            + "</div>",
+            unsafe_allow_html=True,
+        )
 
     # ════════════════════════════════════════════════════════
     # PAGE ROUTING (safe wrapper — bir sayfa çökerse uygulama çökmez)
