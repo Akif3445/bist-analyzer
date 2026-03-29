@@ -531,15 +531,21 @@ class AnalysisHistoryDB:
                 )
             """)
 
-            # ── Performans indexleri ───────────────────────────
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_history_ticker ON analysis_history(ticker)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ticker ON alerts(ticker)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_unread ON alerts(is_read)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_accuracy_ticker ON accuracy_log(ticker)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_runid ON backtest_trades(run_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_scores_runid ON backtest_daily_scores(run_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_summary_runid ON backtest_summary(run_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_news_cache_ticker ON news_backtest_cache(ticker)")
+            # ── Performans indexleri (tablo yoksa atla) ────────
+            for _idx_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_history_ticker ON analysis_history(ticker)",
+                "CREATE INDEX IF NOT EXISTS idx_alerts_ticker ON alerts(ticker)",
+                "CREATE INDEX IF NOT EXISTS idx_alerts_unread ON alerts(is_read)",
+                "CREATE INDEX IF NOT EXISTS idx_accuracy_ticker ON accuracy_log(ticker)",
+                "CREATE INDEX IF NOT EXISTS idx_backtest_runid ON backtest_trades(run_id)",
+                "CREATE INDEX IF NOT EXISTS idx_backtest_scores_runid ON backtest_daily_scores(run_id)",
+                "CREATE INDEX IF NOT EXISTS idx_summary_runid ON backtest_summary(run_id)",
+                "CREATE INDEX IF NOT EXISTS idx_news_cache_ticker ON news_backtest_cache(ticker)",
+            ]:
+                try:
+                    conn.execute(_idx_sql)
+                except sqlite3.OperationalError:
+                    pass  # Tablo henüz oluşturulmamış olabilir — sorun değil
             conn.commit()
 
     def add_alert(self, ticker: str, message: str) -> None:
