@@ -774,18 +774,37 @@ class AnalysisHistoryDB:
             conn.commit()
 
     def record_signal(self, ticker: str, signal: str, score: float, price: float, source: str = "live"):
-        """Yeni sinyal kaydı ekle (NÖTR hariç)."""
+        """
+        Yeni sinyal kaydı ekle (NÖTR hariç).
+        Aynı hisse + aynı gün + aynı kaynak için tekrar kayıt oluşmaz.
+        Aynı gün tekrar analiz edilirse skor/sinyal güncellenir ama eski kayıt korunur.
+        """
         if signal in ("NOTR", "HATA") or price <= 0:
             return
         self._init_validation_table()
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        today = datetime.now().strftime("%Y-%m-%d")
+        now   = datetime.now().strftime("%Y-%m-%d %H:%M")
         try:
             with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT OR IGNORE INTO accuracy_validation
-                      (ticker, signal, score, signal_date, signal_price, source)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (ticker, signal, round(score, 1), now, round(price, 2), source))
+                # Aynı gün zaten kayıt var mı?
+                existing = conn.execute("""
+                    SELECT id FROM accuracy_validation
+                    WHERE ticker = ? AND signal_date LIKE ? AND source = ?
+                """, (ticker, f"{today}%", source)).fetchone()
+                if existing:
+                    # Aynı gün tekrar analiz → skoru güncelle, eski takip korunsun
+                    conn.execute("""
+                        UPDATE accuracy_validation
+                        SET signal = ?, score = ?, signal_price = ?, signal_date = ?
+                        WHERE id = ?
+                    """, (signal, round(score, 1), round(price, 2), now, existing[0]))
+                else:
+                    # Yeni gün → yeni kayıt
+                    conn.execute("""
+                        INSERT INTO accuracy_validation
+                          (ticker, signal, score, signal_date, signal_price, source)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (ticker, signal, round(score, 1), now, round(price, 2), source))
                 conn.commit()
         except Exception as exc:
             log.warning("record_signal hatası: %s", exc)
