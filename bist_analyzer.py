@@ -624,6 +624,10 @@ class AnalysisHistoryDB:
 
             conn.commit()
 
+        # Yeni doğrulama sistemine de kaydet
+        self.record_signal(score.ticker, score.signal, score.total_score,
+                           score.stock.current_price, source="live")
+
     def load_full(self, ticker: str) -> Optional[tuple[str, "BISTScore"]]:
         """Bir hissenin son analiz tarihini ve tam objesini döner (last_analyzed, obj)."""
         with sqlite3.connect(self.db_path) as conn:
@@ -733,6 +737,252 @@ class AnalysisHistoryDB:
                 return round((successful / total) * 100, 1), successful, total
         except sqlite3.OperationalError:
             return 0.0, 0, 0
+
+    # ══════════════════════════════════════════════════════════
+    # SKOR DOĞRULAMA SİSTEMİ (Score Validation)
+    # ══════════════════════════════════════════════════════════
+
+    def _init_validation_table(self):
+        """accuracy_validation tablosunu oluştur (yoksa)."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS accuracy_validation (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker          TEXT NOT NULL,
+                    signal          TEXT NOT NULL,
+                    score           REAL NOT NULL,
+                    signal_date     TEXT NOT NULL,
+                    signal_price    REAL NOT NULL,
+                    check_7d_date   TEXT,
+                    check_7d_price  REAL,
+                    return_7d_pct   REAL,
+                    result_7d       TEXT DEFAULT 'Bekliyor',
+                    check_30d_date  TEXT,
+                    check_30d_price REAL,
+                    return_30d_pct  REAL,
+                    result_30d      TEXT DEFAULT 'Bekliyor',
+                    source          TEXT DEFAULT 'live',
+                    UNIQUE(ticker, signal_date, source)
+                )
+            """)
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_val_ticker ON accuracy_validation(ticker)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_val_signal ON accuracy_validation(signal)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_val_source ON accuracy_validation(source)")
+            except sqlite3.OperationalError:
+                pass
+            conn.commit()
+
+    def record_signal(self, ticker: str, signal: str, score: float, price: float, source: str = "live"):
+        """Yeni sinyal kaydı ekle (NÖTR hariç)."""
+        if signal in ("NOTR", "HATA") or price <= 0:
+            return
+        self._init_validation_table()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    INSERT OR IGNORE INTO accuracy_validation
+                      (ticker, signal, score, signal_date, signal_price, source)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (ticker, signal, round(score, 1), now, round(price, 2), source))
+                conn.commit()
+        except Exception as exc:
+            log.warning("record_signal hatası: %s", exc)
+
+    def check_pending_signals(self):
+        """Bekleyen sinyalleri kontrol et: 7 gün ve 30 gün sonraki fiyatları güncelle."""
+        self._init_validation_table()
+        now = datetime.now()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                pending = conn.execute("""
+                    SELECT * FROM accuracy_validation
+                    WHERE result_7d = 'Bekliyor' OR result_30d = 'Bekliyor'
+                """).fetchall()
+                if not pending:
+                    return
+
+                # Benzersiz ticker'ları topla
+                tickers = list({r["ticker"] for r in pending})
+                symbols = [_yf_symbol(t, "BIST") for t in tickers]
+
+                try:
+                    df = yf.download(symbols, period="2mo", group_by="ticker",
+                                     auto_adjust=True, progress=False)
+                except Exception:
+                    return
+
+                for r in pending:
+                    try:
+                        sig_date = datetime.strptime(r["signal_date"][:16], "%Y-%m-%d %H:%M")
+                    except Exception:
+                        continue
+                    days_passed = (now - sig_date).days
+                    sym = _yf_symbol(r["ticker"], "BIST")
+
+                    # DataFrame'den fiyat çek
+                    try:
+                        if len(tickers) > 1:
+                            col = df[sym]["Close"].dropna()
+                        else:
+                            col = df["Close"].dropna()
+                    except (KeyError, TypeError):
+                        continue
+
+                    if col.empty:
+                        continue
+                    current_price = float(col.iloc[-1])
+                    sig_price = r["signal_price"]
+                    if not sig_price or sig_price <= 0:
+                        continue
+
+                    # 7 gün kontrolü
+                    if r["result_7d"] == "Bekliyor" and days_passed >= 7:
+                        ret_pct = round((current_price - sig_price) / sig_price * 100, 2)
+                        result = self._evaluate_signal(r["signal"], ret_pct)
+                        conn.execute("""
+                            UPDATE accuracy_validation
+                            SET check_7d_date = ?, check_7d_price = ?,
+                                return_7d_pct = ?, result_7d = ?
+                            WHERE id = ?
+                        """, (now.strftime("%Y-%m-%d"), round(current_price, 2), ret_pct, result, r["id"]))
+
+                    # 30 gün kontrolü
+                    if r["result_30d"] == "Bekliyor" and days_passed >= 30:
+                        ret_pct = round((current_price - sig_price) / sig_price * 100, 2)
+                        result = self._evaluate_signal(r["signal"], ret_pct)
+                        conn.execute("""
+                            UPDATE accuracy_validation
+                            SET check_30d_date = ?, check_30d_price = ?,
+                                return_30d_pct = ?, result_30d = ?
+                            WHERE id = ?
+                        """, (now.strftime("%Y-%m-%d"), round(current_price, 2), ret_pct, result, r["id"]))
+
+                conn.commit()
+        except Exception as exc:
+            log.warning("check_pending_signals hatası: %s", exc)
+
+    @staticmethod
+    def _evaluate_signal(signal: str, return_pct: float) -> str:
+        """Sinyal başarılı mı? AL→yükseldiyse, SAT→düştüyse."""
+        if signal in ("AL", "GUCLU AL"):
+            return "Basarili" if return_pct >= 2.0 else "Basarisiz"
+        elif signal in ("SAT", "GUCLU SAT"):
+            return "Basarili" if return_pct <= -2.0 else "Basarisiz"
+        return "Belirsiz"
+
+    def get_validation_report(self) -> dict:
+        """Skor doğrulama raporu için tüm verileri döner."""
+        self._init_validation_table()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("""
+                    SELECT * FROM accuracy_validation
+                    ORDER BY signal_date DESC
+                """).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def run_backfill(self, tickers: list, months_back: int = 12,
+                     progress_cb=None) -> int:
+        """
+        Toplu geriye dönük skor doğrulama: Her ay başında skor hesapla,
+        30 gün sonraki gerçek fiyatla karşılaştır.
+        Returns: eklenen sinyal sayısı
+        """
+        self._init_validation_table()
+        count = 0
+        total = len(tickers) * months_back
+
+        for t_idx, ticker in enumerate(tickers):
+            try:
+                sym = _yf_symbol(ticker, "BIST")
+                df = yf.download(sym, period=f"{months_back + 2}mo",
+                                 auto_adjust=True, progress=False)
+                if df.empty or "Close" not in df.columns:
+                    continue
+
+                # MultiIndex fix
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df.index = pd.to_datetime(df.index).tz_localize(None)
+                close = df["Close"].dropna()
+                if len(close) < 60:
+                    continue
+
+                # Her ayın ilk iş gününde skor hesapla
+                for m in range(months_back, 0, -1):
+                    step = t_idx * months_back + (months_back - m)
+                    if progress_cb:
+                        progress_cb(ticker, step, total)
+
+                    target_date = datetime.now() - timedelta(days=m * 30)
+                    # O tarihe en yakın veriyi bul
+                    mask = close.index <= pd.Timestamp(target_date)
+                    if mask.sum() < 60:
+                        continue
+                    hist = close[mask]
+                    signal_price = float(hist.iloc[-1])
+                    signal_date = hist.index[-1]
+
+                    if signal_price <= 0:
+                        continue
+
+                    # 30 gün sonraki fiyatı bul
+                    future_mask = close.index > pd.Timestamp(signal_date)
+                    future = close[future_mask]
+                    if len(future) < 20:  # En az 20 iş günü (≈30 takvim günü)
+                        continue
+                    check_price = float(future.iloc[min(21, len(future) - 1)])  # ~30 takvim günü ≈ 21 iş günü
+                    check_date = future.index[min(21, len(future) - 1)]
+
+                    # O tarih için basit teknik skor hesapla
+                    hist_df = df[df.index <= pd.Timestamp(signal_date)].tail(250)
+                    if len(hist_df) < 50:
+                        continue
+
+                    try:
+                        tech = TechnicalEngine.compute(hist_df)
+                        score_val = tech.score
+                        signal_str, _ = _score_to_signal(score_val)
+                    except Exception:
+                        continue
+
+                    if signal_str in ("NOTR", "HATA"):
+                        continue
+
+                    ret_pct = round((check_price - signal_price) / signal_price * 100, 2)
+                    result = self._evaluate_signal(signal_str, ret_pct)
+
+                    try:
+                        sig_date_str = signal_date.strftime("%Y-%m-%d %H:%M")
+                        with sqlite3.connect(self.db_path) as conn:
+                            conn.execute("""
+                                INSERT OR IGNORE INTO accuracy_validation
+                                  (ticker, signal, score, signal_date, signal_price,
+                                   check_30d_date, check_30d_price, return_30d_pct,
+                                   result_30d, source)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'backfill')
+                            """, (
+                                ticker, signal_str, round(score_val, 1),
+                                sig_date_str, round(signal_price, 2),
+                                check_date.strftime("%Y-%m-%d"), round(check_price, 2),
+                                ret_pct, result,
+                            ))
+                            conn.commit()
+                        count += 1
+                    except Exception:
+                        pass
+
+            except Exception as exc:
+                log.warning("Backfill hatası (%s): %s", ticker, exc)
+                continue
+
+        return count
 
 # Singleton instance — uygulama boyunca tek bir DB bağlantısı yönetici
 _history_db = AnalysisHistoryDB()
@@ -4709,6 +4959,365 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
 
 
 # ─────────────────────────────────────────────────────────
+# SKOR DOĞRULAMA RAPORU SAYFASI
+# ─────────────────────────────────────────────────────────
+
+def render_validation_page(ui_lang: str):
+    """Skor doğrulama raporu — sistemin sinyal doğruluğunu gösterir."""
+    st.markdown("# " + ("Skor Dogrulama Raporu" if ui_lang == "TR" else "Score Validation Report"))
+    st.caption(
+        "Sistem sinyallerinin gerçek piyasa verileriyle karşılaştırması. "
+        "AL sinyali verdikten 7 ve 30 gün sonra fiyat yükseldi mi?"
+        if ui_lang == "TR" else
+        "Comparison of system signals with actual market data. "
+        "Did the price rise 7 and 30 days after a BUY signal?"
+    )
+
+    # ── Sidebar kontroller ─────────────────────────────────
+    with st.sidebar:
+        st.markdown("## " + ("Dogrulama Ayarlari" if ui_lang == "TR" else "Validation Settings"))
+
+        if st.button(
+            "Bekleyen Sinyalleri Kontrol Et" if ui_lang == "TR" else "Check Pending Signals",
+            use_container_width=True,
+            help="7+ veya 30+ gün geçmiş sinyallerin güncel fiyatlarını kontrol eder"
+                 if ui_lang == "TR" else "Checks current prices for signals older than 7 or 30 days"
+        ):
+            with st.spinner("Sinyaller kontrol ediliyor..." if ui_lang == "TR" else "Checking signals..."):
+                _history_db.check_pending_signals()
+            st.success("Kontrol tamamlandi!" if ui_lang == "TR" else "Check complete!")
+            st.rerun()
+
+        st.markdown("---")
+
+        backfill_months = st.slider(
+            "Geriye Donuk Test (Ay)" if ui_lang == "TR" else "Backfill Months",
+            min_value=3, max_value=12, value=6, step=3,
+            help="Kaç ay geriye gidilerek toplu sinyal testi yapılacak"
+                 if ui_lang == "TR" else "How many months back to run bulk signal validation"
+        )
+
+        backfill_btn = st.button(
+            "Toplu Geriye Donuk Test Baslat" if ui_lang == "TR" else "Run Backfill Test",
+            use_container_width=True, type="primary",
+            help="BIST30 hisseleri için geriye dönük skor doğrulama çalıştırır (3-8 dk)"
+                 if ui_lang == "TR" else "Runs historical score validation for BIST30 stocks (3-8 min)"
+        )
+
+    # ── Backfill çalıştır ──────────────────────────────────
+    if backfill_btn:
+        bist30 = BIST_SCAN_UNIVERSE[:30]
+        progress_bar = st.progress(0, text="Başlatılıyor..." if ui_lang == "TR" else "Starting...")
+        status_area = st.empty()
+
+        def _bf_progress(ticker, step, total):
+            pct = min(step / max(total, 1), 1.0)
+            progress_bar.progress(pct, text=f"{ticker} ({step}/{total})")
+            status_area.info(f"{ticker} analiz ediliyor..." if ui_lang == "TR" else f"Analyzing {ticker}...")
+
+        added = _history_db.run_backfill(bist30, months_back=backfill_months, progress_cb=_bf_progress)
+        progress_bar.progress(1.0, text="Tamamlandi!" if ui_lang == "TR" else "Complete!")
+        status_area.success(
+            f"Toplu test tamamlandi: **{added}** sinyal eklendi."
+            if ui_lang == "TR" else f"Backfill complete: **{added}** signals added."
+        )
+
+    # ── Rapor verisini yükle ───────────────────────────────
+    all_data = _history_db.get_validation_report()
+    if not all_data:
+        st.info(
+            "Henüz doğrulama verisi yok. **Toplu Geriye Dönük Test** butonuna basarak "
+            "BIST30 hisseleri için geçmiş sinyalleri test edebilirsiniz. "
+            "Ayrıca her analiz yaptığınızda sinyaller otomatik olarak kaydedilir."
+            if ui_lang == "TR" else
+            "No validation data yet. Click **Run Backfill Test** to test historical signals "
+            "for BIST30 stocks. Signals are also automatically recorded with each analysis."
+        )
+        return
+
+    df_all = pd.DataFrame(all_data)
+
+    # ── Genel İstatistikler ────────────────────────────────
+    st.markdown("---")
+    st.markdown("### " + ("Genel Performans" if ui_lang == "TR" else "Overall Performance"))
+
+    # 30 günlük sonuçları filtrele (backfill + tamamlanmış live)
+    df_30d = df_all[df_all["result_30d"].isin(["Basarili", "Basarisiz"])].copy()
+    df_7d  = df_all[df_all["result_7d"].isin(["Basarili", "Basarisiz"])].copy()
+
+    total_signals = len(df_all)
+    pending_count = len(df_all[df_all["result_30d"] == "Bekliyor"])
+    live_count    = len(df_all[df_all["source"] == "live"])
+    backfill_count = len(df_all[df_all["source"] == "backfill"])
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    with mc1:
+        st.metric("Toplam Sinyal" if ui_lang == "TR" else "Total Signals", f"{total_signals}")
+    with mc2:
+        st.metric("Canli / Backfill" if ui_lang == "TR" else "Live / Backfill",
+                  f"{live_count} / {backfill_count}")
+    with mc3:
+        st.metric("Bekleyen" if ui_lang == "TR" else "Pending", f"{pending_count}")
+    with mc4:
+        if not df_30d.empty:
+            avg_ret = df_30d["return_30d_pct"].mean()
+            st.metric(
+                "Ort. Getiri (30g)" if ui_lang == "TR" else "Avg Return (30d)",
+                f"{avg_ret:+.2f}%",
+                delta=f"{'Pozitif' if avg_ret > 0 else 'Negatif'}" if ui_lang == "TR"
+                      else f"{'Positive' if avg_ret > 0 else 'Negative'}"
+            )
+        else:
+            st.metric("Ort. Getiri" if ui_lang == "TR" else "Avg Return", "—")
+
+    # ── Sinyal Bazlı Doğruluk Tablosu ─────────────────────
+    if not df_30d.empty:
+        st.markdown("---")
+        st.markdown("### " + ("Sinyal Bazli Dogruluk" if ui_lang == "TR" else "Accuracy by Signal"))
+
+        signal_order = ["GUCLU AL", "AL", "SAT", "GUCLU SAT"]
+        rows_table = []
+        for sig in signal_order:
+            # 7 gün
+            s7 = df_7d[df_7d["signal"] == sig]
+            if len(s7) > 0:
+                acc_7 = round(len(s7[s7["result_7d"] == "Basarili"]) / len(s7) * 100, 1)
+                ret_7 = round(s7["return_7d_pct"].mean(), 2) if "return_7d_pct" in s7 else 0
+                n_7 = len(s7)
+            else:
+                acc_7, ret_7, n_7 = 0, 0, 0
+
+            # 30 gün
+            s30 = df_30d[df_30d["signal"] == sig]
+            if len(s30) > 0:
+                acc_30 = round(len(s30[s30["result_30d"] == "Basarili"]) / len(s30) * 100, 1)
+                ret_30 = round(s30["return_30d_pct"].mean(), 2)
+                n_30 = len(s30)
+            else:
+                acc_30, ret_30, n_30 = 0, 0, 0
+
+            rows_table.append({
+                "Sinyal": sig,
+                "7g Dogruluk": f"{acc_7}%" if n_7 > 0 else "—",
+                "7g Ort.Getiri": f"{ret_7:+.2f}%" if n_7 > 0 else "—",
+                "7g Sayi": n_7,
+                "30g Dogruluk": f"{acc_30}%" if n_30 > 0 else "—",
+                "30g Ort.Getiri": f"{ret_30:+.2f}%" if n_30 > 0 else "—",
+                "30g Sayi": n_30,
+            })
+
+        # Genel satır
+        if len(df_30d) > 0:
+            gen_acc_30 = round(len(df_30d[df_30d["result_30d"] == "Basarili"]) / len(df_30d) * 100, 1)
+            gen_ret_30 = round(df_30d["return_30d_pct"].mean(), 2)
+        else:
+            gen_acc_30, gen_ret_30 = 0, 0
+        if len(df_7d) > 0:
+            gen_acc_7 = round(len(df_7d[df_7d["result_7d"] == "Basarili"]) / len(df_7d) * 100, 1)
+            gen_ret_7 = round(df_7d["return_7d_pct"].mean(), 2)
+        else:
+            gen_acc_7, gen_ret_7 = 0, 0
+
+        rows_table.append({
+            "Sinyal": "GENEL",
+            "7g Dogruluk": f"{gen_acc_7}%",
+            "7g Ort.Getiri": f"{gen_ret_7:+.2f}%",
+            "7g Sayi": len(df_7d),
+            "30g Dogruluk": f"{gen_acc_30}%",
+            "30g Ort.Getiri": f"{gen_ret_30:+.2f}%",
+            "30g Sayi": len(df_30d),
+        })
+
+        df_table = pd.DataFrame(rows_table)
+        st.dataframe(df_table, use_container_width=True, hide_index=True)
+
+        # ── Beklenti Değeri ────────────────────────────────
+        buy_signals = df_30d[df_30d["signal"].isin(["AL", "GUCLU AL"])]
+        sell_signals = df_30d[df_30d["signal"].isin(["SAT", "GUCLU SAT"])]
+        if len(buy_signals) > 0:
+            avg_buy_ret = buy_signals["return_30d_pct"].mean()
+            st.markdown(
+                f"**AL sinyalleri ortalama getirisi (30g):** "
+                f"<span style='color:{'#22c55e' if avg_buy_ret > 0 else '#ef4444'}'>"
+                f"{avg_buy_ret:+.2f}%</span>",
+                unsafe_allow_html=True,
+            )
+        if len(sell_signals) > 0:
+            avg_sell_ret = sell_signals["return_30d_pct"].mean()
+            st.markdown(
+                f"**SAT sinyalleri ortalama getirisi (30g):** "
+                f"<span style='color:{'#22c55e' if avg_sell_ret < 0 else '#ef4444'}'>"
+                f"{avg_sell_ret:+.2f}%</span> "
+                f"{'(SAT sinyalinde düşüş beklenir → negatif = başarılı)' if ui_lang == 'TR' else '(negative = successful for SELL signals)'}",
+                unsafe_allow_html=True,
+            )
+
+    # ── Confusion Matrix ───────────────────────────────────
+    if not df_30d.empty:
+        st.markdown("---")
+        st.markdown("### " + ("Karisiklik Matrisi (30 Gun)" if ui_lang == "TR" else "Confusion Matrix (30 Day)"))
+
+        # AL dedik → gerçekten yükseldi (TP), düştü (FP)
+        buy_sigs  = df_30d[df_30d["signal"].isin(["AL", "GUCLU AL"])]
+        sell_sigs = df_30d[df_30d["signal"].isin(["SAT", "GUCLU SAT"])]
+
+        tp = len(buy_sigs[buy_sigs["return_30d_pct"] >= 2.0])    # AL dedik, yükseldi
+        fp = len(buy_sigs[buy_sigs["return_30d_pct"] < 2.0])     # AL dedik, yükselmedi
+        tn = len(sell_sigs[sell_sigs["return_30d_pct"] <= -2.0])  # SAT dedik, düştü
+        fn = len(sell_sigs[sell_sigs["return_30d_pct"] > -2.0])   # SAT dedik, düşmedi
+
+        cm_c1, cm_c2, cm_c3 = st.columns([1, 2, 2])
+        with cm_c1:
+            st.markdown("")
+        with cm_c2:
+            st.markdown(f"**{'Gercek Yukseldi' if ui_lang == 'TR' else 'Actually Rose'}**")
+        with cm_c3:
+            st.markdown(f"**{'Gercek Dustu' if ui_lang == 'TR' else 'Actually Fell'}**")
+
+        cm_r1c1, cm_r1c2, cm_r1c3 = st.columns([1, 2, 2])
+        with cm_r1c1:
+            st.markdown(f"**{'AL Dedik' if ui_lang == 'TR' else 'Said BUY'}**")
+        with cm_r1c2:
+            st.markdown(
+                f"<div style='background:#22c55e20;padding:12px;border-radius:8px;text-align:center;font-size:1.4rem'>"
+                f"<b style='color:#22c55e'>{tp}</b><br><small>Dogru AL (TP)</small></div>",
+                unsafe_allow_html=True,
+            )
+        with cm_r1c3:
+            st.markdown(
+                f"<div style='background:#ef444420;padding:12px;border-radius:8px;text-align:center;font-size:1.4rem'>"
+                f"<b style='color:#ef4444'>{fp}</b><br><small>Yanlis AL (FP)</small></div>",
+                unsafe_allow_html=True,
+            )
+
+        cm_r2c1, cm_r2c2, cm_r2c3 = st.columns([1, 2, 2])
+        with cm_r2c1:
+            st.markdown(f"**{'SAT Dedik' if ui_lang == 'TR' else 'Said SELL'}**")
+        with cm_r2c2:
+            st.markdown(
+                f"<div style='background:#f9731620;padding:12px;border-radius:8px;text-align:center;font-size:1.4rem'>"
+                f"<b style='color:#f97316'>{fn}</b><br><small>Yanlis SAT (FN)</small></div>",
+                unsafe_allow_html=True,
+            )
+        with cm_r2c3:
+            st.markdown(
+                f"<div style='background:#22c55e20;padding:12px;border-radius:8px;text-align:center;font-size:1.4rem'>"
+                f"<b style='color:#22c55e'>{tn}</b><br><small>Dogru SAT (TN)</small></div>",
+                unsafe_allow_html=True,
+            )
+
+        # Precision & Recall
+        precision = round(tp / (tp + fp) * 100, 1) if (tp + fp) > 0 else 0
+        recall = round(tp / (tp + fn) * 100, 1) if (tp + fn) > 0 else 0
+        st.markdown(
+            f"\n**Precision (AL dogrulugu):** {precision}% &nbsp;|&nbsp; "
+            f"**Recall:** {recall}%"
+        )
+
+    # ── Sinyal Dağılımı Grafiği ────────────────────────────
+    if not df_all.empty:
+        st.markdown("---")
+        st.markdown("### " + ("Sinyal Dagilimi" if ui_lang == "TR" else "Signal Distribution"))
+
+        sig_counts = df_all["signal"].value_counts()
+        colors_map = {
+            "GUCLU AL": "#22c55e", "AL": "#86efac",
+            "SAT": "#f97316", "GUCLU SAT": "#ef4444",
+        }
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=sig_counts.index.tolist(),
+            values=sig_counts.values.tolist(),
+            marker=dict(colors=[colors_map.get(s, "#9ca3af") for s in sig_counts.index]),
+            textinfo="label+percent+value",
+            hole=0.4,
+        )])
+        fig_pie.update_layout(
+            paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
+            font=dict(color="#e2e8f0"), height=350,
+            margin=dict(l=20, r=20, t=30, b=20),
+            legend=dict(bgcolor="#1e293b"),
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    # ── Aylık Performans Çizgi Grafiği ─────────────────────
+    if not df_30d.empty and len(df_30d) >= 5:
+        st.markdown("---")
+        st.markdown("### " + ("Aylik Dogruluk Trendi" if ui_lang == "TR" else "Monthly Accuracy Trend"))
+
+        df_30d_copy = df_30d.copy()
+        df_30d_copy["month"] = pd.to_datetime(df_30d_copy["signal_date"].str[:10]).dt.to_period("M").astype(str)
+        monthly = df_30d_copy.groupby("month").agg(
+            total=("result_30d", "count"),
+            success=("result_30d", lambda x: (x == "Basarili").sum()),
+            avg_return=("return_30d_pct", "mean"),
+        ).reset_index()
+        monthly["accuracy"] = round(monthly["success"] / monthly["total"] * 100, 1)
+
+        fig_trend = go.Figure()
+        fig_trend.add_trace(go.Scatter(
+            x=monthly["month"], y=monthly["accuracy"],
+            mode="lines+markers", name="Dogruluk %" if ui_lang == "TR" else "Accuracy %",
+            line=dict(color="#3b82f6", width=3),
+            marker=dict(size=8),
+        ))
+        fig_trend.add_trace(go.Bar(
+            x=monthly["month"], y=monthly["avg_return"],
+            name="Ort. Getiri %" if ui_lang == "TR" else "Avg Return %",
+            marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in monthly["avg_return"]],
+            opacity=0.6,
+        ))
+        fig_trend.add_hline(y=50, line_dash="dash", line_color="#9ca3af",
+                            annotation_text="50% (%)" if ui_lang == "TR" else "50% baseline")
+        fig_trend.update_layout(
+            paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
+            font=dict(color="#e2e8f0"), height=400,
+            margin=dict(l=30, r=30, t=30, b=30),
+            legend=dict(bgcolor="#1e293b"),
+            yaxis=dict(gridcolor="#334155"),
+            xaxis=dict(gridcolor="#334155"),
+        )
+        st.plotly_chart(fig_trend, use_container_width=True)
+
+    # ── Hisse Bazlı Detay Tablosu ─────────────────────────
+    if not df_30d.empty:
+        st.markdown("---")
+        st.markdown("### " + ("Hisse Bazli Detay" if ui_lang == "TR" else "Per-Stock Detail"))
+
+        stock_stats = df_30d.groupby("ticker").agg(
+            sinyal_sayisi=("result_30d", "count"),
+            basarili=("result_30d", lambda x: (x == "Basarili").sum()),
+            ort_getiri=("return_30d_pct", "mean"),
+            ort_skor=("score", "mean"),
+        ).reset_index()
+        stock_stats["dogruluk"] = round(stock_stats["basarili"] / stock_stats["sinyal_sayisi"] * 100, 1)
+        stock_stats["ort_getiri"] = round(stock_stats["ort_getiri"], 2)
+        stock_stats["ort_skor"] = round(stock_stats["ort_skor"], 1)
+        stock_stats = stock_stats.sort_values("dogruluk", ascending=False)
+
+        stock_stats.columns = [
+            "Hisse" if ui_lang == "TR" else "Ticker",
+            "Sinyal Sayisi" if ui_lang == "TR" else "Signals",
+            "Basarili" if ui_lang == "TR" else "Successful",
+            "Ort. Getiri %" if ui_lang == "TR" else "Avg Return %",
+            "Ort. Skor" if ui_lang == "TR" else "Avg Score",
+            "Dogruluk %" if ui_lang == "TR" else "Accuracy %",
+        ]
+        st.dataframe(stock_stats, use_container_width=True, hide_index=True)
+
+    # ── Ham Veri (Expandable) ──────────────────────────────
+    if not df_all.empty:
+        st.markdown("---")
+        with st.expander(
+            "Tum Sinyal Verileri (Ham)" if ui_lang == "TR" else "All Signal Data (Raw)",
+            expanded=False
+        ):
+            display_cols = ["ticker", "signal", "score", "signal_date", "signal_price",
+                           "return_7d_pct", "result_7d", "return_30d_pct", "result_30d", "source"]
+            available_cols = [c for c in display_cols if c in df_all.columns]
+            st.dataframe(df_all[available_cols], use_container_width=True, hide_index=True)
+
+
+# ─────────────────────────────────────────────────────────
 # STRATEJİ ZAMAN MAKİNESİ SAYFASI
 # ─────────────────────────────────────────────────────────
 
@@ -7966,6 +8575,14 @@ def run_app():
     </style>
     """, unsafe_allow_html=True)
 
+    # ── Uygulama açılışında bekleyen sinyalleri otomatik kontrol et (1 kez) ──
+    if "validation_checked" not in st.session_state:
+        try:
+            _history_db.check_pending_signals()
+        except Exception:
+            pass
+        st.session_state["validation_checked"] = True
+
     # ════════════════════════════════════════════════════════
     # TOP BAR — Market Secici (BIST vs US)
     # ════════════════════════════════════════════════════════
@@ -8024,12 +8641,12 @@ def run_app():
             pages = [
                 "Piyasa Ozeti", "BIST Listesi", "Hisse Analizi",
                 "Portfolyum", "Backtest", "Sistem Portfolyleri",
-                "Zaman Makinesi",
+                "Zaman Makinesi", "Skor Dogrulama",
             ]
             page_icons = [
                 "speedometer2", "list-ul", "search",
                 "briefcase", "clock-history", "robot",
-                "hourglass-split",
+                "hourglass-split", "clipboard-check",
             ]
             _default_page = "Hisse Analizi"
         else:  # US
@@ -8133,6 +8750,8 @@ def run_app():
             _safe_render(render_smart_portfolio_page, ui_lang)
         elif page == "Zaman Makinesi":
             _safe_render(render_time_machine_page, ui_lang)
+        elif page == "Skor Dogrulama":
+            _safe_render(render_validation_page, ui_lang)
     else:  # US Markets
         if page == "US Analiz":
             _safe_render(render_us_markets_page, ui_lang, mode_override="analysis")
