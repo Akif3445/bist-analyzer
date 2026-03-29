@@ -691,11 +691,16 @@ class AnalysisHistoryDB:
                 df = yf.download(pending_tickers, period="5d", group_by="ticker", progress=False)
                 for r in valid_rows:
                     t = r["ticker"]
-                    d = df[t] if len(pending_tickers) > 1 else df
+                    try:
+                        d = df[t] if len(pending_tickers) > 1 else df
+                    except (KeyError, TypeError):
+                        continue
                     d = d.dropna()
                     if not d.empty and "Close" in d:
                         c_price = float(d["Close"].iloc[-1])
                         s_price = r["signal_price"]
+                        if not s_price or s_price == 0:
+                            continue
                         pct = ((c_price - s_price) / s_price) * 100
                         
                         status = "Basarisiz"
@@ -710,8 +715,8 @@ class AnalysisHistoryDB:
                             WHERE id = ?
                         """, (now_dt.strftime("%Y-%m-%d %H:%M:%S"), c_price, status, r["id"]))
                 conn.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("Accuracy log güncelleme hatası: %s", exc)
 
     def get_accuracy_stats(self):
         try:
@@ -774,9 +779,12 @@ class DataFetcher:
                 return data
 
             data.df            = df
-            info               = ystock.info
+            data.current_price = float(df["Close"].iloc[-1]) if not df.empty else 0.0
+            try:
+                info               = ystock.info or {}
+            except Exception:
+                info               = {}
             data.info          = info
-            data.current_price = df["Close"].iloc[-1]
             data.pe_ratio      = info.get("trailingPE") or info.get("forwardPE")
             data.pb_ratio      = info.get("priceToBook")
             data.roe           = info.get("returnOnEquity")
@@ -930,10 +938,13 @@ class TechnicalEngine:
     @staticmethod
     def compute(df: pd.DataFrame) -> TechnicalResult:
         result = TechnicalResult()
-        if df.empty or len(df) < 50:
+        if df is None or df.empty or len(df) < 50:
             return result
 
-        close = df["Close"]
+        close = df["Close"].dropna()
+        if close.empty:
+            return result
+
         high  = df["High"]  if "High"  in df.columns else close
         low   = df["Low"]   if "Low"   in df.columns else close
         vol   = df["Volume"] if "Volume" in df.columns else None
@@ -941,12 +952,13 @@ class TechnicalEngine:
         result.current_price = float(close.iloc[-1])
 
         # ── SMA ────────────────────────────────────────────────
-        result.sma50  = float(close.rolling(50).mean().iloc[-1])
-        result.sma200 = float(
-            close.rolling(200).mean().iloc[-1]
-            if len(close) >= 200
-            else close.rolling(len(close)).mean().iloc[-1]
-        )
+        sma50_series = close.rolling(50).mean().dropna()
+        result.sma50  = float(sma50_series.iloc[-1]) if not sma50_series.empty else result.current_price
+        if len(close) >= 200:
+            sma200_series = close.rolling(200).mean().dropna()
+        else:
+            sma200_series = close.rolling(len(close)).mean().dropna()
+        result.sma200 = float(sma200_series.iloc[-1]) if not sma200_series.empty else result.current_price
         result.golden_cross        = result.sma50 > result.sma200
         result.price_above_sma50   = result.current_price > result.sma50
         result.price_above_sma200  = result.current_price > result.sma200
@@ -960,21 +972,28 @@ class TechnicalEngine:
         result.rsi_overbought = result.rsi > 70
 
         # ── MACD ───────────────────────────────────────────────
-        ema12       = close.ewm(span=12, adjust=False).mean()
-        ema26       = close.ewm(span=26, adjust=False).mean()
-        macd_line   = ema12 - ema26
-        signal_line = macd_line.ewm(span=9, adjust=False).mean()
-        result.macd           = float(macd_line.iloc[-1])
-        result.macd_signal    = float(signal_line.iloc[-1])
-        result.macd_histogram = float(macd_line.iloc[-1] - signal_line.iloc[-1])
-        result.macd_bullish   = result.macd > result.macd_signal
+        try:
+            ema12       = close.ewm(span=12, adjust=False).mean()
+            ema26       = close.ewm(span=26, adjust=False).mean()
+            macd_line   = ema12 - ema26
+            signal_line = macd_line.ewm(span=9, adjust=False).mean()
+            if not macd_line.empty and not signal_line.empty:
+                result.macd           = float(macd_line.iloc[-1])
+                result.macd_signal    = float(signal_line.iloc[-1])
+                result.macd_histogram = float(macd_line.iloc[-1] - signal_line.iloc[-1])
+                result.macd_bullish   = result.macd > result.macd_signal
+        except Exception as exc:
+            log.warning("MACD hesaplama hatası: %s", exc)
 
         # ── Hacim Kırılımı ─────────────────────────────────────
-        if vol is not None and len(vol) >= 10:
-            recent_vol = float(vol.iloc[-1])
-            avg_vol_10 = float(vol.rolling(10).mean().iloc[-1])
-            if recent_vol > (avg_vol_10 * 1.5) and close.iloc[-1] > close.iloc[-2]:
-                result.volume_breakout = True
+        if vol is not None and len(vol) >= 10 and len(close) >= 2:
+            try:
+                recent_vol = float(vol.iloc[-1])
+                avg_vol_10 = float(vol.rolling(10).mean().iloc[-1])
+                if avg_vol_10 > 0 and recent_vol > (avg_vol_10 * 1.5) and float(close.iloc[-1]) > float(close.iloc[-2]):
+                    result.volume_breakout = True
+            except (IndexError, ValueError):
+                pass
 
         # ── Bollinger Bantları (20, 2σ) ────────────────────────
         if len(close) >= 20:
@@ -1327,7 +1346,7 @@ class ValuationEngine:
         result.sector_fk = SECTOR_FK_AVERAGES.get(stock.sector, 10.0)
 
         # 1. Prim Puanı (Analyst Target)
-        if analyst_target and stock.current_price > 0:
+        if analyst_target and analyst_target > 0 and stock.current_price and stock.current_price > 0:
             result.target_price = analyst_target
             result.prim_pct     = round((analyst_target / stock.current_price - 1) * 100, 1)
             result.prim_score   = round(max(0, min(100, (result.prim_pct + 50) / 100 * 100)), 1)
@@ -1393,8 +1412,11 @@ def _fetch_benchmark_cached(index_symbol: str) -> pd.DataFrame:
     """Benchmark endeks verisini 15 dakika cache'le — her analiz için tekrar çekmeyi önler."""
     try:
         df = yf.download(index_symbol, period="2mo", progress=False)
+        if df.empty:
+            log.warning("Benchmark verisi boş döndü: %s", index_symbol)
         return df
-    except Exception:
+    except Exception as exc:
+        log.warning("Benchmark indirme hatası (%s): %s", index_symbol, exc)
         return pd.DataFrame()
 
 
@@ -1427,20 +1449,24 @@ def compute_bist_score(
     try:
         if len(stock.df) >= 14:
             xu_df = _fetch_benchmark_cached(_bench_idx)
-            if xu_df is not None and not xu_df.empty and "Close" in xu_df and len(xu_df) >= 14:
+            if xu_df is not None and not xu_df.empty and "Close" in xu_df:
                 xu_close = xu_df["Close"].dropna()
                 st_close = stock.df["Close"].dropna()
-                s_ret = (float(st_close.iloc[-1]) - float(st_close.iloc[-14])) / float(st_close.iloc[-14])
-                x_ret = (float(xu_close.iloc[-1]) - float(xu_close.iloc[-14])) / float(xu_close.iloc[-14])
-                rs_val = (s_ret - x_ret) * 100.0
-                technical.relative_strength = round(float(rs_val), 1)
-                
-                if rs_val > 5.0:
-                    technical.score = min(100.0, float(technical.score + 10))
-                elif rs_val > 0.0:
-                    technical.score = min(100.0, float(technical.score + 5))
-    except Exception:
-        pass
+                if len(xu_close) >= 14 and len(st_close) >= 14:
+                    base_st = float(st_close.iloc[-14])
+                    base_xu = float(xu_close.iloc[-14])
+                    if base_st > 0 and base_xu > 0:  # Division by zero koruması
+                        s_ret = (float(st_close.iloc[-1]) - base_st) / base_st
+                        x_ret = (float(xu_close.iloc[-1]) - base_xu) / base_xu
+                        rs_val = (s_ret - x_ret) * 100.0
+                        technical.relative_strength = round(float(rs_val), 1)
+
+                        if rs_val > 5.0:
+                            technical.score = min(100.0, float(technical.score + 10))
+                        elif rs_val > 0.0:
+                            technical.score = min(100.0, float(technical.score + 5))
+    except Exception as exc:
+        log.warning("Relative strength hesaplama hatası: %s", exc)
 
     result.technical    = technical
     result.teknik_score = technical.score
@@ -4084,9 +4110,10 @@ def render_dashboard_page(ui_lang):
                     if len(col) >= 2:
                         cur  = float(col.iloc[-1])
                         prev = float(col.iloc[-2])
-                        pct  = (cur - prev) / prev * 100
+                        pct  = ((cur - prev) / prev * 100) if prev != 0 else 0.0
                         result[label] = {"value": cur, "pct": pct, "unit": unit}
-                except Exception:
+                except Exception as exc:
+                    log.warning("Makro gösterge hatası (%s): %s", sym, exc)
                     pass
         except Exception:
             pass
@@ -7932,36 +7959,52 @@ def run_app():
         st.markdown("---")
 
     # ════════════════════════════════════════════════════════
-    # PAGE ROUTING
+    # PAGE ROUTING (safe wrapper — bir sayfa çökerse uygulama çökmez)
     # ════════════════════════════════════════════════════════
+    def _safe_render(fn, *args, **kwargs):
+        """Sayfa render fonksiyonunu güvenli çalıştır. Hata olursa kullanıcıya göster."""
+        try:
+            fn(*args, **kwargs)
+        except Exception as exc:
+            log.error("Sayfa render hatası (%s): %s\n%s", fn.__name__, exc, traceback.format_exc())
+            st.error(
+                f"Bu sayfada beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.\n\n"
+                f"Hata detayı: `{type(exc).__name__}: {exc}`"
+                if ui_lang == "TR" else
+                f"An unexpected error occurred on this page. Please try again.\n\n"
+                f"Error: `{type(exc).__name__}: {exc}`"
+            )
+            with st.expander("Teknik Detay / Technical Details"):
+                st.code(traceback.format_exc(), language="python")
+
     if active_market == "BIST":
         if page == "Piyasa Ozeti":
-            render_dashboard_page(ui_lang)
+            _safe_render(render_dashboard_page, ui_lang)
         elif page == "BIST Listesi":
-            render_bist_list_page(ui_lang)
+            _safe_render(render_bist_list_page, ui_lang)
         elif page == "Hisse Analizi":
-            render_analysis_page(ui_lang)
+            _safe_render(render_analysis_page, ui_lang)
         elif page == "Portfolyum":
-            render_portfolio_page(ui_lang)
+            _safe_render(render_portfolio_page, ui_lang)
         elif page == "Backtest":
-            render_backtest_page(ui_lang)
+            _safe_render(render_backtest_page, ui_lang)
         elif page == "Sistem Portfolyleri":
-            render_smart_portfolio_page(ui_lang)
+            _safe_render(render_smart_portfolio_page, ui_lang)
         elif page == "Zaman Makinesi":
-            render_time_machine_page(ui_lang)
+            _safe_render(render_time_machine_page, ui_lang)
     else:  # US Markets
         if page == "US Analiz":
-            render_us_markets_page(ui_lang, mode_override="analysis")
+            _safe_render(render_us_markets_page, ui_lang, mode_override="analysis")
         elif page == "US Backtest":
-            render_us_markets_page(ui_lang, mode_override="backtest")
+            _safe_render(render_us_markets_page, ui_lang, mode_override="backtest")
         elif page == "US Stock List":
-            render_us_stock_list_page(ui_lang)
+            _safe_render(render_us_stock_list_page, ui_lang)
         elif page == "US Portfolios":
-            render_us_system_portfolios_page(ui_lang)
+            _safe_render(render_us_system_portfolios_page, ui_lang)
         elif page == "Portfolyum":
-            render_portfolio_page(ui_lang)
+            _safe_render(render_portfolio_page, ui_lang)
         elif page == "Zaman Makinesi":
-            render_time_machine_page(ui_lang)
+            _safe_render(render_time_machine_page, ui_lang)
 
 # ─────────────────────────────────────────────────────────
 # ENTRY POINT

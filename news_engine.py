@@ -750,6 +750,23 @@ def _compute_confidence(item: NewsItem) -> float:
 # RSS ÇEKME ALTYAPISI
 # ─────────────────────────────────────────────────────────
 
+def _safe_feedparser_parse(url: str, timeout: int = 12):
+    """feedparser.parse() wrapper — URL'den çekerken timeout koruması ekler."""
+    if not FEEDPARSER_OK:
+        return None
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=timeout)
+        if resp.status_code == 200:
+            return feedparser.parse(resp.content)
+        return None
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+        logger.warning(f"feedparser safe parse timeout/connection: {url[:60]}... -> {exc}")
+        return None
+    except Exception as exc:
+        logger.warning(f"feedparser safe parse hata: {url[:60]}... -> {exc}")
+        return None
+
+
 def _fetch_rss(
     url: str,
     source_name: str,
@@ -943,7 +960,9 @@ def _src_google_tr(ticker, cutoff):
     for q in queries:
         url = f"https://news.google.com/rss/search?q={quote(q)}&hl=tr&gl=TR&ceid=TR:tr"
         try:
-            feed = feedparser.parse(url)
+            feed = _safe_feedparser_parse(url)
+            if not feed:
+                continue
             for e in feed.entries[:10]:
                 t = _clean_title(e.get("title") or "")
                 if not t or not _is_relevant(t, ticker, company):
@@ -978,7 +997,9 @@ def _src_yahoo_finance_rss(ticker, cutoff):
     items = []
     url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
     try:
-        feed = feedparser.parse(url)
+        feed = _safe_feedparser_parse(url)
+        if not feed:
+            return items
         for e in feed.entries[:20]:
             t = _clean_title(e.get("title") or "")
             if not t or len(t) < 10:
@@ -1017,7 +1038,9 @@ def _src_google_en_us(ticker, cutoff):
     for q in queries:
         url = f"https://news.google.com/rss/search?q={quote(q)}&hl=en&gl=US&ceid=US:en"
         try:
-            feed = feedparser.parse(url)
+            feed = _safe_feedparser_parse(url)
+            if not feed:
+                continue
             for e in feed.entries[:8]:
                 t = _clean_title(e.get("title") or "")
                 if not t or len(t) < 10:
@@ -1085,7 +1108,9 @@ def _src_google_en(ticker, cutoff):
     q   = f'"{en}" stock BIST Turkey'
     url = f"https://news.google.com/rss/search?q={quote(q)}&hl=en&gl=US&ceid=US:en"
     try:
-        feed = feedparser.parse(url)
+        feed = _safe_feedparser_parse(url)
+        if not feed:
+            return items
         for e in feed.entries[:8]:
             t = _clean_title(e.get("title") or "")
             if not t: continue
@@ -1433,7 +1458,9 @@ def analyze_news_for_date(
                 f"q={quote(q)}&{lang_params}"
             )
             try:
-                feed = feedparser.parse(url)
+                feed = _safe_feedparser_parse(url)
+                if not feed:
+                    continue
                 for e in feed.entries[:10]:
                     t = _clean_title(e.get("title") or "")
                     if not t or not _is_relevant(t, ticker, company):
