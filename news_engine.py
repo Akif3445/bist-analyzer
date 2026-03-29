@@ -1140,8 +1140,11 @@ def _src_yahoo(ticker, cutoff):
     return items
 
 # ─────────────────────────────────────────────────────────
-# ANA ANALİZ FONKSİYONU
+# ANA ANALİZ FONKSİYONU (30 dakika in-memory cache ile)
 # ─────────────────────────────────────────────────────────
+
+_news_cache: dict[str, tuple[datetime, "NewsAnalysisResult"]] = {}
+_NEWS_CACHE_TTL = 1800  # 30 dakika
 
 def analyze_news(
     ticker: str,
@@ -1161,6 +1164,15 @@ def analyze_news(
     Returns:
         NewsAnalysisResult
     """
+    # ── In-memory cache kontrolü ──────────────────────────
+    cache_key = f"{ticker}|{days}|{language}"
+    if cache_key in _news_cache:
+        cached_time, cached_result = _news_cache[cache_key]
+        age = (datetime.now() - cached_time).total_seconds()
+        if age < _NEWS_CACHE_TTL:
+            logger.info(f"News cache HIT: {ticker} ({age:.0f}s önce)")
+            return cached_result
+
     result = NewsAnalysisResult(language=language)
     cutoff = datetime.now() - timedelta(days=days)
 
@@ -1220,7 +1232,7 @@ def analyze_news(
 
     # ── Paralel çekme ─────────────────────────────────────
     all_raw: list[NewsItem] = []
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=12) as ex:
         futures = {ex.submit(fn, ticker, cutoff): fn.__name__ for fn in source_fns}
         try:
             for future in as_completed(futures, timeout=45):
@@ -1357,6 +1369,14 @@ def analyze_news(
         f"Skor: {result.score} | P/N: {result.positive_count}/{result.negative_count} | "
         f"Kalite: {result.data_quality} | Kaynaklar: {result.data_sources}"
     )
+
+    # ── Cache'e kaydet ────────────────────────────────────
+    _news_cache[cache_key] = (datetime.now(), result)
+    # Eski cache girişlerini temizle (bellek sızıntısı önleme)
+    if len(_news_cache) > 100:
+        oldest_key = min(_news_cache, key=lambda k: _news_cache[k][0])
+        del _news_cache[oldest_key]
+
     return result
 
 def analyze_news_for_date(

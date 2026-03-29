@@ -530,6 +530,16 @@ class AnalysisHistoryDB:
                     PRIMARY KEY (ticker, date)
                 )
             """)
+
+            # ── Performans indexleri ───────────────────────────
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_history_ticker ON analysis_history(ticker)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ticker ON alerts(ticker)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_unread ON alerts(is_read)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_accuracy_ticker ON accuracy_log(ticker)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_runid ON backtest_trades(run_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_scores_runid ON backtest_daily_scores(run_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_summary_runid ON backtest_summary(run_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_news_cache_ticker ON news_backtest_cache(ticker)")
             conn.commit()
 
     def add_alert(self, ticker: str, message: str) -> None:
@@ -1378,6 +1388,16 @@ class BISTScore:
     stock: StockData           = field(default_factory=lambda: StockData(ticker=""))
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_benchmark_cached(index_symbol: str) -> pd.DataFrame:
+    """Benchmark endeks verisini 15 dakika cache'le — her analiz için tekrar çekmeyi önler."""
+    try:
+        df = yf.download(index_symbol, period="2mo", progress=False)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 def compute_bist_score(
     ticker: str,
     analyst_target: Optional[float] = None,
@@ -1402,12 +1422,12 @@ def compute_bist_score(
     # STEP 2: Technical Analysis
     technical           = TechnicalEngine.compute(stock.df)
 
-    # STEP 2.5: Relative Strength vs benchmark index
+    # STEP 2.5: Relative Strength vs benchmark index (cached)
     _bench_idx = _default_index(market)
     try:
         if len(stock.df) >= 14:
-            xu_df = yf.download(_bench_idx, period="2mo", progress=False)
-            if not xu_df.empty and "Close" in xu_df and len(xu_df) >= 14:
+            xu_df = _fetch_benchmark_cached(_bench_idx)
+            if xu_df is not None and not xu_df.empty and "Close" in xu_df and len(xu_df) >= 14:
                 xu_close = xu_df["Close"].dropna()
                 st_close = stock.df["Close"].dropna()
                 s_ret = (float(st_close.iloc[-1]) - float(st_close.iloc[-14])) / float(st_close.iloc[-14])
@@ -1854,7 +1874,7 @@ class PortfolioScanner:
     @staticmethod
     def _init_table():
         with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("DROP TABLE IF EXISTS portfolio_scan")
+            # NOT: Artık DROP TABLE yapmıyoruz — cache'i koruyoruz
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS portfolio_scan (
                     ticker          TEXT PRIMARY KEY,
@@ -1895,11 +1915,19 @@ class PortfolioScanner:
         """
         PortfolioScanner._init_table()
 
-        # Cache kontrolü
+        # Cache kontrolü — tablo varsa ve verisi tazeyse direkt dön
         if not force:
             cached = PortfolioScanner._load_cache()
             if cached:
                 return cached
+
+        # Yeni tarama yapılacak — eski veriyi temizle
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("DELETE FROM portfolio_scan")
+                conn.commit()
+        except Exception:
+            pass
 
         results = []
         total   = len(BIST_SCAN_UNIVERSE)
@@ -4091,7 +4119,7 @@ def render_dashboard_page(ui_lang):
         c3.metric("Değerlendirilen" if ui_lang == "TR" else "Total Evaluated", acc_total)
         st.markdown("---")
 
-    @st.cache_data(ttl=900)
+    @st.cache_data(ttl=3600)
     def fetch_market_overview():
         bist30 = ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EKGYO.IS", "ENKAI.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "GUBRF.IS", "HEKTS.IS", "ISCTR.IS", "KCHOL.IS", "KOZAA.IS", "KOZAL.IS", "KRDMD.IS", "PETKM.IS", "PGSUS.IS", "SAHOL.IS", "SASA.IS", "SISE.IS", "TAVHL.IS", "TCELL.IS", "THYAO.IS", "TOASO.IS", "TTKOM.IS", "TUPRS.IS", "VAKBN.IS", "YKBNK.IS"]
 
@@ -6724,7 +6752,7 @@ def render_portfolio_page(ui_lang):
         return
 
     # ── Gerçek zamanlı fiyatlar (5 dak. cache, toplu çekim) ──────────────
-    @st.cache_data(ttl=300, show_spinner=False)
+    @st.cache_data(ttl=600, show_spinner=False)
     def _fetch_realtime_prices(tickers: tuple) -> dict:
         """Portföydeki tüm hisseler için anlık fiyatları tek sorguda çeker (BIST + US)."""
         result = {}
@@ -6913,7 +6941,7 @@ BIST_STOCKS = {
     "Kimya & Petrokimya": ["TUPRS","PETKM","SASA","GUBRF"],
 }
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_bist_daily_changes(tickers: tuple) -> dict:
     """
     Verilen ticker'ların günlük fiyat ve değişimini çeker.
