@@ -742,8 +742,17 @@ class AnalysisHistoryDB:
     # SKOR DOĞRULAMA SİSTEMİ (Score Validation)
     # ══════════════════════════════════════════════════════════
 
+    # Takip edilen zaman dilimleri: (gün_sayısı, iş_günü_karşılığı, kolon_prefix)
+    VALIDATION_PERIODS = [
+        (1,  1,  "1d"),
+        (3,  2,  "3d"),
+        (7,  5,  "7d"),
+        (14, 10, "14d"),
+        (30, 21, "30d"),
+    ]
+
     def _init_validation_table(self):
-        """accuracy_validation tablosunu oluştur (yoksa)."""
+        """accuracy_validation tablosunu oluştur + eksik kolonları ekle."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS accuracy_validation (
@@ -753,10 +762,22 @@ class AnalysisHistoryDB:
                     score           REAL NOT NULL,
                     signal_date     TEXT NOT NULL,
                     signal_price    REAL NOT NULL,
+                    check_1d_date   TEXT,
+                    check_1d_price  REAL,
+                    return_1d_pct   REAL,
+                    result_1d       TEXT DEFAULT 'Bekliyor',
+                    check_3d_date   TEXT,
+                    check_3d_price  REAL,
+                    return_3d_pct   REAL,
+                    result_3d       TEXT DEFAULT 'Bekliyor',
                     check_7d_date   TEXT,
                     check_7d_price  REAL,
                     return_7d_pct   REAL,
                     result_7d       TEXT DEFAULT 'Bekliyor',
+                    check_14d_date  TEXT,
+                    check_14d_price REAL,
+                    return_14d_pct  REAL,
+                    result_14d      TEXT DEFAULT 'Bekliyor',
                     check_30d_date  TEXT,
                     check_30d_price REAL,
                     return_30d_pct  REAL,
@@ -765,6 +786,22 @@ class AnalysisHistoryDB:
                     UNIQUE(ticker, signal_date, source)
                 )
             """)
+            # Eski tabloya yeni kolonları ekle (varsa atla)
+            for prefix in ("1d", "3d", "14d"):
+                for col_suffix in ("date TEXT", "price REAL", "pct REAL"):
+                    col_name = f"check_{prefix}_{col_suffix.split()[0]}"
+                    try:
+                        conn.execute(f"ALTER TABLE accuracy_validation ADD COLUMN {col_name} {col_suffix.split()[1]}")
+                    except sqlite3.OperationalError:
+                        pass
+                try:
+                    conn.execute(f"ALTER TABLE accuracy_validation ADD COLUMN return_{prefix}_pct REAL")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute(f"ALTER TABLE accuracy_validation ADD COLUMN result_{prefix} TEXT DEFAULT 'Bekliyor'")
+                except sqlite3.OperationalError:
+                    pass
             try:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_val_ticker ON accuracy_validation(ticker)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_val_signal ON accuracy_validation(signal)")
@@ -810,20 +847,22 @@ class AnalysisHistoryDB:
             log.warning("record_signal hatası: %s", exc)
 
     def check_pending_signals(self):
-        """Bekleyen sinyalleri kontrol et: 7 gün ve 30 gün sonraki fiyatları güncelle."""
+        """Bekleyen sinyalleri kontrol et: 1g, 3g, 7g, 14g, 30g sonraki fiyatları güncelle."""
         self._init_validation_table()
         now = datetime.now()
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
+                # Herhangi bir periyotta hâlâ bekleyen kayıtları çek
                 pending = conn.execute("""
                     SELECT * FROM accuracy_validation
-                    WHERE result_7d = 'Bekliyor' OR result_30d = 'Bekliyor'
+                    WHERE result_1d = 'Bekliyor' OR result_3d = 'Bekliyor'
+                       OR result_7d = 'Bekliyor' OR result_14d = 'Bekliyor'
+                       OR result_30d = 'Bekliyor'
                 """).fetchall()
                 if not pending:
                     return
 
-                # Benzersiz ticker'ları topla
                 tickers = list({r["ticker"] for r in pending})
                 symbols = [_yf_symbol(t, "BIST") for t in tickers]
 
@@ -841,7 +880,6 @@ class AnalysisHistoryDB:
                     days_passed = (now - sig_date).days
                     sym = _yf_symbol(r["ticker"], "BIST")
 
-                    # DataFrame'den fiyat çek
                     try:
                         if len(tickers) > 1:
                             col = df[sym]["Close"].dropna()
@@ -857,39 +895,40 @@ class AnalysisHistoryDB:
                     if not sig_price or sig_price <= 0:
                         continue
 
-                    # 7 gün kontrolü
-                    if r["result_7d"] == "Bekliyor" and days_passed >= 7:
-                        ret_pct = round((current_price - sig_price) / sig_price * 100, 2)
-                        result = self._evaluate_signal(r["signal"], ret_pct)
-                        conn.execute("""
-                            UPDATE accuracy_validation
-                            SET check_7d_date = ?, check_7d_price = ?,
-                                return_7d_pct = ?, result_7d = ?
-                            WHERE id = ?
-                        """, (now.strftime("%Y-%m-%d"), round(current_price, 2), ret_pct, result, r["id"]))
-
-                    # 30 gün kontrolü
-                    if r["result_30d"] == "Bekliyor" and days_passed >= 30:
-                        ret_pct = round((current_price - sig_price) / sig_price * 100, 2)
-                        result = self._evaluate_signal(r["signal"], ret_pct)
-                        conn.execute("""
-                            UPDATE accuracy_validation
-                            SET check_30d_date = ?, check_30d_price = ?,
-                                return_30d_pct = ?, result_30d = ?
-                            WHERE id = ?
-                        """, (now.strftime("%Y-%m-%d"), round(current_price, 2), ret_pct, result, r["id"]))
+                    # Tüm periyotları kontrol et
+                    for cal_days, _biz_days, prefix in self.VALIDATION_PERIODS:
+                        result_col = f"result_{prefix}"
+                        try:
+                            current_result = r[result_col]
+                        except (KeyError, IndexError):
+                            current_result = "Bekliyor"
+                        if current_result == "Bekliyor" and days_passed >= cal_days:
+                            ret_pct = round((current_price - sig_price) / sig_price * 100, 2)
+                            result = self._evaluate_signal(r["signal"], ret_pct, cal_days)
+                            conn.execute(f"""
+                                UPDATE accuracy_validation
+                                SET check_{prefix}_date = ?, check_{prefix}_price = ?,
+                                    return_{prefix}_pct = ?, result_{prefix} = ?
+                                WHERE id = ?
+                            """, (now.strftime("%Y-%m-%d"), round(current_price, 2),
+                                  ret_pct, result, r["id"]))
 
                 conn.commit()
         except Exception as exc:
             log.warning("check_pending_signals hatası: %s", exc)
 
     @staticmethod
-    def _evaluate_signal(signal: str, return_pct: float) -> str:
-        """Sinyal başarılı mı? AL→yükseldiyse, SAT→düştüyse."""
+    def _evaluate_signal(signal: str, return_pct: float, days: int = 30) -> str:
+        """
+        Sinyal başarılı mı? Süreye göre eşik değişir:
+        1g: %0.5, 3g: %1.0, 7g: %1.5, 14g: %2.0, 30g: %2.0
+        """
+        thresholds = {1: 0.5, 3: 1.0, 7: 1.5, 14: 2.0, 30: 2.0}
+        thr = thresholds.get(days, 2.0)
         if signal in ("AL", "GUCLU AL"):
-            return "Basarili" if return_pct >= 2.0 else "Basarisiz"
+            return "Basarili" if return_pct >= thr else "Basarisiz"
         elif signal in ("SAT", "GUCLU SAT"):
-            return "Basarili" if return_pct <= -2.0 else "Basarisiz"
+            return "Basarili" if return_pct <= -thr else "Basarisiz"
         return "Belirsiz"
 
     def get_validation_report(self) -> dict:
@@ -907,15 +946,18 @@ class AnalysisHistoryDB:
             return []
 
     def run_backfill(self, tickers: list, months_back: int = 12,
-                     progress_cb=None) -> int:
+                     interval_days: int = 7, progress_cb=None) -> int:
         """
-        Toplu geriye dönük skor doğrulama: Her ay başında skor hesapla,
-        30 gün sonraki gerçek fiyatla karşılaştır.
+        Toplu geriye dönük skor doğrulama: Her N günde bir skor hesapla,
+        1g/3g/7g/14g/30g sonraki gerçek fiyatla karşılaştır.
+        interval_days: Kaç günde bir test noktası (7=haftalık, 30=aylık)
         Returns: eklenen sinyal sayısı
         """
         self._init_validation_table()
         count = 0
-        total = len(tickers) * months_back
+        total_days_back = months_back * 30
+        steps_per_ticker = total_days_back // interval_days
+        total = len(tickers) * steps_per_ticker
 
         for t_idx, ticker in enumerate(tickers):
             try:
@@ -933,14 +975,13 @@ class AnalysisHistoryDB:
                 if len(close) < 60:
                     continue
 
-                # Her ayın ilk iş gününde skor hesapla
-                for m in range(months_back, 0, -1):
-                    step = t_idx * months_back + (months_back - m)
+                # Her interval_days günde bir test noktası
+                for step_i in range(steps_per_ticker, 0, -1):
+                    step = t_idx * steps_per_ticker + (steps_per_ticker - step_i)
                     if progress_cb:
                         progress_cb(ticker, step, total)
 
-                    target_date = datetime.now() - timedelta(days=m * 30)
-                    # O tarihe en yakın veriyi bul
+                    target_date = datetime.now() - timedelta(days=step_i * interval_days)
                     mask = close.index <= pd.Timestamp(target_date)
                     if mask.sum() < 60:
                         continue
@@ -951,15 +992,13 @@ class AnalysisHistoryDB:
                     if signal_price <= 0:
                         continue
 
-                    # 30 gün sonraki fiyatı bul
+                    # Her periyot için gelecek fiyatı bul
                     future_mask = close.index > pd.Timestamp(signal_date)
                     future = close[future_mask]
-                    if len(future) < 20:  # En az 20 iş günü (≈30 takvim günü)
+                    if len(future) < 2:
                         continue
-                    check_price = float(future.iloc[min(21, len(future) - 1)])  # ~30 takvim günü ≈ 21 iş günü
-                    check_date = future.index[min(21, len(future) - 1)]
 
-                    # O tarih için basit teknik skor hesapla
+                    # O tarih için teknik skor hesapla
                     hist_df = df[df.index <= pd.Timestamp(signal_date)].tail(250)
                     if len(hist_df) < 50:
                         continue
@@ -974,24 +1013,37 @@ class AnalysisHistoryDB:
                     if signal_str in ("NOTR", "HATA"):
                         continue
 
-                    ret_pct = round((check_price - signal_price) / signal_price * 100, 2)
-                    result = self._evaluate_signal(signal_str, ret_pct)
+                    # Her periyot için fiyat ve sonuç hesapla
+                    period_data = {}
+                    for cal_days, biz_days, prefix in self.VALIDATION_PERIODS:
+                        if len(future) > biz_days:
+                            fp = float(future.iloc[min(biz_days, len(future) - 1)])
+                            fd = future.index[min(biz_days, len(future) - 1)]
+                            ret = round((fp - signal_price) / signal_price * 100, 2)
+                            res = self._evaluate_signal(signal_str, ret, cal_days)
+                            period_data[prefix] = (fd.strftime("%Y-%m-%d"), round(fp, 2), ret, res)
+
+                    if not period_data:
+                        continue
 
                     try:
                         sig_date_str = signal_date.strftime("%Y-%m-%d %H:%M")
                         with sqlite3.connect(self.db_path) as conn:
-                            conn.execute("""
-                                INSERT OR IGNORE INTO accuracy_validation
-                                  (ticker, signal, score, signal_date, signal_price,
-                                   check_30d_date, check_30d_price, return_30d_pct,
-                                   result_30d, source)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'backfill')
-                            """, (
-                                ticker, signal_str, round(score_val, 1),
-                                sig_date_str, round(signal_price, 2),
-                                check_date.strftime("%Y-%m-%d"), round(check_price, 2),
-                                ret_pct, result,
-                            ))
+                            # Dinamik SQL oluştur
+                            cols = ["ticker", "signal", "score", "signal_date", "signal_price", "source"]
+                            vals = [ticker, signal_str, round(score_val, 1),
+                                    sig_date_str, round(signal_price, 2), "backfill"]
+                            for prefix, (d, p, r, res) in period_data.items():
+                                cols += [f"check_{prefix}_date", f"check_{prefix}_price",
+                                         f"return_{prefix}_pct", f"result_{prefix}"]
+                                vals += [d, p, r, res]
+
+                            placeholders = ",".join("?" * len(vals))
+                            col_str = ",".join(cols)
+                            conn.execute(f"""
+                                INSERT OR IGNORE INTO accuracy_validation ({col_str})
+                                VALUES ({placeholders})
+                            """, vals)
                             conn.commit()
                         count += 1
                     except Exception:
@@ -4986,10 +5038,10 @@ def render_validation_page(ui_lang: str):
     st.markdown("# " + ("Skor Dogrulama Raporu" if ui_lang == "TR" else "Score Validation Report"))
     st.caption(
         "Sistem sinyallerinin gerçek piyasa verileriyle karşılaştırması. "
-        "AL sinyali verdikten 7 ve 30 gün sonra fiyat yükseldi mi?"
+        "AL sinyali verdikten 1, 3, 7, 14 ve 30 gün sonra fiyat yükseldi mi?"
         if ui_lang == "TR" else
         "Comparison of system signals with actual market data. "
-        "Did the price rise 7 and 30 days after a BUY signal?"
+        "Did the price rise 1, 3, 7, 14 and 30 days after a BUY signal?"
     )
 
     # ── Sidebar kontroller ─────────────────────────────────
@@ -4999,8 +5051,8 @@ def render_validation_page(ui_lang: str):
         if st.button(
             "Bekleyen Sinyalleri Kontrol Et" if ui_lang == "TR" else "Check Pending Signals",
             use_container_width=True,
-            help="7+ veya 30+ gün geçmiş sinyallerin güncel fiyatlarını kontrol eder"
-                 if ui_lang == "TR" else "Checks current prices for signals older than 7 or 30 days"
+            help="Bekleyen sinyallerin güncel fiyatlarını kontrol eder (1g-30g)"
+                 if ui_lang == "TR" else "Checks current prices for pending signals (1d-30d)"
         ):
             with st.spinner("Sinyaller kontrol ediliyor..." if ui_lang == "TR" else "Checking signals..."):
                 _history_db.check_pending_signals()
@@ -5016,11 +5068,22 @@ def render_validation_page(ui_lang: str):
                  if ui_lang == "TR" else "How many months back to run bulk signal validation"
         )
 
+        backfill_interval = st.selectbox(
+            "Test Sikligi" if ui_lang == "TR" else "Test Interval",
+            options=[7, 14, 30],
+            index=0,
+            format_func=lambda x: {7: "Haftalik (7 gün)" if ui_lang == "TR" else "Weekly (7 days)",
+                                    14: "2 Haftalik (14 gün)" if ui_lang == "TR" else "Bi-weekly (14 days)",
+                                    30: "Aylik (30 gün)" if ui_lang == "TR" else "Monthly (30 days)"}[x],
+            help="Test noktaları arasındaki gün sayısı. Haftalık = daha çok veri ama daha uzun sürer."
+                 if ui_lang == "TR" else "Days between test points. Weekly = more data but takes longer."
+        )
+
         backfill_btn = st.button(
             "Toplu Geriye Donuk Test Baslat" if ui_lang == "TR" else "Run Backfill Test",
             use_container_width=True, type="primary",
-            help="BIST30 hisseleri için geriye dönük skor doğrulama çalıştırır (3-8 dk)"
-                 if ui_lang == "TR" else "Runs historical score validation for BIST30 stocks (3-8 min)"
+            help="BIST30 hisseleri için geriye dönük skor doğrulama çalıştırır"
+                 if ui_lang == "TR" else "Runs historical score validation for BIST30 stocks"
         )
 
     # ── Backfill çalıştır ──────────────────────────────────
@@ -5034,7 +5097,8 @@ def render_validation_page(ui_lang: str):
             progress_bar.progress(pct, text=f"{ticker} ({step}/{total})")
             status_area.info(f"{ticker} analiz ediliyor..." if ui_lang == "TR" else f"Analyzing {ticker}...")
 
-        added = _history_db.run_backfill(bist30, months_back=backfill_months, progress_cb=_bf_progress)
+        added = _history_db.run_backfill(bist30, months_back=backfill_months,
+                                         interval_days=backfill_interval, progress_cb=_bf_progress)
         progress_bar.progress(1.0, text="Tamamlandi!" if ui_lang == "TR" else "Complete!")
         status_area.success(
             f"Toplu test tamamlandi: **{added}** sinyal eklendi."
@@ -5089,89 +5153,82 @@ def render_validation_page(ui_lang: str):
         else:
             st.metric("Ort. Getiri" if ui_lang == "TR" else "Avg Return", "—")
 
-    # ── Sinyal Bazlı Doğruluk Tablosu ─────────────────────
-    if not df_30d.empty:
+    # ── Sinyal Bazlı Doğruluk Tablosu (tüm periyotlar) ───
+    _periods = [("1d", "1g"), ("3d", "3g"), ("7d", "7g"), ("14d", "14g"), ("30d", "30g")]
+    # Her periyot için filtered DataFrame'ler
+    _period_dfs = {}
+    for p_key, p_label in _periods:
+        result_col = f"result_{p_key}"
+        if result_col in df_all.columns:
+            _period_dfs[p_key] = df_all[df_all[result_col].isin(["Basarili", "Basarisiz"])].copy()
+        else:
+            _period_dfs[p_key] = pd.DataFrame()
+
+    # En az bir periyotta veri varsa tabloyu göster
+    has_data = any(not v.empty for v in _period_dfs.values())
+    if has_data:
         st.markdown("---")
-        st.markdown("### " + ("Sinyal Bazli Dogruluk" if ui_lang == "TR" else "Accuracy by Signal"))
+        st.markdown("### " + ("Sinyal Bazli Dogruluk (Tum Periyotlar)"
+                               if ui_lang == "TR" else "Accuracy by Signal (All Periods)"))
 
         signal_order = ["GUCLU AL", "AL", "SAT", "GUCLU SAT"]
         rows_table = []
-        for sig in signal_order:
-            # 7 gün
-            s7 = df_7d[df_7d["signal"] == sig]
-            if len(s7) > 0:
-                acc_7 = round(len(s7[s7["result_7d"] == "Basarili"]) / len(s7) * 100, 1)
-                ret_7 = round(s7["return_7d_pct"].mean(), 2) if "return_7d_pct" in s7 else 0
-                n_7 = len(s7)
-            else:
-                acc_7, ret_7, n_7 = 0, 0, 0
-
-            # 30 gün
-            s30 = df_30d[df_30d["signal"] == sig]
-            if len(s30) > 0:
-                acc_30 = round(len(s30[s30["result_30d"] == "Basarili"]) / len(s30) * 100, 1)
-                ret_30 = round(s30["return_30d_pct"].mean(), 2)
-                n_30 = len(s30)
-            else:
-                acc_30, ret_30, n_30 = 0, 0, 0
-
-            rows_table.append({
-                "Sinyal": sig,
-                "7g Dogruluk": f"{acc_7}%" if n_7 > 0 else "—",
-                "7g Ort.Getiri": f"{ret_7:+.2f}%" if n_7 > 0 else "—",
-                "7g Sayi": n_7,
-                "30g Dogruluk": f"{acc_30}%" if n_30 > 0 else "—",
-                "30g Ort.Getiri": f"{ret_30:+.2f}%" if n_30 > 0 else "—",
-                "30g Sayi": n_30,
-            })
-
-        # Genel satır
-        if len(df_30d) > 0:
-            gen_acc_30 = round(len(df_30d[df_30d["result_30d"] == "Basarili"]) / len(df_30d) * 100, 1)
-            gen_ret_30 = round(df_30d["return_30d_pct"].mean(), 2)
-        else:
-            gen_acc_30, gen_ret_30 = 0, 0
-        if len(df_7d) > 0:
-            gen_acc_7 = round(len(df_7d[df_7d["result_7d"] == "Basarili"]) / len(df_7d) * 100, 1)
-            gen_ret_7 = round(df_7d["return_7d_pct"].mean(), 2)
-        else:
-            gen_acc_7, gen_ret_7 = 0, 0
-
-        rows_table.append({
-            "Sinyal": "GENEL",
-            "7g Dogruluk": f"{gen_acc_7}%",
-            "7g Ort.Getiri": f"{gen_ret_7:+.2f}%",
-            "7g Sayi": len(df_7d),
-            "30g Dogruluk": f"{gen_acc_30}%",
-            "30g Ort.Getiri": f"{gen_ret_30:+.2f}%",
-            "30g Sayi": len(df_30d),
-        })
+        for sig in signal_order + ["GENEL"]:
+            row = {"Sinyal": sig}
+            for p_key, p_label in _periods:
+                pdf = _period_dfs[p_key]
+                if pdf.empty:
+                    row[f"{p_label} %"] = "—"
+                    row[f"{p_label} Getiri"] = "—"
+                    continue
+                if sig == "GENEL":
+                    subset = pdf
+                else:
+                    subset = pdf[pdf["signal"] == sig]
+                n = len(subset)
+                if n == 0:
+                    row[f"{p_label} %"] = "—"
+                    row[f"{p_label} Getiri"] = "—"
+                    continue
+                result_col = f"result_{p_key}"
+                return_col = f"return_{p_key}_pct"
+                acc = round(len(subset[subset[result_col] == "Basarili"]) / n * 100, 1)
+                ret = round(subset[return_col].mean(), 2) if return_col in subset.columns else 0
+                row[f"{p_label} %"] = f"{acc}% ({n})"
+                row[f"{p_label} Getiri"] = f"{ret:+.2f}%"
+            rows_table.append(row)
 
         df_table = pd.DataFrame(rows_table)
         st.dataframe(df_table, use_container_width=True, hide_index=True)
 
-        # ── Beklenti Değeri ────────────────────────────────
-        buy_signals = df_30d[df_30d["signal"].isin(["AL", "GUCLU AL"])]
-        sell_signals = df_30d[df_30d["signal"].isin(["SAT", "GUCLU SAT"])]
-        if len(buy_signals) > 0:
-            avg_buy_ret = buy_signals["return_30d_pct"].mean()
-            st.markdown(
-                f"**AL sinyalleri ortalama getirisi (30g):** "
-                f"<span style='color:{'#22c55e' if avg_buy_ret > 0 else '#ef4444'}'>"
-                f"{avg_buy_ret:+.2f}%</span>",
-                unsafe_allow_html=True,
-            )
-        if len(sell_signals) > 0:
-            avg_sell_ret = sell_signals["return_30d_pct"].mean()
-            st.markdown(
-                f"**SAT sinyalleri ortalama getirisi (30g):** "
-                f"<span style='color:{'#22c55e' if avg_sell_ret < 0 else '#ef4444'}'>"
-                f"{avg_sell_ret:+.2f}%</span> "
-                f"{'(SAT sinyalinde düşüş beklenir → negatif = başarılı)' if ui_lang == 'TR' else '(negative = successful for SELL signals)'}",
-                unsafe_allow_html=True,
-            )
+        # ── Beklenti Değeri (tüm periyotlar) ──────────────
+        st.markdown("#### " + ("Sinyal Tipi Bazli Ortalama Getiri" if ui_lang == "TR" else "Avg Return by Signal Type"))
+        for p_key, p_label in _periods:
+            pdf = _period_dfs[p_key]
+            if pdf.empty:
+                continue
+            return_col = f"return_{p_key}_pct"
+            if return_col not in pdf.columns:
+                continue
+            buy_sigs = pdf[pdf["signal"].isin(["AL", "GUCLU AL"])]
+            sell_sigs = pdf[pdf["signal"].isin(["SAT", "GUCLU SAT"])]
+            parts = []
+            if len(buy_sigs) > 0:
+                avg_b = buy_sigs[return_col].mean()
+                parts.append(
+                    f"AL: <span style='color:{'#22c55e' if avg_b > 0 else '#ef4444'}'>{avg_b:+.2f}%</span>"
+                )
+            if len(sell_sigs) > 0:
+                avg_s = sell_sigs[return_col].mean()
+                parts.append(
+                    f"SAT: <span style='color:{'#22c55e' if avg_s < 0 else '#ef4444'}'>{avg_s:+.2f}%</span>"
+                )
+            if parts:
+                st.markdown(f"**{p_label}:** " + " &nbsp;|&nbsp; ".join(parts), unsafe_allow_html=True)
 
     # ── Confusion Matrix ───────────────────────────────────
+    df_30d = _period_dfs.get("30d", pd.DataFrame())
+    df_7d  = _period_dfs.get("7d", pd.DataFrame())
     if not df_30d.empty:
         st.markdown("---")
         st.markdown("### " + ("Karisiklik Matrisi (30 Gun)" if ui_lang == "TR" else "Confusion Matrix (30 Day)"))
@@ -5331,7 +5388,9 @@ def render_validation_page(ui_lang: str):
             expanded=False
         ):
             display_cols = ["ticker", "signal", "score", "signal_date", "signal_price",
-                           "return_7d_pct", "result_7d", "return_30d_pct", "result_30d", "source"]
+                           "return_1d_pct", "result_1d", "return_3d_pct", "result_3d",
+                           "return_7d_pct", "result_7d", "return_14d_pct", "result_14d",
+                           "return_30d_pct", "result_30d", "source"]
             available_cols = [c for c in display_cols if c in df_all.columns]
             st.dataframe(df_all[available_cols], use_container_width=True, hide_index=True)
 
