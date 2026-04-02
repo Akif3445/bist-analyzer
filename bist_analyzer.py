@@ -1,34 +1,5 @@
 """
-BIST Smart Investment Assistant — Phase 1 + Phase 2
-=====================================================
-Modules:
-  1. DataFetcher        — OHLCV + fundamentals via yfinance
-  2. NewsScraper        — KAP / news headlines + sentiment
-  3. TechnicalEngine    — SMA50/200, RSI, MACD
-  4. ScoringEngine      — BIST Buy Score 0-100
-  5. RiskEngine         — Stop-loss / Take-profit levels
-  6. AIReporter         — Turkish summary via Claude API
-  7. StreamlitApp       — Dark-mode dashboard (entry point)
-
-  [PHASE 2 — faz2_modules.py]
-  A. KAPScraper         — Real disclosures from kap.org.tr
-  B. TargetPriceFetcher — Multi-source target prices + cache
-  C. DataCache          — SQLite-based caching layer
-  D. SchedulerService   — APScheduler auto-refresh
-  E. WatchlistManager   — Persistent watchlist management
-
-Install:
-  pip install yfinance pandas numpy ta requests beautifulsoup4 \\
-              streamlit plotly anthropic python-dotenv lxml \\
-              apscheduler sqlite-utils
-
-  Add to .env:
-  ANTHROPIC_API_KEY=sk-ant-...
-  TELEGRAM_BOT_TOKEN=...   (optional)
-  TELEGRAM_CHAT_ID=...     (optional)
-
-Run:
-  streamlit run bist_analyzer.py
+BIST Smart Investment Assistant
 """
 
 import json
@@ -44,7 +15,6 @@ from datetime import datetime, timedelta
 from io import StringIO
 from typing import Optional
 
-import anthropic
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -73,14 +43,14 @@ except ImportError:
 
 warnings.filterwarnings("ignore")
 
-# ─────────────────────────────────────────────────────────
-# DEPLOY-READY: Dosya yolları (OS-bağımsız, relative)
-# ─────────────────────────────────────────────────────────
+# Dosya yolları
 _APP_DIR  = os.path.dirname(os.path.abspath(__file__))
-DB_PATH   = os.path.join(_APP_DIR, "bist_cache.db")
-LOG_PATH  = os.path.join(_APP_DIR, "bist_analyzer.log")
+_IS_CLOUD = os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("STREAMLIT_SERVER_HEADLESS")
+_DATA_DIR = "/tmp" if (_IS_CLOUD and os.path.isdir("/tmp")) else _APP_DIR
+DB_PATH   = os.path.join(_DATA_DIR, "bist_cache.db")
+LOG_PATH  = os.path.join(_DATA_DIR, "bist_analyzer.log")
 
-# ── Loglama ──────────────────────────────────────────────────────────────────
+# Loglama
 _log_handlers = [logging.StreamHandler()]
 try:
     _log_handlers.insert(0, logging.FileHandler(LOG_PATH, encoding="utf-8"))
@@ -95,14 +65,9 @@ logging.basicConfig(
 log = logging.getLogger("bist")
 
 
-# ─────────────────────────────────────────────────────────
-# DEPLOY-READY: Secrets Management (st.secrets + os.getenv)
-# ─────────────────────────────────────────────────────────
+# Secrets
 def _get_secret(key: str, default: str = "") -> str:
-    """
-    API anahtarını önce st.secrets'dan, sonra os.getenv'den okur.
-    Bulut (Streamlit Cloud) ve yerel (.env) her iki ortamı da destekler.
-    """
+    """st.secrets veya os.getenv'den anahtar okur."""
     try:
         import streamlit as _st
         if hasattr(_st, "secrets") and key in _st.secrets:
@@ -111,14 +76,14 @@ def _get_secret(key: str, default: str = "") -> str:
         pass
     return (os.getenv(key) or default).strip()
 
-# ── News Engine (real data — no fake fallbacks) ──
+# News Engine
 try:
     from news_engine import analyze_news, render_news_panel, NewsAnalysisResult
     NEWS_ENGINE_AVAILABLE = True
 except ImportError:
     NEWS_ENGINE_AVAILABLE = False
 
-# ── Phase 2 modules (optional — graceful degrade if missing) ──
+# Phase 2 modules
 try:
     from faz2_modules import (
         DataCache,
@@ -135,21 +100,14 @@ try:
 except ImportError:
     FAZ2_AVAILABLE = False
 
-# ─────────────────────────────────────────────────────────
-# 0. CONFIGURATION
-# ─────────────────────────────────────────────────────────
+# Configuration
 
 def _yf_symbol(ticker: str, market: str = "BIST") -> str:
-    """
-    yfinance için doğru sembol döndürür.
-    BIST → THYAO.IS, US → AAPL (olduğu gibi)
-    """
+    """yfinance sembol formatı."""
     t = ticker.upper().strip()
     if market == "US":
-        # US hisselerinden .IS varsa temizle
         return t.replace(".IS", "")
     else:
-        # BIST hisselerinde .IS yoksa ekle
         return t if t.endswith(".IS") else t + ".IS"
 
 
@@ -178,13 +136,10 @@ WEIGHTS = {
     "deger":     10,   # Değerleme (F/K, PD/DD)
 }
 
-# ─────────────────────────────────────────────────────────
-# BISTScore JSON SERİLEŞTİRME (pickle yerine güvenli)
-# ─────────────────────────────────────────────────────────
+# BISTScore JSON serialization
 
 def _score_to_json(score: "BISTScore") -> str:
-    """BISTScore objesini güvenli JSON string'e çevirir."""
-    # DataFrame → JSON (tarih indeksli, split formatı)
+    """BISTScore -> JSON string."""
     df_json = None
     if score.stock.df is not None and not score.stock.df.empty:
         try:
@@ -192,7 +147,6 @@ def _score_to_json(score: "BISTScore") -> str:
         except Exception:
             pass
 
-    # stock.info içindeki JSON'a çevrilemeyen değerleri filtrele
     info_safe: dict = {}
     for k, v in (score.stock.info or {}).items():
         try:
@@ -201,7 +155,6 @@ def _score_to_json(score: "BISTScore") -> str:
         except (TypeError, ValueError):
             pass
 
-    # TargetPriceConsensus (faz2)
     tc_dict = None
     tc = getattr(score, "_target_consensus", None)
     if tc is not None:
@@ -243,14 +196,13 @@ def _score_to_json(score: "BISTScore") -> str:
         "kap_disclosures": list(getattr(score, "_kap_disclosures", []) or []),
         "material_events": list(getattr(score, "_material_events", []) or []),
         "target_consensus": tc_dict,
-        # Haber detayları (URL, sentiment, kaynak) — cache'den yüklenince restore için
         "news_result": _news_result_to_dict(getattr(score, "_news_result", None)),
     }
     return json.dumps(data, ensure_ascii=False, default=str)
 
 
 def _news_result_to_dict(nr) -> Optional[dict]:
-    """NewsAnalysisResult → JSON-uyumlu dict. None gelirse None döner."""
+    """NewsAnalysisResult -> dict."""
     if nr is None:
         return None
     try:
@@ -276,7 +228,7 @@ def _news_result_to_dict(nr) -> Optional[dict]:
 
 
 def _news_result_from_dict(d: Optional[dict]):
-    """DB'den okunan dict → NewsAnalysisResult. None gelirse None döner."""
+    """dict -> NewsAnalysisResult."""
     if not d:
         return None
     if not NEWS_ENGINE_AVAILABLE:
@@ -305,28 +257,22 @@ def _news_result_from_dict(d: Optional[dict]):
 
 
 def _score_from_json(raw) -> Optional["BISTScore"]:
-    """JSON string veya bytes'tan BISTScore yeniden oluşturur.
-    Eski BLOB (pickle) veriler için geriye dönük uyumluluk korunur.
-    """
-    # Eski pickle formatı (bytes)
+    """JSON/bytes -> BISTScore. Eski pickle formatini da destekler."""
     if isinstance(raw, (bytes, bytearray)):
         try:
             return pickle.loads(raw)
         except Exception:
             return None
 
-    # Yeni JSON formatı (str)
     try:
         data = json.loads(raw)
 
-        # TechnicalResult
         tech_data = data.get("technical", {})
         technical = TechnicalResult(**{
             k: v for k, v in tech_data.items()
             if k in TechnicalResult.__dataclass_fields__
         })
 
-        # SentimentResult
         s_data = data.get("sentiment", {})
         sentiment = SentimentResult(
             score=s_data.get("score", 50.0),
@@ -336,14 +282,12 @@ def _score_from_json(raw) -> Optional["BISTScore"]:
             raw_score=s_data.get("raw_score", 0.0),
         )
 
-        # ValuationResult
         val_data = data.get("valuation", {})
         valuation = ValuationResult(**{
             k: v for k, v in val_data.items()
             if k in ValuationResult.__dataclass_fields__
         })
 
-        # StockData
         s = data.get("stock", {})
         stock = StockData(
             ticker=s.get("ticker", data.get("ticker", "")),
@@ -363,7 +307,6 @@ def _score_from_json(raw) -> Optional["BISTScore"]:
             except Exception:
                 stock.df = pd.DataFrame()
 
-        # BISTScore
         score = BISTScore(
             ticker=data["ticker"],
             total_score=data["total_score"],
@@ -381,7 +324,6 @@ def _score_from_json(raw) -> Optional["BISTScore"]:
 
         score._kap_disclosures = data.get("kap_disclosures", [])
         score._material_events = data.get("material_events", [])
-        # Kaydedilmiş haber detaylarını restore et (URL, sentiment, BERT bilgisi dahil)
         score._news_result = _news_result_from_dict(data.get("news_result"))
 
         tc_data = data.get("target_consensus")
@@ -399,16 +341,10 @@ def _score_from_json(raw) -> Optional["BISTScore"]:
         return None
 
 
-# ─────────────────────────────────────────────────────────
-# ANALİZ GEÇMİŞİ DATABASE
-# ─────────────────────────────────────────────────────────
+# Analiz gecmisi DB
 
 class AnalysisHistoryDB:
-    """
-    Analiz edilen hisseleri SQLite'a kaydeder.
-    Tablo: analysis_history — her hisse için en son analiz sonucu tutulur.
-    Tekrar analiz edildiğinde kayıt güncellenir, analysis_count artar.
-    """
+    """Analiz sonuclarini SQLite'a kaydeder ve sorgular."""
 
     def __init__(self, db_path: str = None):
         self.db_path = db_path or DB_PATH
@@ -417,121 +353,32 @@ class AnalysisHistoryDB:
     def _init_table(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS analysis_history (
-                    ticker          TEXT PRIMARY KEY,
-                    last_analyzed   TEXT NOT NULL,
-                    total_score     REAL NOT NULL,
-                    signal          TEXT NOT NULL,
-                    current_price   REAL,
-                    teknik_score    REAL,
-                    sentiment_score REAL,
-                    prim_score      REAL,
-                    deger_score     REAL,
-                    rsi             REAL,
-                    golden_cross    INTEGER,
-                    macd_bullish    INTEGER,
-                    analysis_count  INTEGER DEFAULT 1,
-                    full_data       BLOB
-                )
-            """)
+    """)
             try:
                 conn.execute("ALTER TABLE analysis_history ADD COLUMN full_data BLOB")
             except sqlite3.OperationalError:
                 pass  # Sütun zaten varsa hata vermesin
 
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS portfolio (
-                    ticker      TEXT PRIMARY KEY,
-                    buy_price   REAL,
-                    quantity    INTEGER,
-                    add_date    TEXT NOT NULL
-                )
-            """)
+    """)
             
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS alerts (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ticker      TEXT,
-                    message     TEXT,
-                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_read     INTEGER DEFAULT 0
-                )
-            """)
+    """)
             
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS accuracy_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ticker TEXT,
-                    signal TEXT,
-                    signal_date TIMESTAMP,
-                    signal_price REAL,
-                    check_date TIMESTAMP,
-                    check_price REAL,
-                    status TEXT
-                )
-            """)
+    """)
 
-            # ── Backtest tabloları ───────────────────────────────
+            # Backtest tablolari
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS backtest_trades (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id        TEXT    NOT NULL,
-                    ticker        TEXT    NOT NULL,
-                    entry_date    TEXT    NOT NULL,
-                    entry_price   REAL    NOT NULL,
-                    exit_date     TEXT,
-                    exit_price    REAL,
-                    exit_reason   TEXT,
-                    return_pct    REAL,
-                    hold_days     INTEGER,
-                    entry_score   REAL,
-                    stop_loss     REAL,
-                    take_profit   REAL
-                )
-            """)
+    """)
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS backtest_daily (
-                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id   TEXT NOT NULL,
-                    ticker   TEXT NOT NULL,
-                    date     TEXT NOT NULL,
-                    score    REAL,
-                    rsi      REAL,
-                    price    REAL,
-                    UNIQUE(run_id, ticker, date)
-                )
-            """)
+    """)
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS backtest_summary (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id          TEXT    NOT NULL,
-                    run_date        TEXT    NOT NULL,
-                    ticker          TEXT    NOT NULL,
-                    period          TEXT    NOT NULL,
-                    total_trades    INTEGER,
-                    winning_trades  INTEGER,
-                    win_rate        REAL,
-                    avg_return_pct  REAL,
-                    total_return_pct REAL,
-                    max_drawdown_pct REAL,
-                    best_trade_pct  REAL,
-                    worst_trade_pct REAL,
-                    avg_hold_days   REAL,
-                    UNIQUE(run_id, ticker)
-                )
-            """)
+    """)
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS news_backtest_cache (
-                    ticker     TEXT NOT NULL,
-                    date       TEXT NOT NULL,
-                    sentiment  TEXT NOT NULL DEFAULT 'notr',
-                    count      INTEGER NOT NULL DEFAULT 0,
-                    fetched_at TEXT NOT NULL,
-                    PRIMARY KEY (ticker, date)
-                )
-            """)
+    """)
 
-            # ── Performans indexleri (tablo yoksa atla) ────────
+            # Performans indexleri
             for _idx_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_history_ticker ON analysis_history(ticker)",
                 "CREATE INDEX IF NOT EXISTS idx_alerts_ticker ON alerts(ticker)",
@@ -577,7 +424,6 @@ class AnalysisHistoryDB:
             pass
 
     def save(self, score: "BISTScore") -> None:
-        """Analiz sonucunu kaydeder. Varsa günceller, yoksa ekler."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         t   = score.technical
         with sqlite3.connect(self.db_path) as conn:
@@ -588,26 +434,7 @@ class AnalysisHistoryDB:
             count = (existing[0] + 1) if existing else 1
             score_data = _score_to_json(score)
             conn.execute("""
-                INSERT INTO analysis_history
-                  (ticker, last_analyzed, total_score, signal, current_price,
-                   teknik_score, sentiment_score, prim_score, deger_score,
-                   rsi, golden_cross, macd_bullish, analysis_count, full_data)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(ticker) DO UPDATE SET
-                  last_analyzed   = excluded.last_analyzed,
-                  total_score     = excluded.total_score,
-                  signal          = excluded.signal,
-                  current_price   = excluded.current_price,
-                  teknik_score    = excluded.teknik_score,
-                  sentiment_score = excluded.sentiment_score,
-                  prim_score      = excluded.prim_score,
-                  deger_score     = excluded.deger_score,
-                  rsi             = excluded.rsi,
-                  golden_cross    = excluded.golden_cross,
-                  macd_bullish    = excluded.macd_bullish,
-                  analysis_count  = excluded.analysis_count,
-                  full_data       = excluded.full_data
-            """, (
+    """, (
                 score.ticker, now, score.total_score, score.signal,
                 score.stock.current_price,
                 score.teknik_score, score.sentiment_score,
@@ -656,17 +483,12 @@ class AnalysisHistoryDB:
             conn.execute("DELETE FROM analysis_history WHERE ticker = ?", (ticker,))
             conn.commit()
 
-    # ── Portfolio Methods ──
+    # Portfolio Methods
     def add_portfolio(self, ticker: str, buy_price: float, qty: int) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
-                INSERT INTO portfolio (ticker, buy_price, quantity, add_date)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(ticker) DO UPDATE SET
-                  buy_price = excluded.buy_price,
-                  quantity = excluded.quantity
-            """, (ticker.upper(), buy_price, qty, now))
+    """, (ticker.upper(), buy_price, qty, now))
             conn.commit()
             
     def remove_portfolio(self, ticker: str) -> None:
@@ -680,7 +502,7 @@ class AnalysisHistoryDB:
             rows = conn.execute("SELECT * FROM portfolio ORDER BY add_date DESC").fetchall()
         return [dict(r) for r in rows]
 
-    # ── Accuracy / Backtest Methods ──
+    # Accuracy / Backtest Methods
     def evaluate_accuracy(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -738,9 +560,7 @@ class AnalysisHistoryDB:
         except sqlite3.OperationalError:
             return 0.0, 0, 0
 
-    # ══════════════════════════════════════════════════════════
     # SKOR DOĞRULAMA SİSTEMİ (Score Validation)
-    # ══════════════════════════════════════════════════════════
 
     # Takip edilen zaman dilimleri: (gün_sayısı, iş_günü_karşılığı, kolon_prefix)
     VALIDATION_PERIODS = [
@@ -755,43 +575,16 @@ class AnalysisHistoryDB:
         """accuracy_validation tablosunu oluştur + eksik kolonları ekle."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS accuracy_validation (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ticker          TEXT NOT NULL,
-                    signal          TEXT NOT NULL,
-                    score           REAL NOT NULL,
-                    signal_date     TEXT NOT NULL,
-                    signal_price    REAL NOT NULL,
-                    check_1d_date   TEXT,
-                    check_1d_price  REAL,
-                    return_1d_pct   REAL,
-                    result_1d       TEXT DEFAULT 'Bekliyor',
-                    check_3d_date   TEXT,
-                    check_3d_price  REAL,
-                    return_3d_pct   REAL,
-                    result_3d       TEXT DEFAULT 'Bekliyor',
-                    check_7d_date   TEXT,
-                    check_7d_price  REAL,
-                    return_7d_pct   REAL,
-                    result_7d       TEXT DEFAULT 'Bekliyor',
-                    check_14d_date  TEXT,
-                    check_14d_price REAL,
-                    return_14d_pct  REAL,
-                    result_14d      TEXT DEFAULT 'Bekliyor',
-                    check_30d_date  TEXT,
-                    check_30d_price REAL,
-                    return_30d_pct  REAL,
-                    result_30d      TEXT DEFAULT 'Bekliyor',
-                    source          TEXT DEFAULT 'live',
-                    UNIQUE(ticker, signal_date, source)
-                )
-            """)
+    """)
             # Eski tabloya yeni kolonları ekle (varsa atla)
             for prefix in ("1d", "3d", "14d"):
                 for col_suffix in ("date TEXT", "price REAL", "pct REAL"):
-                    col_name = f"check_{prefix}_{col_suffix.split()[0]}"
+                    parts = col_suffix.split()
+                    if len(parts) < 2:
+                        continue
+                    col_name = f"check_{prefix}_{parts[0]}"
                     try:
-                        conn.execute(f"ALTER TABLE accuracy_validation ADD COLUMN {col_name} {col_suffix.split()[1]}")
+                        conn.execute(f"ALTER TABLE accuracy_validation ADD COLUMN {col_name} {parts[1]}")
                     except sqlite3.OperationalError:
                         pass
                 try:
@@ -812,10 +605,7 @@ class AnalysisHistoryDB:
 
     def record_signal(self, ticker: str, signal: str, score: float, price: float, source: str = "live"):
         """
-        Yeni sinyal kaydı ekle (NÖTR hariç).
-        Aynı hisse + aynı gün + aynı kaynak için tekrar kayıt oluşmaz.
-        Aynı gün tekrar analiz edilirse skor/sinyal güncellenir ama eski kayıt korunur.
-        """
+    """
         if signal in ("NOTR", "HATA") or price <= 0:
             return
         self._init_validation_table()
@@ -831,17 +621,11 @@ class AnalysisHistoryDB:
                 if existing:
                     # Aynı gün tekrar analiz → skoru güncelle, eski takip korunsun
                     conn.execute("""
-                        UPDATE accuracy_validation
-                        SET signal = ?, score = ?, signal_price = ?, signal_date = ?
-                        WHERE id = ?
-                    """, (signal, round(score, 1), round(price, 2), now, existing[0]))
+    """, (signal, round(score, 1), round(price, 2), now, existing[0]))
                 else:
                     # Yeni gün → yeni kayıt
                     conn.execute("""
-                        INSERT INTO accuracy_validation
-                          (ticker, signal, score, signal_date, signal_price, source)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (ticker, signal, round(score, 1), now, round(price, 2), source))
+    """, (ticker, signal, round(score, 1), now, round(price, 2), source))
                 conn.commit()
         except Exception as exc:
             log.warning("record_signal hatası: %s", exc)
@@ -855,16 +639,21 @@ class AnalysisHistoryDB:
                 conn.row_factory = sqlite3.Row
                 # Herhangi bir periyotta hâlâ bekleyen kayıtları çek
                 pending = conn.execute("""
-                    SELECT * FROM accuracy_validation
-                    WHERE result_1d = 'Bekliyor' OR result_3d = 'Bekliyor'
-                       OR result_7d = 'Bekliyor' OR result_14d = 'Bekliyor'
-                       OR result_30d = 'Bekliyor'
-                """).fetchall()
+    """).fetchall()
                 if not pending:
                     return
 
                 tickers = list({r["ticker"] for r in pending})
-                symbols = [_yf_symbol(t, "BIST") for t in tickers]
+                # Her ticker için market belirle (source'a bak)
+                _ticker_market = {}
+                for r in pending:
+                    try:
+                        src = r["source"] or "live"
+                    except (KeyError, IndexError):
+                        src = "live"
+                    mkt = "US" if "us" in src.lower() else "BIST"
+                    _ticker_market[r["ticker"]] = mkt
+                symbols = [_yf_symbol(t, _ticker_market.get(t, "BIST")) for t in tickers]
 
                 try:
                     df = yf.download(symbols, period="2mo", group_by="ticker",
@@ -878,7 +667,12 @@ class AnalysisHistoryDB:
                     except Exception:
                         continue
                     days_passed = (now - sig_date).days
-                    sym = _yf_symbol(r["ticker"], "BIST")
+                    try:
+                        _src = r["source"] or "live"
+                    except (KeyError, IndexError):
+                        _src = "live"
+                    _mkt = "US" if "us" in _src.lower() else "BIST"
+                    sym = _yf_symbol(r["ticker"], _mkt)
 
                     try:
                         if len(tickers) > 1:
@@ -906,11 +700,7 @@ class AnalysisHistoryDB:
                             ret_pct = round((current_price - sig_price) / sig_price * 100, 2)
                             result = self._evaluate_signal(r["signal"], ret_pct, cal_days)
                             conn.execute(f"""
-                                UPDATE accuracy_validation
-                                SET check_{prefix}_date = ?, check_{prefix}_price = ?,
-                                    return_{prefix}_pct = ?, result_{prefix} = ?
-                                WHERE id = ?
-                            """, (now.strftime("%Y-%m-%d"), round(current_price, 2),
+    """, (now.strftime("%Y-%m-%d"), round(current_price, 2),
                                   ret_pct, result, r["id"]))
 
                 conn.commit()
@@ -948,11 +738,7 @@ class AnalysisHistoryDB:
     def run_backfill(self, tickers: list, months_back: int = 12,
                      interval_days: int = 7, progress_cb=None) -> int:
         """
-        Toplu geriye dönük skor doğrulama: Her N günde bir skor hesapla,
-        1g/3g/7g/14g/30g sonraki gerçek fiyatla karşılaştır.
-        interval_days: Kaç günde bir test noktası (7=haftalık, 30=aylık)
-        Returns: eklenen sinyal sayısı
-        """
+    """
         self._init_validation_table()
         count = 0
         total_days_back = months_back * 30
@@ -1046,8 +832,8 @@ class AnalysisHistoryDB:
                             """, vals)
                             conn.commit()
                         count += 1
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("Backfill DB insert hatası (%s): %s", ticker, exc)
 
             except Exception as exc:
                 log.warning("Backfill hatası (%s): %s", ticker, exc)
@@ -1055,12 +841,10 @@ class AnalysisHistoryDB:
 
         return count
 
-# Singleton instance — uygulama boyunca tek bir DB bağlantısı yönetici
+
 _history_db = AnalysisHistoryDB()
 
-# ─────────────────────────────────────────────────────────
 # 1. DATA FETCHER
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class StockData:
@@ -1090,7 +874,7 @@ class DataFetcher:
                 data.error = f"{ticker} icin veri bulunamadi. Hisse kodunu kontrol edin."
                 return data
 
-            # ── Kolon normalizasyonu (yfinance versiyon farklılıkları) ───
+            # Kolon normalizasyonu (yfinance versiyon farklılıkları)
             # yfinance 0.2.40+ bazen MultiIndex veya (Price, Ticker) tuple döndürür
             if isinstance(df.columns, pd.MultiIndex):
                 # ("Close", "THYAO.IS") → "Close"
@@ -1138,9 +922,7 @@ class DataFetcher:
         return mapping.get(yahoo_sector, "Genel")
 
 
-# ─────────────────────────────────────────────────────────
 # 2. NEWS / SENTIMENT
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class SentimentResult:
@@ -1201,13 +983,11 @@ class NewsScraper:
         return result
 
 
-# ─────────────────────────────────────────────────────────
 # 3. TECHNICAL ANALYSIS ENGINE
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class TechnicalResult:
-    # ── Mevcut göstergeler ──────────────────────────────
+    # Mevcut göstergeler
     sma50: float         = 0.0
     sma200: float        = 0.0
     rsi: float           = 50.0
@@ -1224,7 +1004,7 @@ class TechnicalResult:
     volume_breakout: bool     = False
     relative_strength: float  = 0.0
 
-    # ── Yeni göstergeler ────────────────────────────────
+    # Yeni göstergeler
     # ADX — Trend gücü (0-100). >25 güçlü trend, <20 yatay piyasa.
     adx: float           = 0.0
     adx_strong: bool     = False   # ADX > 25
@@ -1278,7 +1058,7 @@ class TechnicalEngine:
 
         result.current_price = float(close.iloc[-1])
 
-        # ── SMA ────────────────────────────────────────────────
+        # SMA
         sma50_series = close.rolling(50).mean().dropna()
         result.sma50  = float(sma50_series.iloc[-1]) if not sma50_series.empty else result.current_price
         if len(close) >= 200:
@@ -1293,12 +1073,12 @@ class TechnicalEngine:
         if result.sma200 > 0:
             result.sma_gap_pct = round((result.sma50 - result.sma200) / result.sma200 * 100, 2)
 
-        # ── RSI ────────────────────────────────────────────────
+        # RSI
         result.rsi            = TechnicalEngine._rsi(close, 14)
         result.rsi_oversold   = result.rsi < 30
         result.rsi_overbought = result.rsi > 70
 
-        # ── MACD ───────────────────────────────────────────────
+        # MACD
         try:
             ema12       = close.ewm(span=12, adjust=False).mean()
             ema26       = close.ewm(span=26, adjust=False).mean()
@@ -1312,7 +1092,7 @@ class TechnicalEngine:
         except Exception as exc:
             log.warning("MACD hesaplama hatası: %s", exc)
 
-        # ── Hacim Kırılımı ─────────────────────────────────────
+        # Hacim Kırılımı
         if vol is not None and len(vol) >= 10 and len(close) >= 2:
             try:
                 recent_vol = float(vol.iloc[-1])
@@ -1322,7 +1102,7 @@ class TechnicalEngine:
             except (IndexError, ValueError):
                 pass
 
-        # ── Bollinger Bantları (20, 2σ) ────────────────────────
+        # Bollinger Bantları (20, 2σ)
         if len(close) >= 20:
             try:
                 sma20      = close.rolling(20, min_periods=1).mean()
@@ -1345,7 +1125,7 @@ class TechnicalEngine:
             except Exception:
                 pass
 
-        # ── Stochastic Oscillator (%K 14, %D 3) ───────────────
+        # Stochastic Oscillator (%K 14, %D 3)
         if len(df) >= 14:
             try:
                 low14  = low.rolling(14, min_periods=1).min()
@@ -1362,7 +1142,7 @@ class TechnicalEngine:
             except Exception:
                 pass
 
-        # ── OBV (On-Balance Volume) ────────────────────────────
+        # OBV (On-Balance Volume)
         if vol is not None and len(vol) >= 20:
             obv = (np.sign(close.diff()) * vol).fillna(0).cumsum()
             obv_sma10 = obv.rolling(10).mean()
@@ -1384,7 +1164,7 @@ class TechnicalEngine:
             obv_rose   = obv_now > obv_10ago
             result.obv_divergence = price_fell and obv_rose
 
-        # ── ATR (Average True Range, 14 gün) ──────────────────
+        # ATR (Average True Range, 14 gün)
         if len(df) >= 15:
             try:
                 prev_close = close.shift(1)
@@ -1400,7 +1180,7 @@ class TechnicalEngine:
             except Exception as exc:
                 log.warning("ATR hesaplama hatası: %s | df.columns=%s", exc, list(df.columns))
 
-        # ── 52 Haftalık Pozisyon ───────────────────────────────
+        # 52 Haftalık Pozisyon
         lookback = min(len(close), 252)
         w52_high = float(close.iloc[-lookback:].max())
         w52_low  = float(close.iloc[-lookback:].min())
@@ -1412,7 +1192,7 @@ class TechnicalEngine:
                 (result.current_price - w52_low) / w52_range, 3
             )
 
-        # ── ADX (Average Directional Index, 14 gün) ───────────
+        # ADX (Average Directional Index, 14 gün)
         if len(df) >= 28:
             try:
                 result.adx = TechnicalEngine._adx(high, low, close, 14)
@@ -1425,7 +1205,7 @@ class TechnicalEngine:
         result.score = TechnicalEngine._compute_score(result)
         return result
 
-    # ── Yardımcı Hesaplamalar ──────────────────────────────────
+    # Yardımcı Hesaplamalar
 
     @staticmethod
     def _rsi(series: pd.Series, period: int = 14) -> float:
@@ -1438,10 +1218,7 @@ class TechnicalEngine:
     @staticmethod
     def _adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> float:
         """
-        Average Directional Index hesaplar (trend gücü 0-100).
-        Standart Wilder yöntemi: orijinal DM+ ve DM- değerleri karşılaştırılır,
-        ardından bağımsız olarak maskelenir.
-        """
+    """
         try:
             prev_high  = high.shift(1)
             prev_low   = low.shift(1)
@@ -1485,25 +1262,10 @@ class TechnicalEngine:
     @staticmethod
     def _compute_score(r: TechnicalResult) -> float:
         """
-        Kademeli ve cezalı skor sistemi.
-
-        Toplam bütçe: 100 puan
-        ┌─────────────────────────────────┬──────────┐
-        │ Grup                            │ Max Puan │
-        ├─────────────────────────────────┼──────────┤
-        │ Trend (SMA + Golden Cross)      │   20     │
-        │ Momentum (RSI + Stochastic)     │   20     │
-        │ MACD                            │   15     │
-        │ Hacim (Volume + OBV)            │   15     │
-        │ Bollinger                       │   10     │
-        │ 52 Haftalık Pozisyon            │   10     │
-        │ ADX Filtresi (çarpan)           │  ×0.7-1  │
-        │ Cezalar (RSI/Stoch aşırı alım)  │  −15'e k │
-        └─────────────────────────────────┴──────────┘
-        """
+    """
         score = 0.0
 
-        # ── 1. TREND GRUBU (max 20) ────────────────────────────
+        # 1. TREND GRUBU (max 20)
         # SMA gap oranına göre kademeli golden cross puanı
         # Çok yakın golden cross (gap < %1) → zayıf, olası geri kırılma riski
         if r.golden_cross:
@@ -1534,7 +1296,7 @@ class TechnicalEngine:
         else:
             score -= 4
 
-        # ── 2. MOMENTUM GRUBU — RSI + Stochastic (max 20) ─────
+        # 2. MOMENTUM GRUBU — RSI + Stochastic (max 20)
         rsi = r.rsi
         if rsi < 30:
             score += 20              # Aşırı satım → en iyi alım fırsatı
@@ -1561,7 +1323,7 @@ class TechnicalEngine:
         elif r.stoch_overbought:
             score -= 2
 
-        # ── 3. MACD GRUBU (max 15) ────────────────────────────
+        # 3. MACD GRUBU (max 15)
         # Histogram büyüklüğü momentum gücünü gösterir
         if r.macd_histogram != 0 and r.current_price > 0:
             hist_pct = abs(r.macd_histogram) / r.current_price * 100
@@ -1582,7 +1344,7 @@ class TechnicalEngine:
         else:
             score += (7 if r.macd_bullish else -3)
 
-        # ── 4. HACİM GRUBU — Volume + OBV (max 15) ────────────
+        # 4. HACİM GRUBU — Volume + OBV (max 15)
         if r.volume_breakout:
             score += 10              # Hacimli kırılım — güçlü onay
 
@@ -1594,7 +1356,7 @@ class TechnicalEngine:
         if r.obv_divergence:
             score += 5               # Gizli birikim — güçlü erken sinyal
 
-        # ── 5. BOLLINGER GRUBU (max 10) ───────────────────────
+        # 5. BOLLINGER GRUBU (max 10)
         pos = r.bb_position          # 0=alt bant, 1=üst bant
         if pos <= 0.15:
             score += 10              # Alt bantın çok altında → aşırı satım
@@ -1612,7 +1374,7 @@ class TechnicalEngine:
         if r.bb_squeeze:
             score += 3               # Bant daralması → yakında büyük hareket
 
-        # ── 6. 52 HAFTALIK POZİSYON (max 10) ─────────────────
+        # 6. 52 HAFTALIK POZİSYON (max 10)
         w = r.week52_position        # 0=dip, 1=zirve
         if w <= 0.20:
             score += 10              # Yıllık dibe yakın → potansiyel yüksek
@@ -1625,7 +1387,7 @@ class TechnicalEngine:
         else:
             score -= 6               # Yıllık zirveye yakın → riskli
 
-        # ── 7. ADX FİLTRESİ (çarpan) ─────────────────────────
+        # 7. ADX FİLTRESİ (çarpan)
         # Trend yoksa (yatay piyasa) trend sinyallerinin güvenilirliği düşer.
         # ADX < 20: skorun trend kısmını %70'e indir (trend sinyalleri anlamsız).
         # ADX > 25: trend güçlü, skor olduğu gibi kalır.
@@ -1645,9 +1407,7 @@ class TechnicalEngine:
         return round(min(100.0, max(0.0, score)), 1)
 
 
-# ─────────────────────────────────────────────────────────
 # 4. VALUATION ENGINE
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class ValuationResult:
@@ -1710,9 +1470,7 @@ class ValuationEngine:
         return result
 
 
-# ─────────────────────────────────────────────────────────
 # 5. MAIN SCORING FUNCTION  ◄──── CORE MODULE ────────────
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class BISTScore:
@@ -1761,17 +1519,17 @@ def compute_bist_score(
     """
     result = BISTScore(ticker=ticker.upper())
 
-    # STEP 1: Fetch Data
+    # Fetch Data
     stock        = DataFetcher.fetch(ticker, period=period, market=market)
     result.stock = stock
     if stock.error:
         result.signal = "HATA"
         return result
 
-    # STEP 2: Technical Analysis
+    # Technical Analysis
     technical           = TechnicalEngine.compute(stock.df)
 
-    # STEP 2.5: Relative Strength vs benchmark index (cached)
+    # .5: Relative Strength vs benchmark index (cached)
     _bench_idx = _default_index(market)
     try:
         if len(stock.df) >= 14:
@@ -1798,7 +1556,7 @@ def compute_bist_score(
     result.technical    = technical
     result.teknik_score = technical.score
 
-    # STEP 3: News Sentiment — real data only, no fake fallbacks
+    # News Sentiment — real data only, no fake fallbacks
     if NEWS_ENGINE_AVAILABLE:
         news_result = analyze_news(ticker, days=30, language=language)
         sentiment   = SentimentResult(
@@ -1831,7 +1589,7 @@ def compute_bist_score(
     result.sentiment       = sentiment
     result.sentiment_score = sentiment.score
 
-    # STEP 4: Valuation & Premium
+    # Valuation & Premium
     _auto_target = analyst_target
     if FAZ2_AVAILABLE and _auto_target is None:
         _cache    = DataCache()
@@ -1848,7 +1606,7 @@ def compute_bist_score(
     result.prim_score  = valuation.prim_score
     result.deger_score = valuation.deger_score
 
-    # STEP 5: Dinamik Ağırlıklı Toplam Skor
+    # Dinamik Ağırlıklı Toplam Skor
     # Problem: Hedef fiyat yoksa prim_score=50 (nötr) → 43-56 aralığına yığılma.
     # Çözüm: Veri yoksa o bileşenin ağırlığını mevcut bileşenlere orantılı dağıt.
     has_target    = valuation.target_price is not None
@@ -1880,11 +1638,11 @@ def compute_bist_score(
             + result.sentiment_score * w_sentiment
             + result.prim_score      * w_prim
             + result.deger_score     * w_deger
-        ) / total_w,
+        ) / max(total_w, 1),
         1,
     )
 
-    # STEP 6: Signal
+    # Signal
     result.signal, result.signal_color = _score_to_signal(result.total_score)
     return result
 
@@ -1901,9 +1659,7 @@ def _score_to_signal(score: float) -> tuple:
     else:             return "GUCLU SAT",  "#ef4444"   # Güçlü Sat < 30
 
 
-# ─────────────────────────────────────────────────────────
 # 6. RISK ENGINE
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class RiskLevels:
@@ -1919,25 +1675,6 @@ class RiskLevels:
 
 class RiskEngine:
     """
-    ATR tabanlı, bağlama duyarlı risk hesaplama motoru.
-
-    Metodoloji
-    ──────────
-    Stop-loss: Sabit yüzde yerine ATR kullanılır.
-      - ATR (Average True Range) hissenin gerçek oynaklığını ölçer.
-      - Düşük ATR'li hisse (örn. temettü hissesi) → dar stop.
-      - Yüksek ATR'li hisse (örn. küçük cap) → geniş stop.
-      - Wilder çarpanları: Tight 1.5×, Normal 2.5×, Wide 3.5×
-
-    Take-profit: Asimetrik, fırsat bilincine dayalı.
-      - Target 1 → ATR tabanlı (2.5× risk kadar ödül, minimum R/R = 1.5)
-      - Target 2 → Analist hedefi > 52 haftalık yüksek > ATR tabanlı fallback
-      - RSI > 70 ise hedefler yaklaştırılır (zaten pahalı)
-
-    Wide Stop Mantığı (düzeltildi):
-      - SMA200'ün %2 altı hesaplanır.
-      - Bu seviye mevcut fiyatın %15 altından büyükse → %15 kullan (gerçekçilik)
-      - Küçükse → SMA200 bazlı kullan (teknik destek)
     """
     @staticmethod
     def compute(score: BISTScore) -> RiskLevels:
@@ -1949,11 +1686,11 @@ class RiskEngine:
         t   = score.technical
         atr = t.atr  # ATR hesaplanmışsa gerçek değer, yoksa 0.0
 
-        # ── ATR yoksa (veri az, yeni hisse vb.) yüzde tabanlı fallback ──
+        # ATR yoksa (veri az, yeni hisse vb.) yüzde tabanlı fallback
         if atr <= 0 or price <= 0:
             atr = price * 0.02  # %2'yi 1 günlük ATR gibi say (muhafazakâr)
 
-        # ── Stop-Loss seviyeleri (ATR çarpanı ile) ──────────────────────
+        # Stop-Loss seviyeleri (ATR çarpanı ile)
         # Tight  : 1.5× ATR — scalp / kısa vadeli pozisyonlar
         # Normal : 2.5× ATR — swing trade (1-4 hafta)
         # Wide   : SMA200 tabanlı — pozisyon trade / uzun vade
@@ -1970,7 +1707,7 @@ class RiskEngine:
         else:
             r.stop_loss_wide = round(max(sma200_based, floor_15pct), 2)
 
-        # ── Take-profit hedefleri ────────────────────────────────────────
+        # Take-profit hedefleri
         # Target 1: minimum 1.5:1 R/R oranını garanti et
         #   risk = price - stop_normal
         #   reward = risk * 2.0  →  hedef = price + 2.0 * risk
@@ -2002,14 +1739,14 @@ class RiskEngine:
         else:
             r.take_profit_2 = round(price + 3.5 * risk_amount if risk_amount > 0 else price * 1.20, 2)
 
-        # ── Risk / Reward Oranı ─────────────────────────────────────────
+        # Risk / Reward Oranı
         # Normal stop ile Target 1 arasındaki oran
         # Profesyonel eşik: R/R > 2 çok iyi, 1.5-2 kabul edilebilir, < 1.5 kötü
         stop_dist   = price - r.stop_loss_normal
         reward_dist = r.take_profit_1 - price
         r.risk_reward_ratio = round(reward_dist / stop_dist, 2) if stop_dist > 0 else 0.0
 
-        # ── Uyarı Koşulları ─────────────────────────────────────────────
+        # Uyarı Koşulları
         warnings = []
         if rsi > 70:
             warnings.append(
@@ -2039,17 +1776,13 @@ class RiskEngine:
         return r
 
 
-# ─────────────────────────────────────────────────────────
 # 7. AI REPORTER (REMOVED)
-# ─────────────────────────────────────────────────────────
 # AI Summary was removed to avoid API costs as per user request.
 
 
-# ─────────────────────────────────────────────────────────
 # 7B. BACKTEST ENGINE
-# ─────────────────────────────────────────────────────────
 
-# ── ABD Piyasası Popüler Hisseler ──────────────────────
+# ABD Piyasası Popüler Hisseler
 US_POPULAR_TICKERS = [
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "BRK-B",
     "JPM", "V", "UNH", "XOM", "JNJ", "WMT", "MA", "PG", "HD", "COST",
@@ -2184,9 +1917,7 @@ BIST_SCAN_UNIVERSE = [
 # Tekrar edenleri temizle
 BIST_SCAN_UNIVERSE = list(dict.fromkeys(BIST_SCAN_UNIVERSE))
 
-# ─────────────────────────────────────────────────────────
 # 7A. PORTFOLIO SCANNER & SMART PORTFOLIO BUILDER
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class StockScanResult:
@@ -2229,34 +1960,7 @@ class PortfolioScanner:
         with sqlite3.connect(DB_PATH) as conn:
             # NOT: Artık DROP TABLE yapmıyoruz — cache'i koruyoruz
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS portfolio_scan (
-                    ticker          TEXT PRIMARY KEY,
-                    scan_date       TEXT NOT NULL,
-                    score           REAL,
-                    rsi             REAL,
-                    adx             REAL,
-                    atr_pct         REAL,
-                    bb_position     REAL,
-                    week52_pos      REAL,
-                    obv_trend       TEXT,
-                    golden_cross    INTEGER,
-                    price_above_sma200 INTEGER,
-                    current_price   REAL,
-                    volume_ok       INTEGER,
-                    data_rows       INTEGER,
-                    error           TEXT,
-                    momentum_1m     REAL DEFAULT 0,
-                    momentum_3m     REAL DEFAULT 0,
-                    price_above_sma50 INTEGER DEFAULT 0,
-                    macd_bullish    INTEGER DEFAULT 0,
-                    adx_strong      INTEGER DEFAULT 0,
-                    volume_ratio    REAL DEFAULT 1,
-                    sma_gap_pct     REAL DEFAULT 0,
-                    bb_squeeze      INTEGER DEFAULT 0,
-                    stoch_oversold  INTEGER DEFAULT 0,
-                    comp_score      REAL DEFAULT 0
-                )
-            """)
+    """)
             conn.commit()
 
     @staticmethod
@@ -2415,15 +2119,7 @@ class PortfolioScanner:
         with sqlite3.connect(DB_PATH) as conn:
             for r in results:
                 conn.execute("""
-                    INSERT OR REPLACE INTO portfolio_scan
-                      (ticker, scan_date, score, rsi, adx, atr_pct, bb_position,
-                       week52_pos, obv_trend, golden_cross, price_above_sma200,
-                       current_price, volume_ok, data_rows, error,
-                       momentum_1m, momentum_3m, price_above_sma50, macd_bullish,
-                       adx_strong, volume_ratio, sma_gap_pct, bb_squeeze,
-                       stoch_oversold, comp_score)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (
+    """, (
                     r.ticker, now, r.score, r.rsi, r.adx, r.atr_pct,
                     r.bb_position, r.week52_pos, r.obv_trend,
                     int(r.golden_cross), int(r.price_above_sma200),
@@ -2440,15 +2136,7 @@ class PortfolioScanner:
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 rows = conn.execute("""
-                    SELECT ticker, scan_date, score, rsi, adx, atr_pct, bb_position,
-                           week52_pos, obv_trend, golden_cross, price_above_sma200,
-                           current_price, volume_ok, data_rows, error,
-                           momentum_1m, momentum_3m, price_above_sma50, macd_bullish,
-                           adx_strong, volume_ratio, sma_gap_pct, bb_squeeze,
-                           stoch_oversold, comp_score
-                    FROM portfolio_scan
-                    ORDER BY score DESC
-                """).fetchall()
+    """).fetchall()
             if not rows:
                 return []
             scan_date_str = rows[0][1]
@@ -2482,10 +2170,6 @@ class PortfolioScanner:
 
 class SmartPortfolioBuilder:
     """
-    PortfolioScanner sonuçlarından iki FARKLI portföy oluşturur:
-    - Agresif: Aktif trend, momentum, kırılım — ADX+SMA50+RSI koşulları
-    - Defansif: SMA200 destekli stabil hisseler — ATR düşük, kalıcı trend
-    İki portföy birbirinden tamamen ayrıdır (aynı hisse ikisinde olamaz).
     """
 
     @staticmethod
@@ -2506,16 +2190,7 @@ class SmartPortfolioBuilder:
     @staticmethod
     def _build_aggressive(stocks: list) -> list:
         """
-        Agresif / Momentum portföyü — güçlendirilmiş kriterler:
-        ZORUNLU:
-          1. score >= 43          (yeterince seçici ama ulaşılabilir)
-          2. ADX > 20             (gerçek trend var)
-          3. Fiyat SMA200 üstünde (uzun vade kırık — kesin eleme)
-          4. Fiyat SMA50 üstünde VEYA 1-ay momentum pozitif (toparlanıyor)
-          5. RSI 35-72            (geniş momentum bölgesi)
-          6. momentum_3m >= -5    (sert düşüş yok)
-        SEKTÖR: aynı sektörden max 2 hisse
-        """
+    """
         candidates = []
         for r in stocks:
             if r.score < 43:              continue   # Biraz daha seçici ama ulaşılabilir
@@ -2583,15 +2258,7 @@ class SmartPortfolioBuilder:
     @staticmethod
     def _build_defensive(stocks: list) -> list:
         """
-        Defansif / Kalite portföyü — güçlendirilmiş kriterler:
-        ZORUNLU:
-          1. score >= 38             (daha seçici — eski: 36)
-          2. Fiyat SMA200 üstünde    (uzun vadeli trend sağlam)
-          3. ATR% <= 4.5%            (makul volatilite)
-          4. RSI 30-62               (ne çökmüş ne aşırı alım)
-          5. momentum_3m >= -8       (son 3 ayda çok sert düşmüş değil — YENİ)
-        SEKTÖR: aynı sektörden max 2 hisse
-        """
+    """
         candidates = []
         for r in stocks:
             if r.score < 38:               continue
@@ -2649,78 +2316,29 @@ class SmartPortfolioBuilder:
         return selected
 
 
-# ─────────────────────────────────────────────────────────
 # 7B. STRATEJI ZAMAN MAKİNESİ (TIME MACHINE ENGINE)
-# ─────────────────────────────────────────────────────────
 
 class TimeMachineEngine:
     """
-    Strateji Zaman Makinesi — 3 yıl önceki teknik verilere bugünkü strateji
-    uygulanır, seçilen hisselerin gerçek performansı ölçülür.
-
-    Amaç:
-      1. PIT (Point-in-Time) analizi: 3 yıl önceki verilerle hisse seçimi
-      2. Gerçek performans ölçümü: O günden bugüne getiri hesabı
-      3. Bugünkü canlı portföy: Güncel verilerle hisse seçimi
-      4. Günlük takip: Kaydedilen portföylerin günlük değişimleri
-      5. Rapor: Strateji tutarlılık analizi (Türkçe)
     """
 
     TABLE_RUNS   = "tm_runs"
     TABLE_PICKS  = "tm_picks"
     TABLE_DAILY  = "tm_daily"
 
-    # ── DB Tabloları ──────────────────────────────────────────
+    # DB Tabloları
     @staticmethod
     def _init_tables():
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {TimeMachineEngine.TABLE_RUNS} (
-                    run_id       TEXT PRIMARY KEY,
-                    run_date     TEXT NOT NULL,
-                    pit_date     TEXT NOT NULL,
-                    market       TEXT NOT NULL DEFAULT 'BIST',
-                    portfolio    TEXT NOT NULL DEFAULT 'aggressive',
-                    years_back   INTEGER DEFAULT 3,
-                    stock_count  INTEGER DEFAULT 0,
-                    avg_score    REAL DEFAULT 0,
-                    portfolio_return_pct REAL DEFAULT 0,
-                    benchmark_return_pct REAL DEFAULT 0,
-                    alpha_pct    REAL DEFAULT 0,
-                    back_test_grade REAL DEFAULT 0
-                )
-            """)
+    """)
             conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {TimeMachineEngine.TABLE_PICKS} (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id       TEXT NOT NULL,
-                    ticker       TEXT NOT NULL,
-                    pit_score    REAL DEFAULT 0,
-                    pit_price    REAL DEFAULT 0,
-                    current_price REAL DEFAULT 0,
-                    return_pct   REAL DEFAULT 0,
-                    pit_rsi      REAL DEFAULT 50,
-                    pit_adx      REAL DEFAULT 0,
-                    pit_signal   TEXT DEFAULT 'NOTR',
-                    portfolio    TEXT DEFAULT 'aggressive',
-                    UNIQUE(run_id, ticker)
-                )
-            """)
+    """)
             conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {TimeMachineEngine.TABLE_DAILY} (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    snapshot_date TEXT NOT NULL,
-                    run_id       TEXT NOT NULL,
-                    ticker       TEXT NOT NULL,
-                    price        REAL DEFAULT 0,
-                    daily_change_pct REAL DEFAULT 0,
-                    cumulative_return_pct REAL DEFAULT 0,
-                    UNIQUE(snapshot_date, run_id, ticker)
-                )
-            """)
+    """)
             conn.commit()
 
-    # ── PIT Teknik Analiz (3 yıl önceki verilerle) ─────────────
+    # PIT Teknik Analiz (3 yıl önceki verilerle)
     @staticmethod
     def _compute_pit_scores(tickers: list, pit_date: datetime,
                             market: str = "BIST") -> list:
@@ -2833,7 +2451,7 @@ class TimeMachineEngine:
 
         return results
 
-    # ── Portföy Filtresi ──────────────────────────────────────
+    # Portföy Filtresi
     # Portföy stili tanımları
     PORTFOLIO_STYLES = {
         "aggressive": {
@@ -2933,7 +2551,7 @@ class TimeMachineEngine:
         selected.sort(key=lambda x: x.get("comp_score", 0), reverse=True)
         return selected[:10]  # Max 10 hisse
 
-    # ── Gerçek Performans Ölçümü ────────────────────────────
+    # Gerçek Performans Ölçümü
     @staticmethod
     def _measure_performance(picks: list, pit_date: datetime,
                              market: str = "BIST") -> list:
@@ -2988,7 +2606,7 @@ class TimeMachineEngine:
 
         return picks
 
-    # ── Benchmark Performansı ───────────────────────────────
+    # Benchmark Performansı
     @staticmethod
     def _benchmark_return(pit_date: datetime, market: str = "BIST") -> float:
         """PIT tarihinden bugüne endeks getirisi."""
@@ -3010,16 +2628,11 @@ class TimeMachineEngine:
         except Exception:
             return 0.0
 
-    # ── Strateji Notu Hesaplama (0-100) ─────────────────────
+    # Strateji Notu Hesaplama (0-100)
     @staticmethod
     def _compute_grade(picks: list, bench_ret: float) -> float:
         """
-        PIT portföyünün başarısını 0-100 arası puanlar.
-        Kriterler:
-          - Portföy getirisi vs benchmark (alfa) → max 40 puan
-          - Pozitif getiri oranı (kaç hisse kazandı) → max 30 puan
-          - Ortalama getiri büyüklüğü → max 30 puan
-        """
+    """
         if not picks:
             return 0.0
 
@@ -3040,21 +2653,13 @@ class TimeMachineEngine:
         grade = round(alpha_score + wr_score + ret_score, 1)
         return min(100, max(0, grade))
 
-    # ── Tam PIT Analizi Çalıştır ────────────────────────────
+    # Tam PIT Analizi Çalıştır
     @staticmethod
     def run_full_pit(years_back: int = 3, market: str = "BIST",
                      style: str = "aggressive",
                      progress_cb=None) -> dict:
         """
-        Tam Zaman Makinesi analizi:
-        1. pit_date hesapla (years_back yıl önce)
-        2. PIT teknik skorlar hesapla
-        3. Portföy filtresi uygula
-        4. Gerçek performans ölç
-        5. Benchmark karşılaştır
-        6. Strateji notu hesapla
-        7. DB'ye kaydet
-        """
+    """
         TimeMachineEngine._init_tables()
 
         pit_date = datetime.now() - timedelta(days=years_back * 365)
@@ -3099,12 +2704,7 @@ class TimeMachineEngine:
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute(f"""
-                    INSERT OR REPLACE INTO {TimeMachineEngine.TABLE_RUNS}
-                    (run_id, run_date, pit_date, market, portfolio, years_back,
-                     stock_count, avg_score, portfolio_return_pct,
-                     benchmark_return_pct, alpha_pct, back_test_grade)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (
+    """, (
                     run_id, run_date, pit_date.strftime("%Y-%m-%d"),
                     market, style, years_back, len(picks),
                     round(sum(p["score"] for p in picks) / max(1, len(picks)), 1),
@@ -3113,11 +2713,7 @@ class TimeMachineEngine:
 
                 for p in picks:
                     conn.execute(f"""
-                        INSERT OR REPLACE INTO {TimeMachineEngine.TABLE_PICKS}
-                        (run_id, ticker, pit_score, pit_price, current_price,
-                         return_pct, pit_rsi, pit_adx, pit_signal, portfolio)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)
-                    """, (
+    """, (
                         run_id, p["ticker"], p["score"], p["price"],
                         p.get("current_price", 0), p.get("return_pct", 0),
                         p["rsi"], p["adx"], p["signal"], style,
@@ -3141,7 +2737,7 @@ class TimeMachineEngine:
             "market":      market,
         }
 
-    # ── Günlük Snapshot Kaydet ──────────────────────────────
+    # Günlük Snapshot Kaydet
     @staticmethod
     def save_daily_snapshot(run_id: str, market: str = "BIST"):
         """Aktif portföy hisselerinin günlük fiyatını kaydeder."""
@@ -3188,10 +2784,7 @@ class TimeMachineEngine:
                         cum_ret = ((price / pit_prices[ticker]) - 1) * 100 if pit_prices[ticker] > 0 else 0
 
                         conn.execute(f"""
-                            INSERT OR REPLACE INTO {TimeMachineEngine.TABLE_DAILY}
-                            (snapshot_date, run_id, ticker, price, daily_change_pct, cumulative_return_pct)
-                            VALUES (?,?,?,?,?,?)
-                        """, (today, run_id, ticker, round(price, 2),
+    """, (today, run_id, ticker, round(price, 2),
                               round(daily_chg, 2), round(cum_ret, 1)))
                     except Exception:
                         continue
@@ -3199,7 +2792,7 @@ class TimeMachineEngine:
         except Exception as exc:
             log.warning("TimeMachine daily snapshot hatası: %s", exc)
 
-    # ── Günlük Verileri Yükle ────────────────────────────────
+    # Günlük Verileri Yükle
     @staticmethod
     def load_daily_data(run_id: str) -> pd.DataFrame:
         """Kaydedilen günlük snapshot verisini döner."""
@@ -3213,7 +2806,7 @@ class TimeMachineEngine:
         except Exception:
             return pd.DataFrame()
 
-    # ── Önceki Çalışmaları Yükle ────────────────────────────
+    # Önceki Çalışmaları Yükle
     @staticmethod
     def load_previous_runs(market: str = "BIST") -> list:
         """Daha önceki TimeMachine çalışmalarını listeler."""
@@ -3231,7 +2824,7 @@ class TimeMachineEngine:
         except Exception:
             return []
 
-    # ── Çalışmanın Hisselerini Yükle ────────────────────────
+    # Çalışmanın Hisselerini Yükle
     @staticmethod
     def load_picks(run_id: str) -> list:
         """Belirli bir run_id'nin hisse seçimlerini döner."""
@@ -3248,7 +2841,7 @@ class TimeMachineEngine:
         except Exception:
             return []
 
-    # ── Rapor Üretici ───────────────────────────────────────
+    # Rapor Üretici
     @staticmethod
     def generate_report(result: dict) -> dict:
         """
@@ -3353,10 +2946,6 @@ class TimeMachineEngine:
 
 def _get_news_sentiment_cached(ticker: str, date_str: str, lookback_days: int = 7) -> tuple:
     """
-    Belirtilen hisse + tarih için sentiment döner.
-    SQLite news_backtest_cache'de varsa oradan alır (hızlı).
-    Yoksa news_engine.analyze_news_for_date() ile çeker ve cache'e kaydeder.
-    Returns: (sentiment: 'olumlu'|'olumsuz'|'notr', count: int)
     """
     _db = DB_PATH
     # Cache lookup
@@ -3397,30 +2986,9 @@ def _get_news_sentiment_cached(ticker: str, date_str: str, lookback_days: int = 
 
 class BacktestEngine:
     """
-    Tarihsel sinyal simülatörü — geriye dönük AL/SAT test eder.
-
-    Metodoloji
-    ──────────
-    • No-lookahead (ileri bakış yok): Tüm göstergeler pandas rolling ile
-      hesaplanır; rolling() fonksiyonları doğası gereği yalnızca geçmiş veriyi
-      kullanır. Gelecek verisi hiçbir şekilde sızamaz.
-    • Vektörize hesaplama: Her gün için ayrı ayrı TechnicalEngine çağırmak
-      yerine tüm dönem için tek seferde hesaplanır → O(n) hız, hata yok.
-    • Sinyal eşiği: skor >= BUY_THRESHOLD → AL, <= SELL_THRESHOLD → SAT
-    • Giriş: AL sinyali günün kapanışında oluşur → ertesi günün AÇILIŞ (Open)
-      fiyatından işleme girilir (lookahead bias yok)
-    • Çıkış koşulları (öncelik sırasıyla — gün içi High/Low ile kontrol):
-        1. Gap-down: open <= stop_loss → stop fiyatı yerine o günkü açılıştan çık
-        2. Stop-loss intraday: low <= stop_loss → tam stop fiyatından çık
-        3. Gap-up: open >= take_profit → take-profit yerine o günkü açılıştan çık
-        4. Take-profit intraday: high >= take_profit → tam TP fiyatından çık
-        5. SAT sinyali: skor <= SELL_THRESHOLD → kapanıştan çık
-        6. Max süre  : MAX_HOLD_DAYS gün sonra kapanıştan çık
-    • Komisyon: her alım/satım için %0.2 (COMMISSION); toplam round-trip %0.4
-    • Ek kayıt: Her gün için günlük skor serisi de kaydedilir (grafik için)
     """
 
-    # ── Varsayılan parametreler (Universal mod) ──────────
+    # Varsayılan parametreler (Universal mod)
     BUY_THRESHOLD  = 48
     SELL_THRESHOLD = 22
     MAX_HOLD_DAYS  = 60
@@ -3435,7 +3003,7 @@ class BacktestEngine:
     SCALE_OUT_RATIO = 0.5         # Kademeli kâr: pozisyonun %50'si partial TP'de kapatılır
     SHORT_THRESHOLD = 18          # Açığa satış eşiği (skor <= bu değer ve düşen trend)
 
-    # ── Strateji modları ────────────────────────────────
+    # Strateji modları
     MODES = {
         "swing": {
             # Kısa vade: hızlı giriş-çıkış, dar stop, düşük hedef
@@ -3499,7 +3067,7 @@ class BacktestEngine:
         },
     }
 
-    # ── Vektörize Skor Hesaplama ──────────────────────────────────────────────
+    # Vektörize Skor Hesaplama
     @staticmethod
     def _vectorized_scores(df: pd.DataFrame) -> pd.Series:
         """
@@ -3511,7 +3079,7 @@ class BacktestEngine:
         low   = df.get("Low",    close)
         vol   = df.get("Volume", pd.Series(0, index=df.index))
 
-        # ── SMA & Golden Cross ──────────────────────────────
+        # SMA & Golden Cross
         sma50  = close.rolling(50,  min_periods=20).mean()
         sma200 = close.rolling(200, min_periods=50).mean()
         sma_gap = (sma50 - sma200) / sma200.replace(0, np.nan) * 100
@@ -3530,7 +3098,7 @@ class BacktestEngine:
         pa50_score  = pd.Series(np.where(close > sma50,  12.0, -5.0), index=df.index)
         pa200_score = pd.Series(np.where(close > sma200, 12.0, -5.0), index=df.index)
 
-        # ── RSI ────────────────────────────────────────────
+        # RSI
         delta = close.diff()
         gain  = delta.clip(lower=0).rolling(14, min_periods=14).mean()
         loss  = (-delta.clip(upper=0)).rolling(14, min_periods=14).mean()
@@ -3541,7 +3109,7 @@ class BacktestEngine:
         rsi_rising = rsi_delta.fillna(0) > 2  # en az 2 puan artmış
 
         rsi_score = pd.Series(0.0, index=df.index)
-        # ── Mean-reversion odaklı: dipten dönüşe büyük prim ──
+        # Mean-reversion odaklı: dipten dönüşe büyük prim
         # RSI < 30 ve yükseliyorsa → güçlü dönüş sinyali (max puan)
         rsi_score[(rsi < 30) & rsi_rising]            = 28
         rsi_score[(rsi < 30) & ~rsi_rising]           = 18   # dip ama henüz dönüş yok
@@ -3553,7 +3121,7 @@ class BacktestEngine:
         rsi_score[(rsi >= 70) & (rsi < 80)]           = -10
         rsi_score[rsi >= 80]                          = -18
 
-        # ── MACD ───────────────────────────────────────────
+        # MACD
         ema12  = close.ewm(span=12, adjust=False).mean()
         ema26  = close.ewm(span=26, adjust=False).mean()
         macd_h = (ema12 - ema26) - (ema12 - ema26).ewm(span=9, adjust=False).mean()
@@ -3567,7 +3135,7 @@ class BacktestEngine:
         macd_score[(macd_h <= 0) & (hist_pct >= 0.3) & (hist_pct < 1.0)] = -5
         macd_score[(macd_h <= 0) & (hist_pct < 0.3)]  =  -2
 
-        # ── Bollinger ──────────────────────────────────────
+        # Bollinger
         sma20 = close.rolling(20, min_periods=10).mean()
         std20 = close.rolling(20, min_periods=10).std()
         bb_pos = (close - (sma20 - 2*std20)) / (4 * std20).replace(0, np.nan)
@@ -3580,7 +3148,7 @@ class BacktestEngine:
         bb_score[(bb_pos > 0.70) & (bb_pos <= 0.85)]  =  -4
         bb_score[bb_pos > 0.85]                        =  -8
 
-        # ── 52 Haftalık Pozisyon ───────────────────────────
+        # 52 Haftalık Pozisyon
         w52_hi  = close.rolling(252, min_periods=50).max()
         w52_lo  = close.rolling(252, min_periods=50).min()
         w52_pos = (close - w52_lo) / (w52_hi - w52_lo).replace(0, np.nan)
@@ -3592,19 +3160,19 @@ class BacktestEngine:
         w52_score[(w52_pos > 0.60) & (w52_pos <= 0.80)]    =  -2
         w52_score[w52_pos > 0.80]                           =  -6
 
-        # ── Hacim ──────────────────────────────────────────
+        # Hacim
         avg_vol10 = vol.rolling(10, min_periods=3).mean()
         vol_score = pd.Series(0.0, index=df.index)
         vol_score[(vol > avg_vol10 * 1.5) & (close > close.shift(1))] = 10
 
-        # ── ATR (stop/hedef hesabı için) ─────────────────────
+        # ATR (stop/hedef hesabı için)
         prev_c = close.shift(1)
         tr     = pd.concat([high - low,
                              (high - prev_c).abs(),
                              (low  - prev_c).abs()], axis=1).max(axis=1)
         atr    = tr.rolling(14, min_periods=5).mean()
 
-        # ── ADX (yatay piyasa filtresi) ──────────────────────
+        # ADX (yatay piyasa filtresi)
         # Wilder's ADX hesabı (vectorized)
         plus_dm  = (high - high.shift(1)).clip(lower=0)
         minus_dm = (low.shift(1) - low).clip(lower=0)
@@ -3641,7 +3209,7 @@ class BacktestEngine:
         scores = total.clip(0, 100).fillna(50)
         return scores, atr, rsi
 
-    # ── Tek Hisse Backtest ────────────────────────────────────────────────────
+    # Tek Hisse Backtest
     @staticmethod
     def _run_single(ticker: str, period: str, run_id: str,
                     mode: str = "universal", use_news: bool = True,
@@ -3650,14 +3218,8 @@ class BacktestEngine:
                     optimized_params: dict = None,
                     market: str = "BIST"):
         """
-        Gelişmiş Backtest Simülasyonu:
-          - Dinamik pozisyon boyutlandırma (ATR-bazlı risk yönetimi)
-          - Kademeli kâr alma (scaling out: %50 partial TP)
-          - Çift yönlü işlem (Long + Short)
-          - Sektörel endeks filtresi
-          - Walk-forward optimize edilmiş parametreler
-        """
-        # ── Mod / Optimize parametrelerini çöz ────────────────
+    """
+        # Mod / Optimize parametrelerini çöz
         if optimized_params:
             BUY_TH    = optimized_params.get("BUY_THRESHOLD", BacktestEngine.BUY_THRESHOLD)
             SELL_TH   = optimized_params.get("SELL_THRESHOLD", BacktestEngine.SELL_THRESHOLD)
@@ -3682,7 +3244,7 @@ class BacktestEngine:
         risk_pct = risk_per_trade  or BacktestEngine.RISK_PER_TRADE
         scale_r  = BacktestEngine.SCALE_OUT_RATIO if enable_scaling else 0.0
 
-        # ── Veri çekme ─────────────────────────────────────────
+        # Veri çekme
         yt = _yf_symbol(ticker, market)
         raw = yf.Ticker(yt).history(period=period, auto_adjust=True)
 
@@ -3712,7 +3274,7 @@ class BacktestEngine:
         closes = raw["Close"].values
         n      = len(closes)
 
-        # ── SMA200 — Yatırımcı modları için çıkış kriteri ─────
+        # SMA200 — Yatırımcı modları için çıkış kriteri
         _is_investor_mode = mode in ("investor", "buyhold")
         _sma200 = pd.Series(closes).rolling(200, min_periods=50).mean().values
 
@@ -3723,7 +3285,7 @@ class BacktestEngine:
             for j in range(n)
         ]
 
-        # ── Sektörel Endeks Filtresi ──────────────────────────
+        # Sektörel Endeks Filtresi
         _fallback_idx = _default_index(market)
         if market == "US":
             sector   = US_SECTOR_MAP.get(ticker, "Technology")
@@ -3750,7 +3312,7 @@ class BacktestEngine:
             index_ok      = np.ones(n, dtype=bool)
             index_bearish = np.zeros(n, dtype=bool)
 
-        # ── İşlem döngüsü ─────────────────────────────────────
+        # İşlem döngüsü
         trades       = []
         capital      = cap         # Kasa takibi
         i            = BacktestEngine.WARMUP_DAYS
@@ -3772,12 +3334,10 @@ class BacktestEngine:
         while i < n:
             score = float(scores.iloc[i])
 
-            # ════════════════════════════════════════════════════
             # POZİSYON YOK
-            # ════════════════════════════════════════════════════
             if not in_pos:
 
-                # ── LONG giriş ──────────────────────────────────
+                # LONG giriş
                 if score >= BUY_TH and i + 1 < n and index_ok[i]:
                     # Haber filtresi
                     if use_news:
@@ -3822,7 +3382,7 @@ class BacktestEngine:
                     _tp_cap = 1.70 if _is_investor_mode else 1.35
                     take_profit = min(take_profit, entry_price * _tp_cap)
 
-                    # ── Pozisyon boyutlandırma (risk-bazlı) ────────
+                    # Pozisyon boyutlandırma (risk-bazlı)
                     risk_per_share = entry_price - stop_loss
                     if risk_per_share > 0:
                         risk_amount = capital * risk_pct
@@ -3842,7 +3402,7 @@ class BacktestEngine:
                     i += 1
                     continue
 
-                # ── SHORT giriş ─────────────────────────────────
+                # SHORT giriş
                 elif enable_short and score <= SHORT_TH and i + 1 < n and index_bearish[i]:
                     if use_news:
                         _sig_date = str(dates[i])[:10]
@@ -3895,9 +3455,7 @@ class BacktestEngine:
                     i += 1
                     continue
 
-            # ════════════════════════════════════════════════════
             # POZİSYONDAYIZ
-            # ════════════════════════════════════════════════════
             else:
                 hold      = i - entry_idx
                 day_open  = float(opens[i])
@@ -3909,7 +3467,7 @@ class BacktestEngine:
                 exit_reason = None
 
                 if not is_short:
-                    # ════ LONG çıkış kontrolleri ════════════════
+                    # LONG çıkış kontrolleri
                     if day_open <= trailing_stop:
                         exit_price  = day_open
                         exit_reason = "STOP_LOSS"
@@ -3934,7 +3492,7 @@ class BacktestEngine:
                         exit_price  = day_close
                         exit_reason = "MAX_SURE"
 
-                    # ── Çıkış yoksa: Scaling out + Trailing güncelle ──
+                    # Çıkış yoksa: Scaling out + Trailing güncelle
                     if exit_price is None:
                         # Kademeli kâr alma (scaling out)
                         partial_level = entry_price * (1 + PARTIAL_P)
@@ -3962,7 +3520,7 @@ class BacktestEngine:
                             trailing_stop = max(trailing_stop, trail_cand)
 
                 else:
-                    # ════ SHORT çıkış kontrolleri ═══════════════
+                    # SHORT çıkış kontrolleri
                     if day_open >= trailing_stop:
                         exit_price  = day_open
                         exit_reason = "STOP_LOSS"
@@ -3982,7 +3540,7 @@ class BacktestEngine:
                         exit_price  = day_close
                         exit_reason = "MAX_SURE"
 
-                    # ── Çıkış yoksa: Scaling out + Trailing güncelle ──
+                    # Çıkış yoksa: Scaling out + Trailing güncelle
                     if exit_price is None:
                         partial_level = entry_price * (1 - PARTIAL_P)
                         if scale_r > 0 and not scaled_out and day_low <= partial_level:
@@ -4005,7 +3563,7 @@ class BacktestEngine:
                             trail_cand = day_close * (1 + atr_trail)
                             trailing_stop = min(trailing_stop, trail_cand)
 
-                # ════ ÇIKIŞ İŞLEME ════════════════════════════
+                # ÇIKIŞ İŞLEME
                 if exit_price is not None:
                     if not is_short:
                         # LONG P&L
@@ -4049,7 +3607,7 @@ class BacktestEngine:
 
             i += 1
 
-        # ── Dönem sonunda açık pozisyon ────────────────────────
+        # Dönem sonunda açık pozisyon
         if in_pos:
             last_price = float(closes[-1])
             if not is_short:
@@ -4154,13 +3712,7 @@ class BacktestEngine:
     def optimize(ticker: str, period: str = "1y",
                  metric: str = "total_return_pct") -> dict:
         """
-        Walk-Forward Parametre Optimizasyonu:
-        Son 'period' verisinde grid-search yaparak o hisse için
-        en yüksek 'metric' üreten parametre setini döndürür.
-
-        Returns: {"BUY_THRESHOLD": int, "STOP_PCT": float, "TP_PCT": float,
-                  "score": float, "trades": int, "win_rate": float}
-        """
+    """
         buy_grid  = [42, 44, 46, 48, 50, 52]
         stop_grid = [0.04, 0.05, 0.06, 0.07, 0.08, 0.09]
         tp_grid   = [0.08, 0.10, 0.14, 0.18, 0.22]
@@ -4230,11 +3782,7 @@ class BacktestEngine:
             # Trades
             for t in trades:
                 conn.execute("""
-                    INSERT INTO backtest_trades
-                      (run_id, ticker, entry_date, entry_price, exit_date, exit_price,
-                       exit_reason, return_pct, hold_days, entry_score, stop_loss, take_profit)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (
+    """, (
                     t["run_id"], t["ticker"], t["entry_date"], t["entry_price"],
                     t["exit_date"], t["exit_price"], t["exit_reason"], t["return_pct"],
                     t["hold_days"], t["entry_score"], t["stop_loss"], t["take_profit"],
@@ -4249,12 +3797,7 @@ class BacktestEngine:
             # Summary
             if summary.get("total_trades", 0) > 0:
                 conn.execute("""
-                    INSERT OR REPLACE INTO backtest_summary
-                      (run_id, run_date, ticker, period, total_trades, winning_trades,
-                       win_rate, avg_return_pct, total_return_pct, max_drawdown_pct,
-                       best_trade_pct, worst_trade_pct, avg_hold_days)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (
+    """, (
                     run_id, run_date, ticker, period,
                     summary["total_trades"], summary["winning_trades"],
                     summary["win_rate"], summary["avg_return_pct"],
@@ -4271,12 +3814,7 @@ class BacktestEngine:
         try:
             with sqlite3.connect(db_path) as conn:
                 rows = conn.execute("""
-                    SELECT run_id, run_date, ticker, period, total_trades, winning_trades,
-                           win_rate, avg_return_pct, total_return_pct, max_drawdown_pct,
-                           best_trade_pct, worst_trade_pct, avg_hold_days
-                    FROM backtest_summary
-                    ORDER BY run_date DESC
-                """).fetchall()
+    """).fetchall()
             cols = ["run_id","run_date","ticker","period","total_trades","winning_trades",
                     "win_rate","avg_return_pct","total_return_pct","max_drawdown_pct",
                     "best_trade_pct","worst_trade_pct","avg_hold_days"]
@@ -4331,9 +3869,7 @@ class BacktestEngine:
             return []
 
 
-# ─────────────────────────────────────────────────────────
 # 8. STREAMLIT DASHBOARD (Dark Mode)
-# ─────────────────────────────────────────────────────────
 
 def create_gauge_chart(score: float, title: str = "BIST Buy Score") -> go.Figure:
     if score >= 75:   bar_color = "#22c55e"
@@ -4419,7 +3955,7 @@ def render_dashboard_page(ui_lang):
         "Real-time summary of Borsa Istanbul and macroeconomic indicators. Data refreshes every 10-60 min."
     )
 
-    # ── Makroekonomik Göstergeler ─────────────────────────────────────────
+    # Makroekonomik Göstergeler
     @st.cache_data(ttl=600, show_spinner=False)
     def fetch_macro_indicators():
         """USD/TL, EUR/TL, Altın (USD), BIST100 günlük değişimlerini çeker."""
@@ -4477,6 +4013,50 @@ def render_dashboard_page(ui_lang):
         c2.metric("Başarılı Tahmin" if ui_lang == "TR" else "Successful Calls", acc_success)
         c3.metric("Değerlendirilen" if ui_lang == "TR" else "Total Evaluated", acc_total)
         st.markdown("---")
+
+    # Bugünün Sinyalleri (Hızlı Özet)
+    try:
+        _all_signals = _history_db.get_validation_report()
+        if _all_signals:
+            _today = datetime.now().strftime("%Y-%m-%d")
+            _recent = [s for s in _all_signals
+                       if s.get("signal_date", "")[:10] == _today
+                       and s.get("source", "").startswith("live")]
+            if _recent:
+                st.markdown("### " + (
+                    "Bugunun Sinyalleri" if ui_lang == "TR" else "Today's Signals"
+                ))
+                _al = [s for s in _recent if s["signal"] in ("AL", "GUCLU AL")]
+                _sat = [s for s in _recent if s["signal"] in ("SAT", "GUCLU SAT")]
+
+                if _al:
+                    _al_items = " &nbsp;|&nbsp; ".join(
+                        f"<span style='color:#22c55e;font-weight:600'>{s['ticker']}</span> "
+                        f"<small>({s['signal']} {s['score']:.0f})</small>"
+                        for s in sorted(_al, key=lambda x: -x["score"])
+                    )
+                    st.markdown(
+                        f"**{'AL' if ui_lang == 'TR' else 'BUY'}:** {_al_items}",
+                        unsafe_allow_html=True
+                    )
+                if _sat:
+                    _sat_items = " &nbsp;|&nbsp; ".join(
+                        f"<span style='color:#ef4444;font-weight:600'>{s['ticker']}</span> "
+                        f"<small>({s['signal']} {s['score']:.0f})</small>"
+                        for s in sorted(_sat, key=lambda x: x["score"])
+                    )
+                    st.markdown(
+                        f"**{'SAT' if ui_lang == 'TR' else 'SELL'}:** {_sat_items}",
+                        unsafe_allow_html=True
+                    )
+                if not _al and not _sat:
+                    st.info(
+                        "Bugun NOTR disinda sinyal yok."
+                        if ui_lang == "TR" else "No non-neutral signals today."
+                    )
+                st.markdown("---")
+    except Exception:
+        pass
 
     @st.cache_data(ttl=3600)
     def fetch_market_overview():
@@ -4614,7 +4194,7 @@ def render_smart_portfolio_page(ui_lang: str):
     )
     st.markdown("---")
 
-    # ── Sidebar Kontroller ────────────────────────────────
+    # Sidebar Kontroller
     with st.sidebar:
         st.markdown("## Portföy Tarama")
         force_scan = st.button("🔄 Yeniden Tara", use_container_width=True,
@@ -4656,7 +4236,7 @@ def render_smart_portfolio_page(ui_lang: str):
             "_Portföyler birbirinden farklıdır._"
         )
 
-    # ── Tarama ───────────────────────────────────────────
+    # Tarama
     scan_results = None
     if force_scan or "smart_scan_results" not in st.session_state:
         progress_bar = st.progress(0, text="Tarama başlatılıyor...")
@@ -4685,7 +4265,7 @@ def render_smart_portfolio_page(ui_lang: str):
         st.warning("Tarama sonucu bulunamadı.")
         return
 
-    # ── Portföy Oluştur ───────────────────────────────────
+    # Portföy Oluştur
     portfolios = SmartPortfolioBuilder.build(scan_results)
     aggressive = portfolios["aggressive"]
     defensive  = portfolios["defensive"]
@@ -4704,7 +4284,7 @@ def render_smart_portfolio_page(ui_lang: str):
         else:
             st.warning("Portföy boş — önce tarama yapın.")
 
-    # ── Tarama Özeti ─────────────────────────────────────
+    # Tarama Özeti
     valid_count  = len([r for r in scan_results if not r.error])
     error_count  = len([r for r in scan_results if r.error])
     high_score   = len([r for r in scan_results if r.score >= 46])
@@ -4717,7 +4297,7 @@ def render_smart_portfolio_page(ui_lang: str):
 
     st.markdown("---")
 
-    # ── İki Portföy Yan Yana ─────────────────────────────
+    # İki Portföy Yan Yana
     col_agg, col_def = st.columns(2)
 
     def _render_portfolio_table(stocks: list, title: str, color: str):
@@ -4760,7 +4340,7 @@ def render_smart_portfolio_page(ui_lang: str):
     with col_def:
         _render_portfolio_table(defensive, "🛡️ Defansif Portföy", "#3b82f6")
 
-    # ── Tüm Tarama Sonuçları Tablosu ─────────────────────
+    # Tüm Tarama Sonuçları Tablosu
     st.markdown("---")
     with st.expander("📊 Tüm Tarama Sonuçları (Skor Sırası)", expanded=False):
         scan_df = pd.DataFrame([{
@@ -4791,7 +4371,7 @@ def render_smart_portfolio_page(ui_lang: str):
                 use_container_width=True, hide_index=True, height=400,
             )
 
-    # ── Backtest ─────────────────────────────────────────
+    # Backtest
     if run_backtest_btn and (aggressive or defensive):
         st.markdown("---")
         st.markdown("## 🧪 Sistem Portföyleri Backtest")
@@ -4834,7 +4414,7 @@ def render_smart_portfolio_page(ui_lang: str):
         st.session_state["smart_bt_results"] = bt_results_agg
         st.session_state["smart_bt_period"]  = bt_period
 
-    # ── Backtest sonuçları göster ─────────────────────────
+    # Backtest sonuçları göster
     bt_results_agg = st.session_state.get("smart_bt_results", {})
     if bt_results_agg:
         st.markdown("---")
@@ -4915,10 +4495,6 @@ def render_smart_portfolio_page(ui_lang: str):
 
 def _render_price_chart_with_trades(ticker: str, period: str, trades: list, height: int = 420, market: str = "BIST"):
     """
-    Fiyat grafiği üzerinde AL/SAT noktalarını gösterir.
-    Giriş: yeşil ▲ (entry_price, entry_date)
-    Çıkış: renkli ▼ (exit_price, exit_date) — sebebe göre renk
-    Pozisyon süresi: yarı saydam renkli şerit
     """
     try:
         yt = _yf_symbol(ticker, market)
@@ -4932,7 +4508,7 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
 
         fig = go.Figure()
 
-        # ── Fiyat çizgisi ─────────────────────────────
+        # Fiyat çizgisi
         fig.add_trace(go.Scatter(
             x=raw.index, y=raw["Close"],
             mode="lines", name="Kapanış",
@@ -4961,7 +4537,7 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
             "SMA200_KIRILIM": ("#f43f5e", "📉 SMA200 Kırılım"),
         }
 
-        # ── Pozisyon şeritleri ────────────────────────
+        # Pozisyon şeritleri
         for t in trades:
             ret_val = t.get("return_pct", 0)
             color   = "#22c55e" if ret_val >= 0 else "#ef4444"
@@ -4976,7 +4552,7 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
             except Exception:
                 pass
 
-        # ── Giriş noktaları (yeşil ▲) ──────────────
+        # Giriş noktaları (yeşil ▲)
         entry_x   = [t["entry_date"]  for t in trades]
         entry_y   = [t["entry_price"] for t in trades]
         entry_txt = [
@@ -4991,7 +4567,7 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
             text=entry_txt, hoverinfo="text",
         ))
 
-        # ── Çıkış noktaları (sebebe göre renkli ▼) ──
+        # Çıkış noktaları (sebebe göre renkli ▼)
         seen_reasons = set()
         for t in trades:
             reason = t.get("exit_reason", "MAX_SURE")
@@ -5029,67 +4605,55 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
         st.warning(f"{ticker} fiyat grafiği oluşturulamadı: {exc}")
 
 
-# ─────────────────────────────────────────────────────────
 # SKOR DOĞRULAMA RAPORU SAYFASI
-# ─────────────────────────────────────────────────────────
 
 def render_validation_page(ui_lang: str):
-    """Skor doğrulama raporu — sistemin sinyal doğruluğunu gösterir."""
-    st.markdown("# " + ("Skor Dogrulama Raporu" if ui_lang == "TR" else "Score Validation Report"))
+    """Sinyal takip paneli — AL/SAT sinyallerini günlük, haftalık, aylık gösterir."""
+    st.markdown("# " + ("Sinyal Takip Paneli" if ui_lang == "TR" else "Signal Tracker"))
     st.caption(
-        "Sistem sinyallerinin gerçek piyasa verileriyle karşılaştırması. "
-        "AL sinyali verdikten 1, 3, 7, 14 ve 30 gün sonra fiyat yükseldi mi?"
+        "Sistemin AL ve SAT dediği hisseleri günlük, haftalık ve aylık olarak takip edin. "
+        "Her sinyalin ardından fiyat nasıl hareket etti?"
         if ui_lang == "TR" else
-        "Comparison of system signals with actual market data. "
-        "Did the price rise 1, 3, 7, 14 and 30 days after a BUY signal?"
+        "Track BUY and SELL signals daily, weekly and monthly. "
+        "How did the price move after each signal?"
     )
 
-    # ── Sidebar kontroller ─────────────────────────────────
+    # Sidebar: sadece güncelle + backfill
     with st.sidebar:
-        st.markdown("## " + ("Dogrulama Ayarlari" if ui_lang == "TR" else "Validation Settings"))
+        st.markdown("## " + ("Sinyal Takip" if ui_lang == "TR" else "Signal Tracker"))
 
         if st.button(
-            "Bekleyen Sinyalleri Kontrol Et" if ui_lang == "TR" else "Check Pending Signals",
-            use_container_width=True,
-            help="Bekleyen sinyallerin güncel fiyatlarını kontrol eder (1g-30g)"
-                 if ui_lang == "TR" else "Checks current prices for pending signals (1d-30d)"
+            "Fiyatlari Guncelle" if ui_lang == "TR" else "Update Prices",
+            use_container_width=True, type="primary",
+            help="Bekleyen sinyallerin güncel fiyatlarını kontrol eder"
+                 if ui_lang == "TR" else "Checks current prices for pending signals"
         ):
-            with st.spinner("Sinyaller kontrol ediliyor..." if ui_lang == "TR" else "Checking signals..."):
+            with st.spinner("Fiyatlar kontrol ediliyor..." if ui_lang == "TR" else "Checking prices..."):
                 _history_db.check_pending_signals()
-            st.success("Kontrol tamamlandi!" if ui_lang == "TR" else "Check complete!")
+            st.success("Guncellendi!" if ui_lang == "TR" else "Updated!")
             st.rerun()
 
         st.markdown("---")
 
-        backfill_months = st.slider(
-            "Geriye Donuk Test (Ay)" if ui_lang == "TR" else "Backfill Months",
-            min_value=3, max_value=12, value=6, step=3,
-            help="Kaç ay geriye gidilerek toplu sinyal testi yapılacak"
-                 if ui_lang == "TR" else "How many months back to run bulk signal validation"
-        )
+        with st.expander(
+            "Gecmis Veri Yukle" if ui_lang == "TR" else "Load Historical Data",
+            expanded=False
+        ):
+            st.caption(
+                "BIST30 hisseleri icin gecmise donuk sinyal testi yapar."
+                if ui_lang == "TR" else "Runs historical signal test for BIST30 stocks."
+            )
+            backfill_btn = st.button(
+                "Baslat" if ui_lang == "TR" else "Start",
+                use_container_width=True,
+                help="6 ay geriye gidip haftalık test noktaları oluşturur"
+                     if ui_lang == "TR" else "Creates weekly test points going back 6 months"
+            )
 
-        backfill_interval = st.selectbox(
-            "Test Sikligi" if ui_lang == "TR" else "Test Interval",
-            options=[7, 14, 30],
-            index=0,
-            format_func=lambda x: {7: "Haftalik (7 gün)" if ui_lang == "TR" else "Weekly (7 days)",
-                                    14: "2 Haftalik (14 gün)" if ui_lang == "TR" else "Bi-weekly (14 days)",
-                                    30: "Aylik (30 gün)" if ui_lang == "TR" else "Monthly (30 days)"}[x],
-            help="Test noktaları arasındaki gün sayısı. Haftalık = daha çok veri ama daha uzun sürer."
-                 if ui_lang == "TR" else "Days between test points. Weekly = more data but takes longer."
-        )
-
-        backfill_btn = st.button(
-            "Toplu Geriye Donuk Test Baslat" if ui_lang == "TR" else "Run Backfill Test",
-            use_container_width=True, type="primary",
-            help="BIST30 hisseleri için geriye dönük skor doğrulama çalıştırır"
-                 if ui_lang == "TR" else "Runs historical score validation for BIST30 stocks"
-        )
-
-    # ── Backfill çalıştır ──────────────────────────────────
+    # Backfill çalıştır (sabit 6 ay, haftalık)
     if backfill_btn:
         bist30 = BIST_SCAN_UNIVERSE[:30]
-        progress_bar = st.progress(0, text="Başlatılıyor..." if ui_lang == "TR" else "Starting...")
+        progress_bar = st.progress(0, text="Baslatiliyor..." if ui_lang == "TR" else "Starting...")
         status_area = st.empty()
 
         def _bf_progress(ticker, step, total):
@@ -5097,65 +4661,149 @@ def render_validation_page(ui_lang: str):
             progress_bar.progress(pct, text=f"{ticker} ({step}/{total})")
             status_area.info(f"{ticker} analiz ediliyor..." if ui_lang == "TR" else f"Analyzing {ticker}...")
 
-        added = _history_db.run_backfill(bist30, months_back=backfill_months,
-                                         interval_days=backfill_interval, progress_cb=_bf_progress)
+        added = _history_db.run_backfill(bist30, months_back=6,
+                                         interval_days=7, progress_cb=_bf_progress)
         progress_bar.progress(1.0, text="Tamamlandi!" if ui_lang == "TR" else "Complete!")
         status_area.success(
-            f"Toplu test tamamlandi: **{added}** sinyal eklendi."
-            if ui_lang == "TR" else f"Backfill complete: **{added}** signals added."
+            f"**{added}** sinyal eklendi."
+            if ui_lang == "TR" else f"**{added}** signals added."
         )
 
-    # ── Rapor verisini yükle ───────────────────────────────
+    # Rapor verisini yükle
     all_data = _history_db.get_validation_report()
     if not all_data:
         st.info(
-            "Henüz doğrulama verisi yok. **Toplu Geriye Dönük Test** butonuna basarak "
-            "BIST30 hisseleri için geçmiş sinyalleri test edebilirsiniz. "
-            "Ayrıca her analiz yaptığınızda sinyaller otomatik olarak kaydedilir."
+            "Henuz sinyal verisi yok. Hisse analiz ettiginizde sinyaller otomatik kaydedilir. "
+            "Ayrica kenar cubugundaki **Gecmis Veri Yukle** ile toplu test yapabilirsiniz."
             if ui_lang == "TR" else
-            "No validation data yet. Click **Run Backfill Test** to test historical signals "
-            "for BIST30 stocks. Signals are also automatically recorded with each analysis."
+            "No signal data yet. Signals are auto-recorded when you analyze stocks. "
+            "You can also use **Load Historical Data** in the sidebar for bulk testing."
         )
         return
 
     df_all = pd.DataFrame(all_data)
+    df_all["signal_dt"] = pd.to_datetime(df_all["signal_date"].str[:10], errors="coerce")
+    now = pd.Timestamp.now().normalize()
 
-    # ── Genel İstatistikler ────────────────────────────────
+    # Zaman Dilimi Seçici (Günlük / Haftalık / Aylık)
+    view_mode = st.radio(
+        "Zaman Dilimi" if ui_lang == "TR" else "Time Period",
+        ["Gunluk", "Haftalik", "Aylik"] if ui_lang == "TR" else ["Daily", "Weekly", "Monthly"],
+        horizontal=True,
+        key="val_view_mode"
+    )
+
+    # Filtreleme aralığını belirle
+    if view_mode in ("Gunluk", "Daily"):
+        date_start = now - pd.Timedelta(days=1)
+        period_label = "Bugun" if ui_lang == "TR" else "Today"
+        ret_col, res_col = "return_1d_pct", "result_1d"
+        period_desc = "1 Gun" if ui_lang == "TR" else "1 Day"
+    elif view_mode in ("Haftalik", "Weekly"):
+        date_start = now - pd.Timedelta(days=7)
+        period_label = "Son 7 Gun" if ui_lang == "TR" else "Last 7 Days"
+        ret_col, res_col = "return_7d_pct", "result_7d"
+        period_desc = "7 Gun" if ui_lang == "TR" else "7 Days"
+    else:
+        date_start = now - pd.Timedelta(days=30)
+        period_label = "Son 30 Gun" if ui_lang == "TR" else "Last 30 Days"
+        ret_col, res_col = "return_30d_pct", "result_30d"
+        period_desc = "30 Gun" if ui_lang == "TR" else "30 Days"
+
+    df_period = df_all[df_all["signal_dt"] >= date_start].copy()
+
+    # Özet Metrikler
     st.markdown("---")
-    st.markdown("### " + ("Genel Performans" if ui_lang == "TR" else "Overall Performance"))
+    st.markdown(f"### {period_label}")
 
-    # 30 günlük sonuçları filtrele (backfill + tamamlanmış live)
-    df_30d = df_all[df_all["result_30d"].isin(["Basarili", "Basarisiz"])].copy()
-    df_7d  = df_all[df_all["result_7d"].isin(["Basarili", "Basarisiz"])].copy()
-
-    total_signals = len(df_all)
-    pending_count = len(df_all[df_all["result_30d"] == "Bekliyor"])
-    live_count    = len(df_all[df_all["source"] == "live"])
-    backfill_count = len(df_all[df_all["source"] == "backfill"])
+    al_sinyalleri = df_period[df_period["signal"].isin(["AL", "GUCLU AL"])]
+    sat_sinyalleri = df_period[df_period["signal"].isin(["SAT", "GUCLU SAT"])]
 
     mc1, mc2, mc3, mc4 = st.columns(4)
     with mc1:
-        st.metric("Toplam Sinyal" if ui_lang == "TR" else "Total Signals", f"{total_signals}")
+        st.metric("Toplam Sinyal" if ui_lang == "TR" else "Total Signals", len(df_period))
     with mc2:
-        st.metric("Canli / Backfill" if ui_lang == "TR" else "Live / Backfill",
-                  f"{live_count} / {backfill_count}")
+        st.metric("AL Sinyali" if ui_lang == "TR" else "BUY Signals", len(al_sinyalleri))
     with mc3:
-        st.metric("Bekleyen" if ui_lang == "TR" else "Pending", f"{pending_count}")
+        st.metric("SAT Sinyali" if ui_lang == "TR" else "SELL Signals", len(sat_sinyalleri))
     with mc4:
-        if not df_30d.empty:
-            avg_ret = df_30d["return_30d_pct"].mean()
+        completed = df_period[df_period[res_col].isin(["Basarili", "Basarisiz"])]
+        if not completed.empty:
+            acc = round(len(completed[completed[res_col] == "Basarili"]) / len(completed) * 100, 1)
             st.metric(
-                "Ort. Getiri (30g)" if ui_lang == "TR" else "Avg Return (30d)",
-                f"{avg_ret:+.2f}%",
-                delta=f"{'Pozitif' if avg_ret > 0 else 'Negatif'}" if ui_lang == "TR"
-                      else f"{'Positive' if avg_ret > 0 else 'Negative'}"
+                f"Dogruluk ({period_desc})" if ui_lang == "TR" else f"Accuracy ({period_desc})",
+                f"{acc}%"
             )
         else:
-            st.metric("Ort. Getiri" if ui_lang == "TR" else "Avg Return", "—")
+            st.metric(
+                f"Dogruluk ({period_desc})" if ui_lang == "TR" else f"Accuracy ({period_desc})",
+                "Bekliyor" if ui_lang == "TR" else "Pending"
+            )
 
-    # ── Sinyal Bazlı Doğruluk Tablosu (tüm periyotlar) ───
+    # AL Sinyalleri Tablosu
+    if not al_sinyalleri.empty:
+        st.markdown("---")
+        st.markdown("### " + ("AL Sinyalleri" if ui_lang == "TR" else "BUY Signals"))
+
+        al_display = al_sinyalleri[["ticker", "signal", "score", "signal_date", "signal_price"]].copy()
+        al_display["signal_date"] = al_display["signal_date"].str[:10]
+        # Tüm periyot getirilerini ekle
+        for p_key, p_label in [("1d","1g"), ("3d","3g"), ("7d","7g"), ("14d","14g"), ("30d","30g")]:
+            r_col = f"return_{p_key}_pct"
+            res_c = f"result_{p_key}"
+            if r_col in al_sinyalleri.columns:
+                al_display[p_label] = al_sinyalleri.apply(
+                    lambda row: f"{row[r_col]:+.2f}%" if pd.notna(row[r_col]) else
+                                ("Bekliyor" if ui_lang == "TR" else "Pending"), axis=1
+                )
+            else:
+                al_display[p_label] = "—"
+
+        col_rename = {
+            "ticker": "Hisse" if ui_lang == "TR" else "Ticker",
+            "signal": "Sinyal" if ui_lang == "TR" else "Signal",
+            "score": "Skor" if ui_lang == "TR" else "Score",
+            "signal_date": "Tarih" if ui_lang == "TR" else "Date",
+            "signal_price": "Fiyat" if ui_lang == "TR" else "Price",
+        }
+        al_display.rename(columns=col_rename, inplace=True)
+        st.dataframe(al_display, use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            f"{period_label} icinde AL sinyali yok."
+            if ui_lang == "TR" else f"No BUY signals in {period_label}."
+        )
+
+    # SAT Sinyalleri Tablosu
+    if not sat_sinyalleri.empty:
+        st.markdown("---")
+        st.markdown("### " + ("SAT Sinyalleri" if ui_lang == "TR" else "SELL Signals"))
+
+        sat_display = sat_sinyalleri[["ticker", "signal", "score", "signal_date", "signal_price"]].copy()
+        sat_display["signal_date"] = sat_display["signal_date"].str[:10]
+        for p_key, p_label in [("1d","1g"), ("3d","3g"), ("7d","7g"), ("14d","14g"), ("30d","30g")]:
+            r_col = f"return_{p_key}_pct"
+            if r_col in sat_sinyalleri.columns:
+                sat_display[p_label] = sat_sinyalleri.apply(
+                    lambda row: f"{row[r_col]:+.2f}%" if pd.notna(row[r_col]) else
+                                ("Bekliyor" if ui_lang == "TR" else "Pending"), axis=1
+                )
+            else:
+                sat_display[p_label] = "—"
+
+        sat_display.rename(columns=col_rename, inplace=True)
+        st.dataframe(sat_display, use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            f"{period_label} icinde SAT sinyali yok."
+            if ui_lang == "TR" else f"No SELL signals in {period_label}."
+        )
+
+    # Genel Performans Özeti
+    st.markdown("---")
+    st.markdown("### " + ("Genel Performans" if ui_lang == "TR" else "Overall Performance"))
+
     _periods = [("1d", "1g"), ("3d", "3g"), ("7d", "7g"), ("14d", "14g"), ("30d", "30g")]
-    # Her periyot için filtered DataFrame'ler
     _period_dfs = {}
     for p_key, p_label in _periods:
         result_col = f"result_{p_key}"
@@ -5164,13 +4812,8 @@ def render_validation_page(ui_lang: str):
         else:
             _period_dfs[p_key] = pd.DataFrame()
 
-    # En az bir periyotta veri varsa tabloyu göster
     has_data = any(not v.empty for v in _period_dfs.values())
     if has_data:
-        st.markdown("---")
-        st.markdown("### " + ("Sinyal Bazli Dogruluk (Tum Periyotlar)"
-                               if ui_lang == "TR" else "Accuracy by Signal (All Periods)"))
-
         signal_order = ["GUCLU AL", "AL", "SAT", "GUCLU SAT"]
         rows_table = []
         for sig in signal_order + ["GENEL"]:
@@ -5181,10 +4824,7 @@ def render_validation_page(ui_lang: str):
                     row[f"{p_label} %"] = "—"
                     row[f"{p_label} Getiri"] = "—"
                     continue
-                if sig == "GENEL":
-                    subset = pdf
-                else:
-                    subset = pdf[pdf["signal"] == sig]
+                subset = pdf if sig == "GENEL" else pdf[pdf["signal"] == sig]
                 n = len(subset)
                 if n == 0:
                     row[f"{p_label} %"] = "—"
@@ -5201,96 +4841,7 @@ def render_validation_page(ui_lang: str):
         df_table = pd.DataFrame(rows_table)
         st.dataframe(df_table, use_container_width=True, hide_index=True)
 
-        # ── Beklenti Değeri (tüm periyotlar) ──────────────
-        st.markdown("#### " + ("Sinyal Tipi Bazli Ortalama Getiri" if ui_lang == "TR" else "Avg Return by Signal Type"))
-        for p_key, p_label in _periods:
-            pdf = _period_dfs[p_key]
-            if pdf.empty:
-                continue
-            return_col = f"return_{p_key}_pct"
-            if return_col not in pdf.columns:
-                continue
-            buy_sigs = pdf[pdf["signal"].isin(["AL", "GUCLU AL"])]
-            sell_sigs = pdf[pdf["signal"].isin(["SAT", "GUCLU SAT"])]
-            parts = []
-            if len(buy_sigs) > 0:
-                avg_b = buy_sigs[return_col].mean()
-                parts.append(
-                    f"AL: <span style='color:{'#22c55e' if avg_b > 0 else '#ef4444'}'>{avg_b:+.2f}%</span>"
-                )
-            if len(sell_sigs) > 0:
-                avg_s = sell_sigs[return_col].mean()
-                parts.append(
-                    f"SAT: <span style='color:{'#22c55e' if avg_s < 0 else '#ef4444'}'>{avg_s:+.2f}%</span>"
-                )
-            if parts:
-                st.markdown(f"**{p_label}:** " + " &nbsp;|&nbsp; ".join(parts), unsafe_allow_html=True)
-
-    # ── Confusion Matrix ───────────────────────────────────
-    df_30d = _period_dfs.get("30d", pd.DataFrame())
-    df_7d  = _period_dfs.get("7d", pd.DataFrame())
-    if not df_30d.empty:
-        st.markdown("---")
-        st.markdown("### " + ("Karisiklik Matrisi (30 Gun)" if ui_lang == "TR" else "Confusion Matrix (30 Day)"))
-
-        # AL dedik → gerçekten yükseldi (TP), düştü (FP)
-        buy_sigs  = df_30d[df_30d["signal"].isin(["AL", "GUCLU AL"])]
-        sell_sigs = df_30d[df_30d["signal"].isin(["SAT", "GUCLU SAT"])]
-
-        tp = len(buy_sigs[buy_sigs["return_30d_pct"] >= 2.0])    # AL dedik, yükseldi
-        fp = len(buy_sigs[buy_sigs["return_30d_pct"] < 2.0])     # AL dedik, yükselmedi
-        tn = len(sell_sigs[sell_sigs["return_30d_pct"] <= -2.0])  # SAT dedik, düştü
-        fn = len(sell_sigs[sell_sigs["return_30d_pct"] > -2.0])   # SAT dedik, düşmedi
-
-        cm_c1, cm_c2, cm_c3 = st.columns([1, 2, 2])
-        with cm_c1:
-            st.markdown("")
-        with cm_c2:
-            st.markdown(f"**{'Gercek Yukseldi' if ui_lang == 'TR' else 'Actually Rose'}**")
-        with cm_c3:
-            st.markdown(f"**{'Gercek Dustu' if ui_lang == 'TR' else 'Actually Fell'}**")
-
-        cm_r1c1, cm_r1c2, cm_r1c3 = st.columns([1, 2, 2])
-        with cm_r1c1:
-            st.markdown(f"**{'AL Dedik' if ui_lang == 'TR' else 'Said BUY'}**")
-        with cm_r1c2:
-            st.markdown(
-                f"<div style='background:#22c55e20;padding:12px;border-radius:8px;text-align:center;font-size:1.4rem'>"
-                f"<b style='color:#22c55e'>{tp}</b><br><small>Dogru AL (TP)</small></div>",
-                unsafe_allow_html=True,
-            )
-        with cm_r1c3:
-            st.markdown(
-                f"<div style='background:#ef444420;padding:12px;border-radius:8px;text-align:center;font-size:1.4rem'>"
-                f"<b style='color:#ef4444'>{fp}</b><br><small>Yanlis AL (FP)</small></div>",
-                unsafe_allow_html=True,
-            )
-
-        cm_r2c1, cm_r2c2, cm_r2c3 = st.columns([1, 2, 2])
-        with cm_r2c1:
-            st.markdown(f"**{'SAT Dedik' if ui_lang == 'TR' else 'Said SELL'}**")
-        with cm_r2c2:
-            st.markdown(
-                f"<div style='background:#f9731620;padding:12px;border-radius:8px;text-align:center;font-size:1.4rem'>"
-                f"<b style='color:#f97316'>{fn}</b><br><small>Yanlis SAT (FN)</small></div>",
-                unsafe_allow_html=True,
-            )
-        with cm_r2c3:
-            st.markdown(
-                f"<div style='background:#22c55e20;padding:12px;border-radius:8px;text-align:center;font-size:1.4rem'>"
-                f"<b style='color:#22c55e'>{tn}</b><br><small>Dogru SAT (TN)</small></div>",
-                unsafe_allow_html=True,
-            )
-
-        # Precision & Recall
-        precision = round(tp / (tp + fp) * 100, 1) if (tp + fp) > 0 else 0
-        recall = round(tp / (tp + fn) * 100, 1) if (tp + fn) > 0 else 0
-        st.markdown(
-            f"\n**Precision (AL dogrulugu):** {precision}% &nbsp;|&nbsp; "
-            f"**Recall:** {recall}%"
-        )
-
-    # ── Sinyal Dağılımı Grafiği ────────────────────────────
+    # Sinyal Dağılımı Grafiği
     if not df_all.empty:
         st.markdown("---")
         st.markdown("### " + ("Sinyal Dagilimi" if ui_lang == "TR" else "Signal Distribution"))
@@ -5315,72 +4866,7 @@ def render_validation_page(ui_lang: str):
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
-    # ── Aylık Performans Çizgi Grafiği ─────────────────────
-    if not df_30d.empty and len(df_30d) >= 5:
-        st.markdown("---")
-        st.markdown("### " + ("Aylik Dogruluk Trendi" if ui_lang == "TR" else "Monthly Accuracy Trend"))
-
-        df_30d_copy = df_30d.copy()
-        df_30d_copy["month"] = pd.to_datetime(df_30d_copy["signal_date"].str[:10]).dt.to_period("M").astype(str)
-        monthly = df_30d_copy.groupby("month").agg(
-            total=("result_30d", "count"),
-            success=("result_30d", lambda x: (x == "Basarili").sum()),
-            avg_return=("return_30d_pct", "mean"),
-        ).reset_index()
-        monthly["accuracy"] = round(monthly["success"] / monthly["total"] * 100, 1)
-
-        fig_trend = go.Figure()
-        fig_trend.add_trace(go.Scatter(
-            x=monthly["month"], y=monthly["accuracy"],
-            mode="lines+markers", name="Dogruluk %" if ui_lang == "TR" else "Accuracy %",
-            line=dict(color="#3b82f6", width=3),
-            marker=dict(size=8),
-        ))
-        fig_trend.add_trace(go.Bar(
-            x=monthly["month"], y=monthly["avg_return"],
-            name="Ort. Getiri %" if ui_lang == "TR" else "Avg Return %",
-            marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in monthly["avg_return"]],
-            opacity=0.6,
-        ))
-        fig_trend.add_hline(y=50, line_dash="dash", line_color="#9ca3af",
-                            annotation_text="50% (%)" if ui_lang == "TR" else "50% baseline")
-        fig_trend.update_layout(
-            paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-            font=dict(color="#e2e8f0"), height=400,
-            margin=dict(l=30, r=30, t=30, b=30),
-            legend=dict(bgcolor="#1e293b"),
-            yaxis=dict(gridcolor="#334155"),
-            xaxis=dict(gridcolor="#334155"),
-        )
-        st.plotly_chart(fig_trend, use_container_width=True)
-
-    # ── Hisse Bazlı Detay Tablosu ─────────────────────────
-    if not df_30d.empty:
-        st.markdown("---")
-        st.markdown("### " + ("Hisse Bazli Detay" if ui_lang == "TR" else "Per-Stock Detail"))
-
-        stock_stats = df_30d.groupby("ticker").agg(
-            sinyal_sayisi=("result_30d", "count"),
-            basarili=("result_30d", lambda x: (x == "Basarili").sum()),
-            ort_getiri=("return_30d_pct", "mean"),
-            ort_skor=("score", "mean"),
-        ).reset_index()
-        stock_stats["dogruluk"] = round(stock_stats["basarili"] / stock_stats["sinyal_sayisi"] * 100, 1)
-        stock_stats["ort_getiri"] = round(stock_stats["ort_getiri"], 2)
-        stock_stats["ort_skor"] = round(stock_stats["ort_skor"], 1)
-        stock_stats = stock_stats.sort_values("dogruluk", ascending=False)
-
-        stock_stats.columns = [
-            "Hisse" if ui_lang == "TR" else "Ticker",
-            "Sinyal Sayisi" if ui_lang == "TR" else "Signals",
-            "Basarili" if ui_lang == "TR" else "Successful",
-            "Ort. Getiri %" if ui_lang == "TR" else "Avg Return %",
-            "Ort. Skor" if ui_lang == "TR" else "Avg Score",
-            "Dogruluk %" if ui_lang == "TR" else "Accuracy %",
-        ]
-        st.dataframe(stock_stats, use_container_width=True, hide_index=True)
-
-    # ── Ham Veri (Expandable) ──────────────────────────────
+    # Ham Veri (Expandable)
     if not df_all.empty:
         st.markdown("---")
         with st.expander(
@@ -5395,9 +4881,179 @@ def render_validation_page(ui_lang: str):
             st.dataframe(df_all[available_cols], use_container_width=True, hide_index=True)
 
 
-# ─────────────────────────────────────────────────────────
+# US SİNYAL TAKİP SAYFASI
+
+def render_us_validation_page(ui_lang: str):
+    """US piyasası sinyal takip paneli — AL/SAT sinyallerini günlük, haftalık, aylık gösterir."""
+    st.markdown("# " + ("US Sinyal Takip" if ui_lang == "TR" else "US Signal Tracker"))
+    st.caption(
+        "US piyasasinda verilen AL ve SAT sinyallerini gunluk, haftalik ve aylik takip edin."
+        if ui_lang == "TR" else
+        "Track BUY and SELL signals for US stocks on a daily, weekly and monthly basis."
+    )
+
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## " + ("US Sinyal Takip" if ui_lang == "TR" else "US Signal Tracker"))
+        if st.button(
+            "Fiyatlari Guncelle" if ui_lang == "TR" else "Update Prices",
+            use_container_width=True, type="primary",
+            key="us_val_update"
+        ):
+            with st.spinner("Fiyatlar kontrol ediliyor..." if ui_lang == "TR" else "Checking prices..."):
+                _history_db.check_pending_signals()
+            st.success("Guncellendi!" if ui_lang == "TR" else "Updated!")
+            st.rerun()
+
+    # Veri yükle (sadece US kayıtları)
+    all_data = _history_db.get_validation_report()
+    us_data = [r for r in all_data if r.get("source", "").endswith("_us") or r.get("source") == "live_us"]
+    if not us_data:
+        st.info(
+            "Henuz US sinyal verisi yok. **US Analiz** sayfasindan hisse analiz ettiginizde "
+            "sinyaller otomatik kaydedilir."
+            if ui_lang == "TR" else
+            "No US signal data yet. Signals are auto-recorded when you analyze stocks on the **US Analiz** page."
+        )
+        return
+
+    df_all = pd.DataFrame(us_data)
+    df_all["signal_dt"] = pd.to_datetime(df_all["signal_date"].str[:10], errors="coerce")
+    now = pd.Timestamp.now().normalize()
+
+    # Zaman Dilimi Seçici
+    view_mode = st.radio(
+        "Time Period",
+        ["Daily", "Weekly", "Monthly"],
+        horizontal=True,
+        key="us_val_view_mode"
+    )
+
+    if view_mode == "Daily":
+        date_start = now - pd.Timedelta(days=1)
+        period_label, period_desc = "Today", "1 Day"
+        ret_col, res_col = "return_1d_pct", "result_1d"
+    elif view_mode == "Weekly":
+        date_start = now - pd.Timedelta(days=7)
+        period_label, period_desc = "Last 7 Days", "7 Days"
+        ret_col, res_col = "return_7d_pct", "result_7d"
+    else:
+        date_start = now - pd.Timedelta(days=30)
+        period_label, period_desc = "Last 30 Days", "30 Days"
+        ret_col, res_col = "return_30d_pct", "result_30d"
+
+    df_period = df_all[df_all["signal_dt"] >= date_start].copy()
+
+    # Özet Metrikler
+    st.markdown("---")
+    st.markdown(f"### {period_label}")
+
+    buy_sigs  = df_period[df_period["signal"].isin(["AL", "GUCLU AL"])]
+    sell_sigs = df_period[df_period["signal"].isin(["SAT", "GUCLU SAT"])]
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("Total Signals", len(df_period))
+    mc2.metric("BUY Signals", len(buy_sigs))
+    mc3.metric("SELL Signals", len(sell_sigs))
+    completed = df_period[df_period[res_col].isin(["Basarili", "Basarisiz"])]
+    if not completed.empty:
+        acc = round(len(completed[completed[res_col] == "Basarili"]) / len(completed) * 100, 1)
+        mc4.metric(f"Accuracy ({period_desc})", f"{acc}%")
+    else:
+        mc4.metric(f"Accuracy ({period_desc})", "Pending")
+
+    # BUY Signals Table
+    _p_cols = [("1d","1D"), ("3d","3D"), ("7d","7D"), ("14d","14D"), ("30d","30D")]
+    if not buy_sigs.empty:
+        st.markdown("---")
+        st.markdown("### BUY Signals")
+        disp = buy_sigs[["ticker", "signal", "score", "signal_date", "signal_price"]].copy()
+        disp["signal_date"] = disp["signal_date"].str[:10]
+        for p_key, p_label in _p_cols:
+            r_col = f"return_{p_key}_pct"
+            if r_col in buy_sigs.columns:
+                disp[p_label] = buy_sigs.apply(
+                    lambda row: f"{row[r_col]:+.2f}%" if pd.notna(row[r_col]) else "Pending", axis=1
+                )
+            else:
+                disp[p_label] = "—"
+        disp.rename(columns={"ticker": "Ticker", "signal": "Signal", "score": "Score",
+                             "signal_date": "Date", "signal_price": "Price"}, inplace=True)
+        st.dataframe(disp, use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No BUY signals in {period_label}.")
+
+    # SELL Signals Table
+    if not sell_sigs.empty:
+        st.markdown("---")
+        st.markdown("### SELL Signals")
+        disp = sell_sigs[["ticker", "signal", "score", "signal_date", "signal_price"]].copy()
+        disp["signal_date"] = disp["signal_date"].str[:10]
+        for p_key, p_label in _p_cols:
+            r_col = f"return_{p_key}_pct"
+            if r_col in sell_sigs.columns:
+                disp[p_label] = sell_sigs.apply(
+                    lambda row: f"{row[r_col]:+.2f}%" if pd.notna(row[r_col]) else "Pending", axis=1
+                )
+            else:
+                disp[p_label] = "—"
+        disp.rename(columns={"ticker": "Ticker", "signal": "Signal", "score": "Score",
+                             "signal_date": "Date", "signal_price": "Price"}, inplace=True)
+        st.dataframe(disp, use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No SELL signals in {period_label}.")
+
+    # Overall Performance
+    st.markdown("---")
+    st.markdown("### Overall Performance")
+    _periods = [("1d", "1D"), ("3d", "3D"), ("7d", "7D"), ("14d", "14D"), ("30d", "30D")]
+    _period_dfs = {}
+    for p_key, p_label in _periods:
+        result_col = f"result_{p_key}"
+        if result_col in df_all.columns:
+            _period_dfs[p_key] = df_all[df_all[result_col].isin(["Basarili", "Basarisiz"])].copy()
+        else:
+            _period_dfs[p_key] = pd.DataFrame()
+
+    if any(not v.empty for v in _period_dfs.values()):
+        signal_order = ["GUCLU AL", "AL", "SAT", "GUCLU SAT"]
+        rows_table = []
+        for sig in signal_order + ["TOTAL"]:
+            row = {"Signal": sig}
+            for p_key, p_label in _periods:
+                pdf = _period_dfs[p_key]
+                if pdf.empty:
+                    row[f"{p_label} %"] = "—"
+                    row[f"{p_label} Ret"] = "—"
+                    continue
+                subset = pdf if sig == "TOTAL" else pdf[pdf["signal"] == sig]
+                n = len(subset)
+                if n == 0:
+                    row[f"{p_label} %"] = "—"
+                    row[f"{p_label} Ret"] = "—"
+                    continue
+                result_col = f"result_{p_key}"
+                return_col = f"return_{p_key}_pct"
+                acc = round(len(subset[subset[result_col] == "Basarili"]) / n * 100, 1)
+                ret = round(subset[return_col].mean(), 2) if return_col in subset.columns else 0
+                row[f"{p_label} %"] = f"{acc}% ({n})"
+                row[f"{p_label} Ret"] = f"{ret:+.2f}%"
+            rows_table.append(row)
+        st.dataframe(pd.DataFrame(rows_table), use_container_width=True, hide_index=True)
+
+    # Raw Data
+    if not df_all.empty:
+        st.markdown("---")
+        with st.expander("All Signal Data (Raw)", expanded=False):
+            display_cols = ["ticker", "signal", "score", "signal_date", "signal_price",
+                           "return_1d_pct", "result_1d", "return_3d_pct", "result_3d",
+                           "return_7d_pct", "result_7d", "return_14d_pct", "result_14d",
+                           "return_30d_pct", "result_30d", "source"]
+            available_cols = [c for c in display_cols if c in df_all.columns]
+            st.dataframe(df_all[available_cols], use_container_width=True, hide_index=True)
+
+
 # STRATEJİ ZAMAN MAKİNESİ SAYFASI
-# ─────────────────────────────────────────────────────────
 
 def render_time_machine_page(ui_lang: str):
     """
@@ -5416,7 +5072,7 @@ def render_time_machine_page(ui_lang: str):
     _styles = TimeMachineEngine.PORTFOLIO_STYLES
     _style_keys = [k for k in _styles if k != "custom"]
 
-    # ── Sidebar Kontroller ────────────────────────────────
+    # Sidebar Kontroller
     with st.sidebar:
         st.markdown("## Zaman Makinesi Ayarları")
         tm_years = st.selectbox(
@@ -5488,12 +5144,10 @@ def render_time_machine_page(ui_lang: str):
             "5️⃣ Stratejiye 0-100 arası not verir"
         )
 
-    # ── Önceki Çalışmaları Yükle ────────────────────────────
+    # Önceki Çalışmaları Yükle
     prev_runs = TimeMachineEngine.load_previous_runs(tm_market)
 
-    # ═══════════════════════════════════════════════════════
     # ÖZEL PORTFÖY TESTİ
-    # ═══════════════════════════════════════════════════════
     if run_custom_btn and custom_tickers:
         st.markdown("## 🎯 Özel Portföy — Zaman Makinesi Testi")
         _tm_run_analysis(
@@ -5501,9 +5155,7 @@ def render_time_machine_page(ui_lang: str):
             tm_bt_mode, tm_bt_news, is_custom=True
         )
 
-    # ═══════════════════════════════════════════════════════
     # PIT ANALİZİ ÇALIŞTIR
-    # ═══════════════════════════════════════════════════════
     if run_pit_btn:
         style_label = _styles[tm_style]["label"]
         st.markdown(f"## 🕰️ {tm_years} Yıl Öncesi — {style_label} Portföy Testi")
@@ -5534,14 +5186,12 @@ def render_time_machine_page(ui_lang: str):
         except Exception:
             pass
 
-        # ── BacktestEngine ile AL/SAT simülasyonu ──────────
+        # BacktestEngine ile AL/SAT simülasyonu
         picks = result.get("picks", [])
         if picks:
             _tm_run_backtest_for_picks(picks, tm_years, tm_market, tm_bt_mode, tm_bt_news)
 
-    # ═══════════════════════════════════════════════════════
     # BUGÜNKÜ CANLI PORTFÖY
-    # ═══════════════════════════════════════════════════════
     if run_live_btn:
         st.markdown("## 📊 Bugünkü Canlı Portföy")
         with st.spinner("Güncel veriler taranıyor..."):
@@ -5572,16 +5222,12 @@ def render_time_machine_page(ui_lang: str):
             st.warning("Kriterlere uyan hisse bulunamadı.")
         st.markdown("---")
 
-    # ═══════════════════════════════════════════════════════
     # PIT SONUÇLARINI GÖSTER (session_state'den)
-    # ═══════════════════════════════════════════════════════
     result = st.session_state.get("tm_last_result")
     if result:
         _tm_render_report(result)
 
-    # ═══════════════════════════════════════════════════════
     # ÖNCEKİ ÇALIŞMALAR
-    # ═══════════════════════════════════════════════════════
     if prev_runs:
         st.markdown("---")
         with st.expander(f"📜 Önceki Çalışmalar ({len(prev_runs)} kayıt)", expanded=False):
@@ -5615,9 +5261,7 @@ def render_time_machine_page(ui_lang: str):
     )
 
 
-# ─────────────────────────────────────────────────────────
 # ZAMAN MAKİNESİ YARDIMCI FONKSİYONLARI
-# ─────────────────────────────────────────────────────────
 
 def _tm_run_analysis(tickers: list, years_back: int, market: str,
                      style: str, bt_mode: str, bt_news: bool,
@@ -5720,7 +5364,7 @@ def _tm_render_report(result: dict):
     st.markdown("---")
     st.markdown(f"## 📋 Strateji Raporu — {result['pit_date']}'den Bugüne")
 
-    # ── Metrik Kartları ─────────────────────────────────
+    # Metrik Kartları
     m1, m2, m3, m4, m5 = st.columns(5)
     grade = result["grade"]
     grade_color = "#22c55e" if grade >= 65 else "#f97316" if grade >= 40 else "#ef4444"
@@ -5737,22 +5381,20 @@ def _tm_render_report(result: dict):
               delta=f"%{result['alpha']:+.1f}", delta_color=alpha_color)
     m5.metric("Kazanma Oranı", f"%{report['win_rate']:.0f}")
 
-    # ── Gauge Chart ─────────────────────────────────────
+    # Gauge Chart
     try:
         fig_gauge = create_gauge_chart(grade, title="Strateji Zaman Makinesi Notu")
         st.plotly_chart(fig_gauge, use_container_width=True)
     except Exception:
         pass
 
-    # ═══════════════════════════════════════════════════════
     # ANA SEKMELER
-    # ═══════════════════════════════════════════════════════
     tab_charts, tab_grade, tab_consist, tab_risk, tab_daily = st.tabs([
         "📈 AL/SAT Grafikleri", "📊 Geriye Dönük Skor",
         "🔍 Tutarlılık Analizi", "⚠️ Riskli Hisseler", "📅 Günlük Gözlem"
     ])
 
-    # ── TAB 1: AL/SAT GRAFİKLERİ + EQUITY + İŞLEM GEÇMİŞİ ──
+    # TAB 1: AL/SAT GRAFİKLERİ + EQUITY + İŞLEM GEÇMİŞİ
     with tab_charts:
         bt_results = st.session_state.get("tm_bt_results", {})
         bt_period = st.session_state.get("tm_bt_period", "3y")
@@ -5765,7 +5407,7 @@ def _tm_render_report(result: dict):
                         if "error" not in v and v.get("summary", {}).get("total_trades", 0) > 0}
 
             if valid_bt:
-                # ── Portföy Özet Metrikleri ──────────────
+                # Portföy Özet Metrikleri
                 all_rets = [v["summary"]["total_return_pct"] for v in valid_bt.values()]
                 all_wrs  = [v["summary"]["win_rate"] for v in valid_bt.values()]
                 port_ret = sum(all_rets) / len(all_rets)
@@ -5781,7 +5423,7 @@ def _tm_render_report(result: dict):
                 bm4.metric("En İyi", best_t[0], f"%{best_t[1]['summary']['total_return_pct']:+.1f}")
                 bm5.metric("En Kötü", worst_t[0], f"%{worst_t[1]['summary']['total_return_pct']:+.1f}")
 
-                # ── Hisse Bazlı Getiri Bar Chart ─────────
+                # Hisse Bazlı Getiri Bar Chart
                 bt_labels = list(valid_bt.keys())
                 bt_returns = [valid_bt[t]["summary"]["total_return_pct"] for t in bt_labels]
                 fig_bt_bar = go.Figure(go.Bar(
@@ -5801,11 +5443,11 @@ def _tm_render_report(result: dict):
                 )
                 st.plotly_chart(fig_bt_bar, use_container_width=True)
 
-                # ── Equity Curve (Tüm Portföy) ──────────
+                # Equity Curve (Tüm Portföy)
                 st.markdown("### 💰 Portföy Equity Curve (Sermaye Eğrisi)")
                 _tm_render_equity_curve(valid_bt, bt_run_id, style_color)
 
-                # ── Hisse Bazlı Detay (AL/SAT Grafikleri) ─
+                # Hisse Bazlı Detay (AL/SAT Grafikleri)
                 st.markdown("### 📈 Hisse Bazlı AL/SAT Grafikleri & İşlem Geçmişi")
                 for tk, tk_res in valid_bt.items():
                     summary = tk_res["summary"]
@@ -5845,7 +5487,7 @@ def _tm_render_report(result: dict):
                 if error_tickers:
                     st.warning(f"Şu hisselerde hata oluştu: {', '.join(error_tickers)}")
 
-    # ── TAB 2: GERİYE DÖNÜK SKOR ──────────────────────────
+    # TAB 2: GERİYE DÖNÜK SKOR
     with tab_grade:
         st.markdown(report["grade_text"])
         st.markdown("---")
@@ -5903,7 +5545,7 @@ def _tm_render_report(result: dict):
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
-    # ── TAB 3: TUTARLILIK ANALİZİ ──────────────────────────
+    # TAB 3: TUTARLILIK ANALİZİ
     with tab_consist:
         st.markdown("### 🔍 Strateji Tutarlılık Analizi")
         st.markdown(report["consistency"])
@@ -5932,7 +5574,7 @@ def _tm_render_report(result: dict):
             "- Stratejinin spekülatif yükselişe mi denk geldiğini değerlendirin"
         )
 
-    # ── TAB 4: RİSKLİ HİSSELER ────────────────────────────
+    # TAB 4: RİSKLİ HİSSELER
     with tab_risk:
         st.markdown("### ⚠️ Riskli Hisseler")
         st.caption("Gelecek 3 ayda en riskli görünen hisseler")
@@ -5956,7 +5598,7 @@ def _tm_render_report(result: dict):
         else:
             st.info("Risk verileri hesaplanamadı.")
 
-    # ── TAB 5: GÜNLÜK GÖZLEM ────────────────────────────
+    # TAB 5: GÜNLÜK GÖZLEM
     with tab_daily:
         st.markdown("### 📅 Günlük Gözlem Notu")
         st.markdown(report["daily_note"])
@@ -6189,9 +5831,7 @@ def _tm_render_technical_chart(ticker: str, period: str, run_id: str,
         st.warning(f"{ticker} teknik grafik oluşturulamadı: {exc}")
 
 
-# ─────────────────────────────────────────────────────────
 # US MARKETS PAGE
-# ─────────────────────────────────────────────────────────
 
 def render_us_markets_page(ui_lang: str, mode_override: str = None):
     """ABD Piyasaları — Analiz & Backtest sayfasi."""
@@ -6203,7 +5843,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
 
     us_mode = mode_override or "analysis"
 
-    # ── Sidebar ───────────────────────────────────────────
+    # Sidebar
     with st.sidebar:
         st.markdown("## US Market Settings")
 
@@ -6253,9 +5893,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
             us_bt_btn = st.button("Run Backtest", type="primary",
                                   use_container_width=True, key="us_bt_run")
 
-    # ════════════════════════════════════════════════════════
     # ANALYSIS MODE
-    # ════════════════════════════════════════════════════════
     if us_mode == "analysis":
         if not (us_analyze_btn and us_symbol):
             st.info("Select a US stock from the sidebar and click **Analyze**.")
@@ -6329,7 +5967,18 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
         else:
             signal, sig_color = "STRONG SELL", "#ef4444"
 
-        # ── Gauge Chart + Signal (BIST ile ayni) ──────────
+        # Sinyali doğrulama sistemine kaydet
+        _signal_map = {"STRONG BUY": "GUCLU AL", "BUY": "AL",
+                       "SELL": "SAT", "STRONG SELL": "GUCLU SAT"}
+        _mapped = _signal_map.get(signal)
+        if _mapped:
+            try:
+                _history_db.record_signal(us_symbol, _mapped, last_score,
+                                          last_price, source="live_us")
+            except Exception:
+                pass
+
+        # Gauge Chart + Signal (BIST ile ayni)
         col_gauge, col_signal = st.columns([1, 1.5])
         with col_gauge:
             st.markdown(
@@ -6354,7 +6003,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                 cap_str = f"${market_cap/1e9:.1f}B" if market_cap > 1e9 else f"${market_cap/1e6:.0f}M"
                 st.markdown(f"**Market Cap**: {cap_str}")
 
-        # ── Add to Portfolio button ────────────────────────
+        # Add to Portfolio button
         st.markdown("---")
         pf_col1, pf_col2, pf_col3 = st.columns([2, 1.5, 1])
         with pf_col1:
@@ -6367,7 +6016,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                 _history_db.add_portfolio(f"{us_symbol}:US", pf_cost, pf_qty)
                 st.success(f"{us_symbol} added to portfolio!")
 
-        # ── Combined chart: Candlestick + Volume + RSI ─────
+        # Combined chart: Candlestick + Volume + RSI
         st.markdown("---")
         fig = make_subplots(
             rows=3, cols=1, shared_xaxes=True,
@@ -6415,7 +6064,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
 
         st.plotly_chart(fig, use_container_width=True)
 
-        # ── News (English) ────────────────────────────────
+        # News (English)
         if NEWS_ENGINE_AVAILABLE:
             with st.expander("News Sentiment (EN)", expanded=False):
                 try:
@@ -6446,9 +6095,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
             )
             st.plotly_chart(fig_score, use_container_width=True)
 
-    # ════════════════════════════════════════════════════════
     # BACKTEST MODE
-    # ════════════════════════════════════════════════════════
     elif us_mode == "backtest":
         # Backtest calistir (buton basilmissa)
         if "us_bt_run_id" not in st.session_state:
@@ -6489,7 +6136,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
             st.session_state["us_bt_run_id"] = run_id
             st.rerun()
 
-        # ── Backtest sonuclari goster ──────────────────────
+        # Backtest sonuclari goster
         all_runs = BacktestEngine.load_runs()
         us_runs  = [r for r in all_runs if "_us_" in r.get("run_id", "")]
         if not us_runs:
@@ -6522,7 +6169,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
         if not run_rows:
             return
 
-        # ── TAB: Summary + Detail ───────────────────────
+        # TAB: Summary + Detail
         tab_summary, tab_detail = st.tabs(["Summary", "Stock Detail"])
 
         with tab_summary:
@@ -6610,10 +6257,10 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
 
                     st.markdown("---")
 
-                    # ── Price chart with BUY/SELL signals ────
+                    # Price chart with BUY/SELL signals
                     _render_price_chart_with_trades(sel_ticker, run_period, trades_raw, height=420, market="US")
 
-                    # ── Equity curve ─────────────────────────
+                    # Equity curve
                     returns_list = [t["return_pct"] for t in trades_raw]
                     equity = [100.0]
                     labels = ["Start"]
@@ -6644,7 +6291,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                     )
                     st.plotly_chart(fig_eq, use_container_width=True)
 
-                    # ── Trade list table ──────────────────────
+                    # Trade list table
                     with st.expander("Trade History", expanded=False):
                         trade_rows = []
                         for t in trades_raw:
@@ -6662,9 +6309,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                             st.dataframe(pd.DataFrame(trade_rows), use_container_width=True, hide_index=True)
 
 
-# ─────────────────────────────────────────────────────────
 # US STOCK LIST PAGE
-# ─────────────────────────────────────────────────────────
 
 def render_us_stock_list_page(ui_lang: str):
     """US hisse listesi — kategorilere ayrilmis, fiyat degisimli."""
@@ -6755,9 +6400,7 @@ def render_us_stock_list_page(ui_lang: str):
                     )
 
 
-# ─────────────────────────────────────────────────────────
 # US SYSTEM PORTFOLIOS (Scanner)
-# ─────────────────────────────────────────────────────────
 
 def render_us_system_portfolios_page(ui_lang: str):
     """US hisselerini tarar, Agresif/Defansif portfoyler olusturur + inline backtest."""
@@ -6767,7 +6410,7 @@ def render_us_system_portfolios_page(ui_lang: str):
         "Aggressive, Defensive, Momentum, Value and Stable portfolios."
     )
 
-    # ── Sidebar Kontroller (BIST ile simetrik) ──────────
+    # Sidebar Kontroller (BIST ile simetrik)
     with st.sidebar:
         st.markdown("## US Portfolio Settings")
         scan_btn = st.button("🔄 Scan US Stocks", type="primary",
@@ -6901,7 +6544,7 @@ def render_us_system_portfolios_page(ui_lang: str):
 
     valid = [r for r in scan_results if not r.error and r.data_rows >= 60 and r.current_price > 0]
 
-    # ── Portföy stilleri (TimeMachineEngine filtreleri ile uyumlu) ──
+    # Portföy stilleri (TimeMachineEngine filtreleri ile uyumlu)
     STYLE_INFO = {
         "aggressive": ("🚀 Aggressive", "#22c55e"),
         "defensive":  ("🛡️ Defensive", "#3b82f6"),
@@ -6941,7 +6584,7 @@ def render_us_system_portfolios_page(ui_lang: str):
         portfolios[style] = picks
         used_tickers.update(r.ticker for r in picks)
 
-    # ── Display ──────────────────────────
+    # Display
     def _render_portfolio_card(title, stocks, color):
         st.markdown(f"### {title}")
         if not stocks:
@@ -6977,7 +6620,7 @@ def render_us_system_portfolios_page(ui_lang: str):
                 with col:
                     _render_portfolio_card(label, portfolios[style], color)
 
-    # ── Inline Backtest ──────────────────
+    # Inline Backtest
     if run_bt_btn:
         all_bt_tickers = []
         for style, picks in portfolios.items():
@@ -7069,7 +6712,7 @@ def render_backtest_page(ui_lang: str):
         "**Komisyon: round-trip %0.4 dahil.**"
     )
 
-    # ── Sidebar ───────────────────────────────────────────
+    # Sidebar
     with st.sidebar:
         st.markdown("## ⚙️ Backtest Ayarları")
         # Sistem Portföyleri'nden gelen ön-yükleme varsa kullan
@@ -7143,7 +6786,7 @@ def render_backtest_page(ui_lang: str):
             f"Komisyon : round-trip %{BacktestEngine.COMMISSION*200:.1f}"
         )
 
-    # ── Backtest çalıştır ─────────────────────────────────
+    # Backtest çalıştır
     if run_btn and selected_tickers:
         progress_bar = st.progress(0, text="Başlatılıyor...")
         status_area  = st.empty()
@@ -7185,13 +6828,13 @@ def render_backtest_page(ui_lang: str):
         st.session_state["bt_run_id"] = run_id
         st.rerun()
 
-    # ── Sonuç yok ─────────────────────────────────────────
+    # Sonuç yok
     all_runs = BacktestEngine.load_runs()
     if not all_runs:
         st.info("📌 Sol menüden hisseleri seçip **▶ Backtest Çalıştır** butonuna bas.")
         return
 
-    # ── Run seçici ───────────────────────────────────────
+    # Run seçici
     run_ids = list(dict.fromkeys(r["run_id"] for r in all_runs))
     default_run = st.session_state.get("bt_run_id", run_ids[0])
     if default_run not in run_ids:
@@ -7217,12 +6860,10 @@ def render_backtest_page(ui_lang: str):
     if not run_rows:
         return
 
-    # ── TAB YAPISI ────────────────────────────────────────
+    # TAB YAPISI
     tab_ozet, tab_detay = st.tabs(["📊 Özet", "🔍 Hisse Detayı"])
 
-    # ════════════════════════════════════════════════════
     # TAB 1 — ÖZET
-    # ════════════════════════════════════════════════════
     with tab_ozet:
         valid = [r for r in run_rows if r["total_trades"] > 0]
 
@@ -7306,9 +6947,7 @@ def render_backtest_page(ui_lang: str):
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
-    # ════════════════════════════════════════════════════
     # TAB 2 — HİSSE DETAYI
-    # ════════════════════════════════════════════════════
     with tab_detay:
         ticker_opts = [r["ticker"] for r in run_rows]
         if not ticker_opts:
@@ -7332,10 +6971,10 @@ def render_backtest_page(ui_lang: str):
 
                 st.markdown("---")
 
-                # ── Grafik 1: Fiyat + AL/SAT noktaları ────────
+                # Grafik 1: Fiyat + AL/SAT noktaları
                 _render_price_chart_with_trades(sel_ticker, run_period, trades_raw, height=420)
 
-                # ── Grafik 2: Kümülatif sermaye eğrisi ─────────
+                # Grafik 2: Kümülatif sermaye eğrisi
                 returns_list = [t["return_pct"] for t in trades_raw]
                 equity = [100.0]
                 labels = ["Başlangıç"]
@@ -7367,7 +7006,7 @@ def render_backtest_page(ui_lang: str):
                 )
                 st.plotly_chart(fig_eq, use_container_width=True)
 
-                # ── İşlem tablosu ──────────────────────────────
+                # İşlem tablosu
                 with st.expander("📋 İşlem Listesi", expanded=False):
                     reason_map = {
                         "STOP_LOSS":   "🔴 Stop-Loss",
@@ -7405,7 +7044,7 @@ def render_backtest_page(ui_lang: str):
                         use_container_width=True, hide_index=True,
                     )
 
-                # ── Çıkış sebebi dağılımı ──────────────────────
+                # Çıkış sebebi dağılımı
                 col_pie, col_monthly = st.columns([1, 1.5])
                 with col_pie:
                     reason_counts = {}
@@ -7507,7 +7146,7 @@ def render_portfolio_page(ui_lang):
         )
         return
 
-    # ── Gerçek zamanlı fiyatlar (5 dak. cache, toplu çekim) ──────────────
+    # Gerçek zamanlı fiyatlar (5 dak. cache, toplu çekim)
     @st.cache_data(ttl=600, show_spinner=False)
     def _fetch_realtime_prices(tickers: tuple) -> dict:
         """Portföydeki tüm hisseler için anlık fiyatları tek sorguda çeker (BIST + US)."""
@@ -7600,27 +7239,12 @@ def render_portfolio_page(ui_lang):
 
         with st.container():
             st.markdown(f"""
-            <div style="background:#1e293b; border:1px solid #334155; border-radius:10px; padding:15px; margin-bottom:10px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div style="flex:1;">
-                        <span style="font-size:20px; font-weight:bold;">{display_tick}</span>{market_badge}<br>
-                        <span style="color:#9ca3af; font-size:14px;">{adet} Adet · Maliyet: {maliyet:.2f} {currency}</span>
-                    </div>
-                    <div style="flex:1; text-align:center;">
-                        <span style="font-size:16px;">Güncel: <b>{guncel_fiyat:.2f} {currency}</b></span><br>
-                        <span style="color:{kz_color}; font-size:15px; font-weight:bold;">K/Z: {kar_zarar:+.2f} {currency} ({kar_pct:+.1f}%)</span>
-                    </div>
-                    <div style="flex:1; text-align:right;">
-                        <span style="color:{c_color}; font-size:18px; font-weight:bold;">{sinyal}</span> <span style="font-size:14px;">({skor:.0f}/100)</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
             if st.button("Sil (Remove)", key=f"p_del_page_{tick}"):
                 _history_db.remove_portfolio(tick)
                 st.rerun()
 
-    # ── Genel Durum Özeti ─────────────────────────────────────────────────
+    # Genel Durum Özeti
     st.markdown("---")
     genel_kz  = total_val - total_cost
     genel_pct = (genel_kz / total_cost * 100) if total_cost > 0 else 0
@@ -7634,7 +7258,7 @@ def render_portfolio_page(ui_lang):
         unsafe_allow_html=True,
     )
 
-    # ── P&L Grafikleri ────────────────────────────────────────────────────
+    # P&L Grafikleri
     if len(portfolio_items) > 1:
         st.markdown("---")
         st.markdown("### Portföy Grafikleri" if ui_lang == "TR" else "### Portfolio Charts")
@@ -7677,7 +7301,7 @@ def render_portfolio_page(ui_lang):
             )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-# ── BIST Hisse Listesi (BIST30 + seçili BIST50/100) ───────────────────────────
+# BIST Hisse Listesi (BIST30 + seçili BIST50/100)
 BIST_STOCKS = {
     "BIST 30": [
         "AKBNK","ARCLK","ASELS","BIMAS","DOHOL","EKGYO","ENKAI","EREGL",
@@ -7700,14 +7324,6 @@ BIST_STOCKS = {
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_bist_daily_changes(tickers: tuple) -> dict:
     """
-    Verilen ticker'ların günlük fiyat ve değişimini çeker.
-    Sonuç: {ticker: {"price": float, "pct": float, "up": bool}}
-
-    yfinance kolon yapısı versiyona göre farklılık gösterebilir:
-      - Eski (<0.2.40): raw[sym]["Close"]  → (Ticker, Price) MultiIndex
-      - Yeni (>=0.2.40): raw["Close"][sym] → (Price, Ticker) MultiIndex
-      - Tek hisse: raw["Close"]            → flat Series
-    Üç formatı da destekleyecek şekilde normalize edilir.
     """
     result = {}
     if not tickers:
@@ -7849,7 +7465,7 @@ def render_bist_list_page(ui_lang):
 
 def render_analysis_page(ui_lang):
 
-    # ── Session state ile hisse seçimi ──────────────────────
+    # Session state ile hisse seçimi
     if "selected_ticker" not in st.session_state:
         st.session_state["selected_ticker"] = "THYAO"
 
@@ -7857,7 +7473,7 @@ def render_analysis_page(ui_lang):
         st.markdown("## BIST Investment Assistant")
         st.markdown("---")
 
-        # ── Manuel giriş ────────────────────────────────────
+        # Manuel giriş
         ticker_input = st.text_input(
             "Hisse Kodu / Stock Code",
             value=st.session_state["selected_ticker"],
@@ -7902,7 +7518,7 @@ def render_analysis_page(ui_lang):
         )
         st.markdown("---")
 
-        # ── Analiz Geçmişi ──────────────────────────────
+        # Analiz Geçmişi
         history = _history_db.load_all()
         if history:
             st.markdown("### " + ("Analiz Geçmişi" if ui_lang == "TR" else "Analysis History"))
@@ -7946,7 +7562,7 @@ def render_analysis_page(ui_lang):
     st.markdown(f"# {title_text}")
 
     if not analyze_btn:
-        # ── İlk açılış / Onboarding ──────────────────────────
+        # İlk açılış / Onboarding
         st.info(
             "Sol menüden hisse kodu girin ve **Analiz Et** butonuna basın."
             if ui_lang == "TR" else
@@ -7958,45 +7574,13 @@ def render_analysis_page(ui_lang):
         ):
             st.markdown(
                 """
-**Skor Nasıl Hesaplanır?**
-Her hisse 0-100 arasında puanlanır. 4 bileşenden oluşur:
-
-| Bileşen | Ağırlık | Ne Ölçer? |
-|---|---|---|
-| Teknik Analiz | %35 | RSI, MACD, SMA trendleri, hacim |
-| Haber Sentiment | %35 | 20+ kaynaktan haber duygu analizi |
-| Prim Potansiyeli | %20 | Analist hedef fiyat karşılaştırması |
-| Değerleme | %10 | F/K, PD/DD, ROE oranları |
-
-**Sinyal Anlamları:**
-- **GÜÇLÜ AL** (72+): Teknik ve temel veriler güçlü pozitif
-- **AL** (57-71): Genel görünüm olumlu
-- **NÖTR** (43-56): Belirgin yön yok, bekleme
-- **SAT** (30-42): Olumsuz sinyaller ağırlıkta
-- **GÜÇLÜ SAT** (<30): Güçlü negatif sinyaller
-                """ if ui_lang == "TR" else
+    """ if ui_lang == "TR" else
                 """
-**How Is the Score Calculated?**
-Each stock is rated 0-100, composed of 4 components:
-
-| Component | Weight | What It Measures |
-|---|---|---|
-| Technical Analysis | 35% | RSI, MACD, SMA trends, volume |
-| News Sentiment | 35% | Sentiment from 20+ news sources |
-| Upside Potential | 20% | Analyst target price comparison |
-| Valuation | 10% | P/E, P/B, ROE ratios |
-
-**Signal Meanings:**
-- **STRONG BUY** (72+): Strong positive technicals and fundamentals
-- **BUY** (57-71): Generally positive outlook
-- **NEUTRAL** (43-56): No clear direction, hold
-- **SELL** (30-42): Negative signals dominate
-- **STRONG SELL** (<30): Strong negative signals
-                """
+    """
             )
         return
 
-    # ── Input validation ──────────────────────────────────
+    # Input validation
     if not ticker_input or len(ticker_input) < 2:
         st.warning(
             "Lütfen geçerli bir hisse kodu girin (örn: THYAO, GARAN)."
@@ -8016,7 +7600,7 @@ Each stock is rated 0-100, composed of 4 components:
 
     start_time = time.time()
     
-    # ── Akıllı Cache (Önbellek) Kontrolü ──
+    # Akıllı Cache (Önbellek) Kontrolü
     cached_data = _history_db.load_full(ticker_input) if not force_update else None
     is_cached = False
     
@@ -8048,17 +7632,17 @@ Each stock is rated 0-100, composed of 4 components:
             st.error(score.stock.error)
             return
 
-        # ── Analiz sonucunu database'e kaydet ────────────────────
+        # Analiz sonucunu database'e kaydet
         try:
             _history_db.save(score)
         except Exception as _db_exc:
-            pass  # Database hatası analizi kesmesin
+            log.warning("Analiz kaydetme hatası: %s", _db_exc)
             
         elapsed = time.time() - start_time
 
     risk = RiskEngine.compute(score)
 
-    # ── Sistem Diagnostik Paneli (gizli, geliştirici modu) ───
+    # Sistem Diagnostik Paneli (gizli, geliştirici modu)
     with st.expander("🔧 Sistem Diagnostiği", expanded=False):
         t_diag = score.technical
         df_diag = score.stock.df
@@ -8078,20 +7662,7 @@ Each stock is rated 0-100, composed of 4 components:
         data_rows = len(df_diag) if df_diag is not None else 0
 
         st.markdown(f"""
-| Kontrol | Durum | Değer |
-|---------|-------|-------|
-| DataFrame satır sayısı | {"✅" if data_rows >= 200 else "⚠️"} | {data_rows} gün |
-| High kolonu | {"✅" if has_high else "❌"} | {"Mevcut" if has_high else "YOK"} |
-| Low kolonu  | {"✅" if has_low  else "❌"} | {"Mevcut" if has_low  else "YOK"} |
-| Volume kolonu | {"✅" if has_vol else "⚠️"} | {"Mevcut" if has_vol else "YOK"} |
-| ATR | {_chk(t_diag.atr)} | {t_diag.atr:.4f} TL (%{t_diag.atr_pct:.2f}) |
-| ADX | {_chk(t_diag.adx)} | {t_diag.adx:.1f} |
-| Stochastic K | {_chk(t_diag.stoch_k, zero_bad=False)} | {t_diag.stoch_k:.1f} |
-| Bollinger Pos | {ok} | {t_diag.bb_position:.3f} |
-| OBV Trend | {ok} | {t_diag.obv_trend} |
-| 52H Pozisyon | {ok} | {t_diag.week52_position:.3f} |
-| SMA Gap | {ok} | {t_diag.sma_gap_pct:+.2f}% |
-        """)
+    """)
         if t_diag.adx == 0.0:
             st.warning("ADX sıfır — log dosyasına (bist_analyzer.log) bak. Büyük ihtimal High/Low veri sorunu.")
         if t_diag.atr == 0.0:
@@ -8107,7 +7678,7 @@ Each stock is rated 0-100, composed of 4 components:
             else:
                 st.success("Log temiz — son 200 satırda uyarı/hata yok.")
 
-    # ── Şirket Bilgi Kartı ────────────────────────────────
+    # Şirket Bilgi Kartı
     info = score.stock.info
     if info:
         isim = info.get("longName", ticker_input)
@@ -8127,7 +7698,7 @@ Each stock is rated 0-100, composed of 4 components:
                 _history_db.add_portfolio(ticker_input, score.stock.current_price, 0)
                 st.success(f"{ticker_input} portföyünüze/favorilerinize eklendi!" if ui_lang == "TR" else f"{ticker_input} added!")
 
-    # ── Top Metrics (responsive: 3+3 layout) ─────────────
+    # Top Metrics (responsive: 3+3 layout)
     t = score.technical
     metrics = [
         (f"{score.stock.current_price:.2f}", "Fiyat (TL)" if ui_lang == "TR" else "Price"),
@@ -8154,7 +7725,7 @@ Each stock is rated 0-100, composed of 4 components:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Gauge + Sub-scores ────────────────────────────────
+    # Gauge + Sub-scores
     col_gauge, col_detail = st.columns([1, 1.5])
     with col_gauge:
         st.markdown(
@@ -8196,14 +7767,14 @@ Each stock is rated 0-100, composed of 4 components:
             st.markdown(f"**{loc_label}** — {_quality} ({weight}%)", help=loc_desc)
             st.progress(_val_int, text=f"{val:.0f}/100")
 
-    # ── Chart ─────────────────────────────────────────────
+    # Chart
     st.markdown("---")
     st.plotly_chart(
         create_candlestick_chart(score.stock.df, ticker_input),
         use_container_width=True,
     )
 
-    # ── Risk & Exit Strategy ─────────────────────────────
+    # Risk & Exit Strategy
     st.markdown("---")
     st.markdown("### 🛡️ Risk & Exit Strategy")
     if risk.saturation_warning:
@@ -8251,35 +7822,14 @@ Each stock is rated 0-100, composed of 4 components:
     with col_r1:
         st.markdown("**🔴 Stop-Loss Seviyeleri**")
         st.markdown(f"""
-        <table class="risk-table">
-            <tr><td>Tight Stop (1.5× ATR)</td><td><b>{risk.stop_loss_tight:.2f} TL</b></td>
-                <td style='color:#ef4444'>-%{tight_pct:.1f}</td></tr>
-            <tr><td>Normal Stop (2.5× ATR)</td><td><b>{risk.stop_loss_normal:.2f} TL</b></td>
-                <td style='color:#ef4444'>-%{normal_pct:.1f}</td></tr>
-            <tr><td>Wide Stop (SMA200)</td>    <td><b>{risk.stop_loss_wide:.2f} TL</b></td>
-                <td style='color:#ef4444'>-%{wide_pct:.1f}</td></tr>
-        </table>
-        <div style='font-size:11px;color:#64748b;margin-top:6px'>
-        Tight: scalp/kısa vade · Normal: swing trade · Wide: uzun vade/pozisyon
-        </div>""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
     with col_r2:
         st.markdown("**🟢 Hedef Fiyatlar**")
         st.markdown(f"""
-        <table class="risk-table">
-            <tr><td>Hedef 1 (2:1 R/R)</td>     <td><b>{risk.take_profit_1:.2f} TL</b></td>
-                <td style='color:#22c55e'>+%{tp1_pct:.1f}</td></tr>
-            <tr><td>Hedef 2 ({tp2_source})</td> <td><b>{risk.take_profit_2:.2f} TL</b></td>
-                <td style='color:#22c55e'>+%{tp2_pct:.1f}</td></tr>
-            <tr><td>Risk/Ödül Oranı</td>
-                <td><b style='color:{rr_color}'>{rr:.2f}</b></td>
-                <td style='color:{rr_color};font-size:12px'>{rr_label}</td></tr>
-        </table>
-        <div style='font-size:11px;color:#64748b;margin-top:6px'>
-        Hedef 1: Normal stop × 2 · Hedef 2: {tp2_source}
-        </div>""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-    # ── Teknik Gösterge Detayları ─────────────────────────
+    # Teknik Gösterge Detayları
     st.markdown("---")
     st.markdown("### Teknik Gösterge Detayları" if ui_lang == "TR" else "### Technical Indicator Details")
 
@@ -8444,7 +7994,7 @@ Each stock is rated 0-100, composed of 4 components:
                 unsafe_allow_html=True,
             )
 
-    # ── Phase 2 Tabs ──────────────────────────────────────
+    # Phase 2 Tabs
     if FAZ2_AVAILABLE:
         st.markdown("---")
         tab_kap, tab_target, tab_wl = st.tabs([
@@ -8513,7 +8063,7 @@ Each stock is rated 0-100, composed of 4 components:
                 for job in st.session_state.scheduler.get_jobs():
                     st.caption(f"{job['name']} -> {job['next_run']}")
 
-    # ── News Panel ─────────────────────────────────────────
+    # News Panel
     st.markdown("---")
     st.markdown("### News & Sentiment Analysis")
     news_result = getattr(score, "_news_result", None)
@@ -8579,81 +8129,9 @@ def run_app():
         initial_sidebar_state="expanded",
     )
     st.markdown("""
-    <style>
-    /* ── Dark Mode Optimized Theme ─────────────────── */
-    .stApp { background-color: #0f172a; color: #e2e8f0; }
-    .main .block-container { padding-top: 1rem; max-width: 1400px; }
-
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background-color: #1e293b;
-        border-right: 1px solid #334155;
-    }
-    section[data-testid="stSidebar"] .stMarkdown { color: #e2e8f0; }
-
-    /* Metric Cards */
-    .metric-card {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        border: 1px solid #334155;
-        border-radius: 12px; padding: 1rem 1.25rem; text-align: center;
-        transition: border-color 0.2s;
-    }
-    .metric-card:hover { border-color: #3b82f6; }
-    .metric-value { font-size: 1.8rem; font-weight: 700; }
-    .metric-label { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
-
-    /* Signal Box */
-    .signal-box {
-        font-size: 1.4rem; font-weight: 700; padding: 0.75rem;
-        border-radius: 10px; text-align: center;
-        background: #1e293b; border: 2px solid #334155;
-    }
-
-    /* Risk Table */
-    .risk-table { width: 100%; border-collapse: collapse; }
-    .risk-table td { padding: 6px 12px; border-bottom: 1px solid #334155; }
-    .risk-table tr:last-child td { border-bottom: none; }
-
-    /* Expander styling */
-    .streamlit-expanderHeader {
-        background-color: #1e293b !important;
-        border-radius: 8px;
-        color: #e2e8f0 !important;
-    }
-
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-        background-color: #1e293b;
-        border-radius: 8px;
-        padding: 4px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 6px;
-        color: #94a3b8;
-        padding: 8px 16px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #3b82f6 !important;
-        color: #ffffff !important;
-    }
-
-    /* Dataframe */
-    .stDataFrame { border-radius: 8px; overflow: hidden; }
-
-    /* Buttons */
-    .stButton > button[kind="primary"] {
-        background-color: #3b82f6;
-        border: none;
-        border-radius: 8px;
-    }
-    .stButton > button[kind="primary"]:hover {
-        background-color: #2563eb;
-    }
-    </style>
     """, unsafe_allow_html=True)
 
-    # ── Uygulama açılışında bekleyen sinyalleri otomatik kontrol et (1 kez) ──
+    # Uygulama açılışında bekleyen sinyalleri otomatik kontrol et (1 kez)
     if "validation_checked" not in st.session_state:
         try:
             _history_db.check_pending_signals()
@@ -8661,9 +8139,7 @@ def run_app():
             pass
         st.session_state["validation_checked"] = True
 
-    # ════════════════════════════════════════════════════════
     # TOP BAR — Market Secici (BIST vs US)
-    # ════════════════════════════════════════════════════════
     if "selected_market" not in st.session_state:
         st.session_state["selected_market"] = "BIST"
 
@@ -8703,9 +8179,7 @@ def run_app():
     active_market = "US" if "US" in selected_market_label else "BIST"
     st.session_state["selected_market"] = active_market
 
-    # ════════════════════════════════════════════════════════
     # SIDEBAR — Dil + Sayfa Navigasyonu (market'e göre)
-    # ════════════════════════════════════════════════════════
     with st.sidebar:
         ui_lang = st.selectbox(
             "Dil / Language",
@@ -8719,24 +8193,24 @@ def run_app():
             pages = [
                 "Piyasa Ozeti", "BIST Listesi", "Hisse Analizi",
                 "Portfolyum", "Backtest", "Sistem Portfolyleri",
-                "Zaman Makinesi", "Skor Dogrulama",
+                "Zaman Makinesi", "Sinyal Takip",
             ]
             page_icons = [
                 "speedometer2", "list-ul", "search",
                 "briefcase", "clock-history", "robot",
-                "hourglass-split", "clipboard-check",
+                "hourglass-split", "graph-up-arrow",
             ]
             _default_page = "Hisse Analizi"
         else:  # US
             pages = [
                 "US Analiz", "US Backtest",
                 "US Stock List", "US Portfolios",
-                "Portfolyum", "Zaman Makinesi",
+                "Portfolyum", "Zaman Makinesi", "US Sinyal Takip",
             ]
             page_icons = [
                 "search", "clock-history",
                 "list-ul", "robot",
-                "briefcase", "hourglass-split",
+                "briefcase", "hourglass-split", "graph-up-arrow",
             ]
             _default_page = "US Analiz"
 
@@ -8779,7 +8253,7 @@ def run_app():
 
         display_sidebar_alerts(ui_lang)
         st.markdown("---")
-        # ── Global Disclaimer ──────────────────────────────────
+        # Global Disclaimer
         st.markdown(
             "<div style='background:#1a1a2e;border:1px solid #f97316;border-radius:8px;"
             "padding:8px 12px;margin-top:8px;font-size:11px;color:#f97316;text-align:center'>"
@@ -8794,9 +8268,7 @@ def run_app():
             unsafe_allow_html=True,
         )
 
-    # ════════════════════════════════════════════════════════
     # PAGE ROUTING (safe wrapper — bir sayfa çökerse uygulama çökmez)
-    # ════════════════════════════════════════════════════════
     def _safe_render(fn, *args, **kwargs):
         """Sayfa render fonksiyonunu güvenli çalıştır. Hata olursa kullanıcıya göster."""
         try:
@@ -8828,7 +8300,7 @@ def run_app():
             _safe_render(render_smart_portfolio_page, ui_lang)
         elif page == "Zaman Makinesi":
             _safe_render(render_time_machine_page, ui_lang)
-        elif page == "Skor Dogrulama":
+        elif page == "Sinyal Takip":
             _safe_render(render_validation_page, ui_lang)
     else:  # US Markets
         if page == "US Analiz":
@@ -8843,10 +8315,10 @@ def run_app():
             _safe_render(render_portfolio_page, ui_lang)
         elif page == "Zaman Makinesi":
             _safe_render(render_time_machine_page, ui_lang)
+        elif page == "US Sinyal Takip":
+            _safe_render(render_us_validation_page, ui_lang)
 
-# ─────────────────────────────────────────────────────────
 # ENTRY POINT
-# ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import sys

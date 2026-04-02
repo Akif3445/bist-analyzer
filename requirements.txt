@@ -10,12 +10,9 @@ yfinance>=0.2.40
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
-anthropic>=0.18.0
 feedparser>=6.0.0
 
-# Turkish NLP sentiment (BERT model)
-transformers>=4.36.0
-torch>=2.1.0
-
-# Optional: .env file support (not needed on Streamlit Cloud)
-# python-dotenv>=1.0.0
+# Note: transformers + torch are NOT included here.
+# Streamlit Cloud free tier has ~1GB RAM — torch alone is 2GB+.
+# The app auto-falls back to keyword-based sentiment when BERT is unavailable.
+# To enable BERT locally: pip install transformers torch

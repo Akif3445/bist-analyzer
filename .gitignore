@@ -1,0 +1,33 @@
+# Secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# SQLite cache & logs
+*.db
+*.log
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude Code local config
+.claude/
+
+# Misc
+Streamlid.bat
+test_*.py
+faz2_modules.py

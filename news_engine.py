@@ -1,22 +1,4 @@
-"""
-BIST Smart Investment Assistant — Real News Engine v4
-======================================================
-Özellikler:
-  ✅ Kaynak güvenilirlik puanlaması (tier sistemi)
-  ✅ Resmi terim bonusu (KAP, Bilanço, İhale vb.)
-  ✅ Mükerrer haber tespiti (aynı haber → güven artar)
-  ✅ Spekülasyon filtresi (sosyal medya dili engellenir)
-  ✅ Dil seçeneği (TR / EN)
-  ✅ Sahte veri yok — veri yoksa score=50
-
-Kaynaklar:
-  Tier 1 (En Güvenilir): Bloomberg HT, NTV Ekonomi, Reuters TR, AA Ekonomi
-  Tier 2 (Güvenilir):    Investing.com TR, Finans Gündem, Mynet Finans
-  Tier 3 (Ek Kaynak):    Google News, Bing News, Yahoo Finance
-
-Kurulum:
-  pip install feedparser
-"""
+"""news_engine — Real-time news sentiment analysis for BIST/US stocks."""
 
 import re
 import time
@@ -49,22 +31,15 @@ except ImportError:
 
 logger = logging.getLogger("bist.news")
 
-# ─────────────────────────────────────────────────────────
-# BERT TÜRKÇE SENTİMENT ANALİZCİ (Singleton)
-# ─────────────────────────────────────────────────────────
+# BERT sentiment analyzer (singleton)
 
 class BertSentimentAnalyzer:
-    """
-    savasy/bert-base-turkish-sentiment-cased modeli ile Türkçe sentiment.
-    Singleton pattern: model yalnızca bir kez yüklenir (~500 MB, ilk seferinde indirilir).
-    transformers + torch kurulu değilse otomatik devre dışı kalır.
-    """
+    """Turkish sentiment via savasy/bert-base-turkish-sentiment-cased. Loads once."""
     _instance = None
     _pipe     = None
     _ready    = False
 
     MODEL_ID = "savasy/bert-base-turkish-sentiment-cased"
-    # Model çıktıları → bizim etiketlerimiz
     LABEL_MAP = {
         "positive": "olumlu",
         "negative": "olumsuz",
@@ -72,7 +47,7 @@ class BertSentimentAnalyzer:
         "POSITIVE": "olumlu",
         "NEGATIVE": "olumsuz",
         "NEUTRAL":  "notr",
-        "LABEL_0":  "olumsuz",  # bazı modeller 0/1/2 kullanır
+        "LABEL_0":  "olumsuz",
         "LABEL_1":  "notr",
         "LABEL_2":  "olumlu",
     }
@@ -83,7 +58,7 @@ class BertSentimentAnalyzer:
         return cls._instance
 
     def load(self) -> bool:
-        """Modeli yükle. Başarılıysa True döner."""
+        """Load the model. Returns True on success."""
         if self._ready:
             return True
         if not HF_OK:
@@ -99,19 +74,19 @@ class BertSentimentAnalyzer:
                 max_length=128,
             )
             self._ready = True
-            logger.info("BERT model hazır ✅")
+            logger.info("BERT model hazır")
             return True
         except Exception as exc:
             logger.error(f"BERT model yüklenemedi: {exc}")
             return False
 
     def predict(self, text: str) -> str:
-        """Metni sınıflandır. 'olumlu' | 'olumsuz' | 'notr' döner."""
+        """Returns 'olumlu' | 'olumsuz' | 'notr'."""
         label, _ = self.predict_with_confidence(text)
         return label
 
     def predict_with_confidence(self, text: str) -> tuple:
-        """(etiket, guven_skoru) döner. Guven 0.0-1.0 arasında."""
+        """Returns (label, confidence) where confidence is 0.0-1.0."""
         if not self._ready:
             return "notr", 0.0
         try:
@@ -125,9 +100,7 @@ class BertSentimentAnalyzer:
             return "notr", 0.0
 
 
-# Global BERT instance — ilk analyze_news() çağrısında yüklenir
-# Streamlit ortamında @st.cache_resource ile sarmallanarak hot-reload'da
-# modelin yeniden indirilmesi/yüklenmesi önlenir.
+# Global BERT instance, cached for Streamlit hot-reload
 try:
     import streamlit as _st
 
@@ -143,12 +116,9 @@ except Exception:
 
 import re as _re
 
-# ─────────────────────────────────────────────────────────
-# KATMAN 1 — GÜÇLÜ OVERRIDE (BERT'İ GEÇERSIZ KILAR)
-# Regex kalıpları — bu ifadeler bulunursa kesin karar verilir
-# ─────────────────────────────────────────────────────────
+# Layer 1 — strong regex overrides (bypass BERT if matched)
 
-# Kesin pozitif kalıplar (yüzde X artış, rekor kâr, temettü açıkladı vb.)
+# Strong positive patterns
 _STRONG_POS_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r"yüzde\s*\d+[\.,]?\d*\s*(artış|büyüme|yükseliş|arttu)",
     r"%\s*\d+[\.,]?\d*\s*(artış|büyüme|yükseliş)",
@@ -166,11 +136,11 @@ _STRONG_POS_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r"(anlaşma|sözleşme|ihale)\s+(imzaladı|kazandı|aldı)",
     r"(lisans|ruhsat)\s+(aldı|kazandı)",
     r"(büyüme|genişleme)\s+(kaydetti|gerçekleştirdi)",
-    r"(satışlar|gelir|ciro)\s+\d",           # Satışlar %X artış gibi
+    r"(satışlar|gelir|ciro)\s+\d",
     r"(güçlü|kuvvetli)\s+(performans|sonuç|büyüme)",
     r"(tahvil|bono)\s+(başarıyla|üstü talep)",
     r"(borsa|hisse)\s+değer",
-    # İngilizce (EN haberleri için)
+    # English
     r"(record\s+)?(profit|revenue|earnings|sales)\s+(surge|jump|soar|rise)",
     r"(raised?|raised)\s+(target|price\s+target)",
     r"(strong\s+buy|outperform|overweight)",
@@ -178,9 +148,18 @@ _STRONG_POS_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r"(capacity|power)\s+(increase|expansion|growth)",
     r"(new\s+)?(contract|deal|agreement)\s+(signed|won|awarded)",
     r"beat\s+(estimate|expectation)",
+    # Banking
+    r"(aktif|mevduat|kredi)\s+(büyüme|artış)\s+\d",
+    r"(roe|özkaynak\s+karlılığı)\s+(rekor|artış|yükseldi)",
+    # Energy / industrial
+    r"\d+\s*mw[a-z']*\s*(güç|kapasite|santral)",
+    r"(yeni\s+)?(fabrika|tesis)\s+(açıldı|devreye|faaliyete)",
+    # General strong positive
+    r"(çeyreklik|yıllık)\s+(kar|kâr)\s+\d",
+    r"(pazar\s+payı)\s+(artışı|yükseldi|büyüdü)",
 ]]
 
-# Kesin negatif kalıplar
+# Strong negative patterns
 _STRONG_NEG_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r"zarar\s+(açıkladı|bildirdi|yazdı|etti)",
     r"(net\s+)?zarar\s+\d",
@@ -199,76 +178,132 @@ _STRONG_NEG_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r"(dava|soruşturma|ceza)\s+(açıldı|uygulandı|kesildi)",
     r"temerrüt",
     r"(üretim\s+durdu|fabrika\s+kapandı)",
-    # İngilizce
+    # English
     r"(net\s+)?loss\s+of\s+\$?\d",
     r"(bankruptcy|insolvency|default)",
     r"(credit\s+rating)\s+(downgraded|cut|lowered)",
     r"(missed?|missed)\s+(estimate|expectation|target)",
     r"\d+%\s+(decline|drop|fall|decrease|loss)",
     r"(profit\s+warning|earnings\s+warning)",
+    # Banking
+    r"(takipteki\s+alacak|npl)\s+(artış|arttı|yükseldi)",
+    r"(sermaye\s+yetersizliği|likidite\s+sıkışıklığı)",
+    # General strong negative
+    r"(pazar\s+payı)\s+(kaybı|düştü|geriledi)",
+    r"(üretim|faaliyet)\s+(durdurul|durduruldu|askıya\s+alındı)",
+    r"(çeyreklik|yıllık)\s+zarar\s+\d",
 ]]
 
-# ─────────────────────────────────────────────────────────
-# KATMAN 2 — ANAHTAR KELİME LİSTELERİ (BERT belirsizse)
-# ─────────────────────────────────────────────────────────
+# Layer 2 — weighted keyword lists (fallback when BERT is uncertain)
 
-FIN_POSITIVE = [
-    # Büyüme / artış
-    "artış", "artırdı", "artıyor", "arttı", "yükseliş", "yükseldi",
-    "yükselt", "büyüme", "büyüdü", "büyüyor", "rekor", "zıpladı", "sıçradı",
-    "tarihi yüksek", "en yüksek", "güçlü", "kuvvetli", "başarılı",
-    # Kazanç / finansal
-    "kar", "kâr", "temettü", "net kar", "net kâr", "faaliyet karı",
-    "gelir artışı", "ciro artışı", "ihracat artışı", "satış artışı",
-    "kar payı", "pozitif", "olumlu", "iyileşme",
-    # Enerji sektörü
-    "kurulu güç", "kapasite artışı", "devreye aldı", "mw", "yenilenebilir",
-    "santral", "rüzgar", "güneş enerjisi", "lisans aldı", "türbin",
-    "enerji üretimi", "elektrik üretimi",
-    # Yatırım / anlaşma
-    "yatırım", "anlaşma", "sözleşme", "ihale kazandı", "sözleşme imzaladı",
-    "hedef yükseltildi", "hedef artırıldı", "tavsiye yinelendi",
-    "kredi notu artırıldı", "kredi notu yükseltildi",
-    # İngilizce
-    "growth", "increase", "profit", "revenue", "record", "gain",
-    "strong", "beat", "outperform", "upgrade", "buy", "dividend",
-    # English financial (expanded)
-    "earnings beat", "revenue growth", "raised guidance", "price target raised",
-    "analyst upgrade", "bullish", "breakout", "all-time high", "ath",
-    "market cap", "cash flow", "buyback", "share repurchase", "guidance raised",
-    "exceeds expectations", "better than expected", "blowout quarter",
-    "margin expansion", "double upgrade", "overweight", "accumulate",
+# (keyword, weight): 1=normal, 2=strong, 3=very strong
+FIN_POSITIVE_WEIGHTED = [
+    # 3x
+    ("rekor kar", 3), ("rekor kâr", 3), ("tarihi yüksek", 3),
+    ("beklentinin üzerinde", 3), ("beklenti üstü", 3),
+    ("güçlü al", 3), ("al tavsiyesi", 3), ("hedef yükseltildi", 3),
+    ("hedef artırıldı", 3), ("kredi notu artırıldı", 3),
+    ("kredi notu yükseltildi", 3), ("not artırımı", 3),
+    ("ihale kazandı", 3), ("sözleşme imzaladı", 3),
+    # 2x
+    ("net kar", 2), ("net kâr", 2), ("faaliyet karı", 2),
+    ("temettü", 2), ("kar payı", 2), ("kâr payı", 2),
+    ("gelir artışı", 2), ("ciro artışı", 2), ("satış artışı", 2),
+    ("ihracat artışı", 2), ("kapasite artışı", 2),
+    ("sermaye artırımı", 2), ("bedelsiz", 2), ("pay geri alımı", 2),
+    ("devreye aldı", 2), ("üretime geçti", 2),
+    ("anlaşma", 2), ("sözleşme", 2), ("ortaklık", 2),
+    ("birleşme", 2), ("satın alma", 2),
+    ("rekor", 2), ("başarılı", 2), ("güçlü büyüme", 2),
+    # Banking
+    ("aktif büyüme", 2), ("kredi büyümesi", 2), ("mevduat artışı", 2),
+    ("sermaye yeterliliği", 2), ("takipteki alacak azaldı", 2),
+    ("roe artışı", 2), ("npl düştü", 2),
+    # Energy
+    ("kurulu güç", 2), ("santral", 2), ("lisans aldı", 2),
+    ("türbin", 2), ("megavat", 2), ("enerji üretimi", 2),
+    # Construction / real estate
+    ("proje teslimi", 2), ("konut satışı", 2), ("arsa kazandı", 2),
+    # 1x
+    ("artış", 1), ("artırdı", 1), ("artıyor", 1), ("arttı", 1),
+    ("yükseliş", 1), ("yükseldi", 1), ("büyüme", 1), ("büyüdü", 1),
+    ("sıçradı", 1), ("zıpladı", 1), ("toparlandı", 1), ("toparlanma", 1),
+    ("güçlü", 1), ("kuvvetli", 1), ("olumlu", 1), ("pozitif", 1),
+    ("iyileşme", 1), ("iyileşti", 1), ("genişleme", 1),
+    ("kar", 1), ("kâr", 1), ("kazanç", 1), ("yatırım", 1),
+    ("ihracat", 1), ("kapasite", 1), ("büyüyor", 1),
+    ("ralli", 1), ("değerlenme", 1), ("destek buldu", 1),
+    ("mw", 1), ("rüzgar", 1), ("güneş enerjisi", 1), ("yenilenebilir", 1),
+    # English 3x
+    ("earnings beat", 3), ("record profit", 3), ("raised guidance", 3),
+    ("price target raised", 3), ("strong buy", 3), ("double upgrade", 3),
+    ("blowout quarter", 3), ("exceeds expectations", 3),
+    # English 2x
+    ("revenue growth", 2), ("analyst upgrade", 2), ("bullish", 2),
+    ("breakout", 2), ("all-time high", 2), ("buyback", 2),
+    ("share repurchase", 2), ("margin expansion", 2),
+    ("better than expected", 2), ("overweight", 2), ("accumulate", 2),
+    ("guidance raised", 2),
+    # English 1x
+    ("growth", 1), ("increase", 1), ("profit", 1), ("revenue", 1),
+    ("record", 1), ("gain", 1), ("strong", 1), ("beat", 1),
+    ("outperform", 1), ("upgrade", 1), ("buy", 1), ("dividend", 1),
+    ("cash flow", 1),
 ]
 
-FIN_NEGATIVE = [
-    # Kayıp / düşüş
-    "zarar", "kayıp", "düşüş", "azaldı", "geriledi", "düştü", "azalma",
-    "beklentinin altında", "hayal kırıklığı", "uyarı", "risk",
-    "gerileme", "zayıflama", "kötüleşme", "negatif", "olumsuz",
-    # Borç / iflас
-    "borç", "iflas", "konkordato", "temerrüt", "temerrut",
-    "kredi notu düşürüldü", "kredi notu indirildi",
-    # Yönetim
-    "istifa", "görevden ayrıldı", "görevden alındı", "ayrıldı",
-    # Regülasyon
-    "ceza", "soruşturma", "dava", "suçlama", "yaptırım",
-    # İngilizce
-    "loss", "decline", "drop", "fall", "miss", "warn", "risk",
-    "downgrade", "sell", "underperform", "bankruptcy", "default",
-    # English financial (expanded)
-    "earnings miss", "revenue decline", "lowered guidance", "price target cut",
-    "analyst downgrade", "bearish", "breakdown", "52-week low",
-    "debt concern", "cash burn", "dilution", "share offering", "guidance cut",
-    "below expectations", "worse than expected", "disappointing quarter",
-    "margin compression", "double downgrade", "underweight", "reduce",
+FIN_NEGATIVE_WEIGHTED = [
+    # 3x
+    ("iflas", 3), ("konkordato", 3), ("temerrüt", 3), ("temerrut", 3),
+    ("beklentinin altında", 3), ("hayal kırıklığı", 3),
+    ("kredi notu düşürüldü", 3), ("kredi notu indirildi", 3),
+    ("not indirimi", 3), ("görevden alındı", 3),
+    ("üretim durdu", 3), ("fabrika kapandı", 3),
+    # 2x
+    ("zarar", 2), ("net zarar", 2), ("faaliyet zararı", 2),
+    ("kayıp", 2), ("büyük düşüş", 2), ("sert düşüş", 2),
+    ("değer kaybı", 2), ("deger kaybi", 2),
+    ("borç yükü", 2), ("borç artışı", 2),
+    ("ceza", 2), ("soruşturma", 2), ("dava", 2), ("yaptırım", 2),
+    ("istifa", 2), ("görevden ayrıldı", 2),
+    ("sözleşme fesih", 2), ("iptal edildi", 2),
+    ("sat sinyali", 2), ("satış baskısı", 2), ("satis baskisi", 2),
+    ("hedef düşürüldü", 2), ("hedef indirildi", 2),
+    # Banking
+    ("takipteki alacak arttı", 2), ("npl artışı", 2),
+    ("sermaye yetersizliği", 2), ("kredi riski", 2),
+    ("tahsili gecikmiş", 2),
+    # 1x
+    ("düşüş", 1), ("azaldı", 1), ("geriledi", 1), ("düştü", 1),
+    ("azalma", 1), ("gerileme", 1), ("zayıflama", 1), ("kötüleşme", 1),
+    ("negatif", 1), ("olumsuz", 1), ("risk", 1), ("uyarı", 1),
+    ("baskı", 1), ("belirsizlik", 1), ("daralma", 1),
+    ("çekilme", 1), ("erteleme", 1), ("tasfiye", 1),
+    ("borç", 1), ("iptal", 1), ("kaybetti", 1),
+    ("düşüş trendi", 1), ("düşebilir", 1), ("destek kırdı", 1),
+    # English 3x
+    ("bankruptcy", 3), ("default", 3), ("profit warning", 3),
+    ("earnings warning", 3), ("lowered guidance", 3),
+    ("double downgrade", 3), ("below expectations", 3),
+    # English 2x
+    ("earnings miss", 2), ("revenue decline", 2), ("price target cut", 2),
+    ("analyst downgrade", 2), ("bearish", 2), ("breakdown", 2),
+    ("52-week low", 2), ("debt concern", 2), ("cash burn", 2),
+    ("dilution", 2), ("guidance cut", 2), ("margin compression", 2),
+    ("worse than expected", 2), ("disappointing quarter", 2),
+    ("underweight", 2), ("reduce", 2),
+    # English 1x
+    ("loss", 1), ("decline", 1), ("drop", 1), ("fall", 1),
+    ("miss", 1), ("warn", 1), ("downgrade", 1), ("sell", 1),
+    ("underperform", 1), ("insolvency", 1), ("share offering", 1),
 ]
+
+# Backward-compat flat lists (strong patterns ve _classify_keywords için)
+FIN_POSITIVE = [w for w, _ in FIN_POSITIVE_WEIGHTED]
+FIN_NEGATIVE = [w for w, _ in FIN_NEGATIVE_WEIGHTED]
 
 
 def _check_strong_patterns(text: str):
-    """
-    Kesin pozitif/negatif regex kalıplarını kontrol et.
-    Dönüş: 'olumlu' | 'olumsuz' | None (emin değil)
-    """
+    """Returns 'olumlu' | 'olumsuz' | None."""
     for pat in _STRONG_POS_PATTERNS:
         if pat.search(text):
             return "olumlu"
@@ -279,14 +314,13 @@ def _check_strong_patterns(text: str):
 
 
 def _classify_financial_keywords(text: str) -> str:
-    """Anahtar kelime tabanlı finans sentiment (güçlü override sonrası devreye girer)."""
+    """Ağırlıklı finans kelime bankası ile sentiment (güçlü override sonrası devreye girer)."""
     tl = text.lower()
-    pos = sum(1 for w in FIN_POSITIVE if w in tl)
-    neg = sum(1 for w in FIN_NEGATIVE if w in tl)
+    pos = sum(w for word, w in FIN_POSITIVE_WEIGHTED if word in tl)
+    neg = sum(w for word, w in FIN_NEGATIVE_WEIGHTED if word in tl)
     if pos > neg:   return "olumlu"
     if neg > pos:   return "olumsuz"
     return "notr"
-# ─────────────────────────────────────────────────────────
 # Tier 1: Kurumsal, editöryal denetimli, finans odaklı
 # Tier 2: Güvenilir finans/ekonomi siteleri
 # Tier 3: Arama motorları, genel haberler
@@ -328,9 +362,7 @@ def _get_tier(source: str) -> int:
 def _get_tier_label(source: str) -> str:
     return SOURCE_TIERS.get(source, {}).get("label", "Grade C")
 
-# ─────────────────────────────────────────────────────────
 # SPEKÜLASYON FİLTRESİ
-# ─────────────────────────────────────────────────────────
 # Bu kelimeler geçen haberler spekülatif sayılır, skordan düşülür
 
 SPECULATION_WORDS = [
@@ -345,9 +377,7 @@ SPECULATION_WORDS = [
     "manipülasyon", "manipülasyon var", "yapay yükseliş",
 ]
 
-# ─────────────────────────────────────────────────────────
 # RESMİ TERİM BONUSU — güven skoru artırıcılar
-# ─────────────────────────────────────────────────────────
 
 OFFICIAL_TERMS = {
     # KAP ve yasal bildirimler (+15 puan bonus)
@@ -407,9 +437,7 @@ def _official_bonus(title: str) -> int:
             bonus = max(bonus, pts)  # En yüksek bonus
     return bonus
 
-# ─────────────────────────────────────────────────────────
 # SENTIMENT KELİME BANKASI
-# ─────────────────────────────────────────────────────────
 
 POSITIVE_WORDS = [
     "kar", "kâr", "kazanc", "kazanç", "rekor", "buyume", "büyüme",
@@ -425,6 +453,14 @@ POSITIVE_WORDS = [
     "al sinyali", "destek buldu", "yukselebilir", "yükselebilir",
     "hedef fiyat yukari", "rating artirimi", "not artirimi",
     "sözleşme imzalandı", "ihale kazanıldı", "yeni sipariş",
+    # Bankacılık
+    "aktif buyume", "aktif büyüme", "kredi buyumesi", "kredi büyümesi",
+    "mevduat artisi", "mevduat artışı", "npl dustu", "npl düştü",
+    # Enerji
+    "megavat", "enerji uretimi", "enerji üretimi", "santral",
+    # Genel ek
+    "pazar payi", "pazar payı", "yeni musteri", "yeni müşteri",
+    "stratejik", "verimlilik", "tasarruf",
 ]
 
 NEGATIVE_WORDS = [
@@ -438,11 +474,16 @@ NEGATIVE_WORDS = [
     "dusus trendi", "düşüş trendi", "dusebilir", "düşebilir",
     "hedef fiyat asagi", "rating indirimi", "not indirimi",
     "sozlesme fesih", "sözleşme fesih", "iptal edildi",
+    # Bankacılık
+    "takipteki alacak", "tahsili gecikmis", "tahsili gecikmiş",
+    "sermaye yetersizligi", "sermaye yetersizliği",
+    # Genel ek
+    "konkordato", "temerrrut", "temerrüt", "haciz", "icra",
+    "maliyet artisi", "maliyet artışı", "enflasyon baskisi",
+    "operasyonel zarar", "nakit sikintisi", "nakit sıkıntısı",
 ]
 
-# ─────────────────────────────────────────────────────────
 # ŞİRKET VE DİL HARİTALARI
-# ─────────────────────────────────────────────────────────
 
 TICKER_TO_TR = {
     "THYAO": "Türk Hava Yolları", "GARAN": "Garanti Bankası",
@@ -475,11 +516,9 @@ TICKER_TO_EN = {
     "MGROS": "Migros retail",     "PETKM": "Petkim petrochemical",
 }
 
-# ─────────────────────────────────────────────────────────
 # HISSE TAKMAİSİM / ALIAS HARİTASI
 # Başlık eşleşmesini genişletir: ticker kodu veya tam ad eşleşmezse
 # bu listeden biri başlıkta geçiyorsa haber "ilgili" sayılır.
-# ─────────────────────────────────────────────────────────
 
 TICKER_ALIASES: dict[str, list[str]] = {
     "THYAO": ["thy", "türk hava", "türk havayol", "turkish airlines", "thao"],
@@ -543,9 +582,7 @@ HEADERS = {
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8",
 }
 
-# ─────────────────────────────────────────────────────────
 # VERİ SINIFLARI
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class NewsItem:
@@ -582,9 +619,7 @@ class NewsAnalysisResult:
     sentiment_engine: str = "kelime_sayma"  # "bert" | "kelime_sayma"
 
 
-# ─────────────────────────────────────────────────────────
 # YARDIMCI FONKSİYONLAR
-# ─────────────────────────────────────────────────────────
 
 def _classify_keywords(text: str) -> str:
     """Genel anahtar kelime tabanlı fallback sentiment."""
@@ -598,12 +633,10 @@ def _classify_keywords(text: str) -> str:
 
 BERT_CONFIDENCE_THRESHOLD = 0.70  # BERT bu güvenin altındaysa finans sözlüğü devreye girer
 
-# ─────────────────────────────────────────────────────────
 # TEKNİK FİYAT HAREKETİ FİLTRESİ
 # "HEKTS yüzde 3 yükseldi" gibi nötr borsa hareketi haberleri
 # Katman 1 regex'i tarafından yanlış etiketlenir. Bu fonksiyon
 # bu tür başlıkları tespit ederek Katman 1'i devre dışı bırakır.
-# ─────────────────────────────────────────────────────────
 
 _TECHNICAL_MOVE_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     # "HEKTS yüzde X yükseldi/geriledi" — salt fiyat hareketi
@@ -630,19 +663,24 @@ def _is_technical_price_move(text: str) -> bool:
 def _classify(text: str) -> str:
     """
     Hibrit Sentiment Sınıflandırma:
-    0. TEKNİK FİYAT HAREKETİ → Katman 1 atlanır (yanlış override önlenir)
-    1. BERT çalışıyorsa ve güven >= %70 → BERT kararı geçerli
+    0. Boş/None metin kontrolü
+    1. TEKNİK FİYAT HAREKETİ → Katman 1 atlanır (yanlış override önlenir)
+    2. BERT çalışıyorsa ve güven >= %70 → BERT kararı geçerli
     2. BERT çalışıyor ama güven < %70 → Finans anahtar kelimelerini dene
        Finans sozlugu netsiz ise BERT kararini kullan
     3. BERT kurulu degilse -> Genel anahtar kelime sayma
     """
-    # ── KATMAN 0: TEKNİK FİYAT HAREKETİ KONTROLÜ ──
+    # Boş metin kontrolü
+    if not text or not text.strip():
+        return "notr"
+
+    # KATMAN 0: TEKNİK FİYAT HAREKETİ KONTROLÜ
     # Salt fiyat hareketi haberlerinde Katman 1 regex hatalı override yapar.
     # Bu haberleri direkt BERT/kelime sayıma yönlendir.
     is_tech_move = _is_technical_price_move(text)
 
     if not is_tech_move:
-        # ── KATMAN 1: GÜÇLÜ REGEX OVERRIDE ──
+        # KATMAN 1: GÜÇLÜ REGEX OVERRIDE
         strong = _check_strong_patterns(text)
         if strong is not None:
             logger.debug(f"Güçlü override: {strong!r} | metin={text[:60]!r}")
@@ -650,7 +688,7 @@ def _classify(text: str) -> str:
     else:
         logger.debug(f"Teknik fiyat hareketi → Katman 1 atlandı | metin={text[:60]!r}")
 
-    # ── KATMAN 2: BERT (kurulu ve hazırsa) ──
+    # KATMAN 2: BERT (kurulu ve hazırsa)
     if not _bert._ready:
         return _classify_keywords(text)
 
@@ -661,7 +699,7 @@ def _classify(text: str) -> str:
         logger.debug(f"BERT kararı: {bert_label} ({bert_conf:.0%})")
         return bert_label
 
-    # ── KATMAN 3: BERT belirsiz → finans anahtar kelimeleri ──
+    # KATMAN 3: BERT belirsiz → finans anahtar kelimeleri
     fin_label = _classify_financial_keywords(text)
     if fin_label != "notr":
         logger.debug(
@@ -706,18 +744,29 @@ def _normalize_title(title: str) -> str:
 
 def _is_relevant(title: str, ticker: str, company_tr: str) -> bool:
     """Haberin belirtilen hisse ile ilgili olup olmadığını kontrol eder.
-    Sırasıyla: ticker kodu, parantezli ticker, şirket adı, alias listesi.
+    Sırasıyla: ticker kodu, parantezli ticker, şirket adı parçaları, alias listesi.
     """
     tl = title.lower()
     tu = ticker.upper()
 
+    # 1. Ticker kodu direkt geçiyor mu?
     if tu in title.upper():
         return True
     if f"({tu})" in title:
         return True
-    if company_tr and company_tr[:6].lower() in tl:
-        return True
-    # Alias kontrolü
+
+    # 2. Şirket adının anlamlı parçalarını kontrol et
+    if company_tr:
+        # "Türk Hava Yolları" → ["türk", "hava", "yolları"] → en az 2 kelime eşleşsin
+        name_parts = [p.lower() for p in company_tr.split() if len(p) >= 3]
+        if len(name_parts) >= 2:
+            matches = sum(1 for p in name_parts if p in tl)
+            if matches >= 2:
+                return True
+        elif name_parts and name_parts[0] in tl:
+            return True
+
+    # 3. Alias kontrolü
     for alias in TICKER_ALIASES.get(tu, []):
         if alias.lower() in tl:
             return True
@@ -746,9 +795,7 @@ def _compute_confidence(item: NewsItem) -> float:
 
     return round(max(0.0, min(100.0, base)), 1)
 
-# ─────────────────────────────────────────────────────────
 # RSS ÇEKME ALTYAPISI
-# ─────────────────────────────────────────────────────────
 
 def _safe_feedparser_parse(url: str, timeout: int = 12):
     """feedparser.parse() wrapper — URL'den çekerken timeout koruması ekler."""
@@ -799,6 +846,8 @@ def _fetch_rss(
             return []
 
         feed = feedparser.parse(resp.content)
+        if not feed or not hasattr(feed, "entries") or not feed.entries:
+            return []
 
         for entry in feed.entries[:60]:
             title = _clean_title(entry.get("title") or "")
@@ -840,9 +889,7 @@ def _fetch_rss(
 
     return items[:max_results]
 
-# ─────────────────────────────────────────────────────────
 # KAYNAK FONKSİYONLARI
-# ─────────────────────────────────────────────────────────
 
 def _src_haberturk(ticker, cutoff):
     """Habertürk Ekonomi — test'te ✅ doğrulandı."""
@@ -961,7 +1008,7 @@ def _src_google_tr(ticker, cutoff):
         url = f"https://news.google.com/rss/search?q={quote(q)}&hl=tr&gl=TR&ceid=TR:tr"
         try:
             feed = _safe_feedparser_parse(url)
-            if not feed:
+            if not feed or not hasattr(feed, "entries") or not feed.entries:
                 continue
             for e in feed.entries[:10]:
                 t = _clean_title(e.get("title") or "")
@@ -987,9 +1034,7 @@ def _src_google_tr(ticker, cutoff):
     logger.info(f"Google News TR: {ticker} -> {len(items)} haber")
     return items
 
-# ─────────────────────────────────────────────────────────
 # US MARKET KAYNAKLARI
-# ─────────────────────────────────────────────────────────
 
 def _src_yahoo_finance_rss(ticker, cutoff):
     """Yahoo Finance RSS - ABD hisseleri için Tier 2 kaynak."""
@@ -998,7 +1043,7 @@ def _src_yahoo_finance_rss(ticker, cutoff):
     url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
     try:
         feed = _safe_feedparser_parse(url)
-        if not feed:
+        if not feed or not hasattr(feed, "entries") or not feed.entries:
             return items
         for e in feed.entries[:20]:
             t = _clean_title(e.get("title") or "")
@@ -1039,7 +1084,7 @@ def _src_google_en_us(ticker, cutoff):
         url = f"https://news.google.com/rss/search?q={quote(q)}&hl=en&gl=US&ceid=US:en"
         try:
             feed = _safe_feedparser_parse(url)
-            if not feed:
+            if not feed or not hasattr(feed, "entries") or not feed.entries:
                 continue
             for e in feed.entries[:8]:
                 t = _clean_title(e.get("title") or "")
@@ -1109,7 +1154,7 @@ def _src_google_en(ticker, cutoff):
     url = f"https://news.google.com/rss/search?q={quote(q)}&hl=en&gl=US&ceid=US:en"
     try:
         feed = _safe_feedparser_parse(url)
-        if not feed:
+        if not feed or not hasattr(feed, "entries") or not feed.entries:
             return items
         for e in feed.entries[:8]:
             t = _clean_title(e.get("title") or "")
@@ -1164,11 +1209,11 @@ def _src_yahoo(ticker, cutoff):
         logger.warning(f"Yahoo Finance hata: {exc}")
     return items
 
-# ─────────────────────────────────────────────────────────
 # ANA ANALİZ FONKSİYONU (30 dakika in-memory cache ile)
-# ─────────────────────────────────────────────────────────
 
+import threading as _threading
 _news_cache: dict[str, tuple[datetime, "NewsAnalysisResult"]] = {}
+_news_cache_lock = _threading.Lock()
 _NEWS_CACHE_TTL = 1800  # 30 dakika
 
 def analyze_news(
@@ -1189,19 +1234,20 @@ def analyze_news(
     Returns:
         NewsAnalysisResult
     """
-    # ── In-memory cache kontrolü ──────────────────────────
+    # In-memory cache kontrolü
     cache_key = f"{ticker}|{days}|{language}"
-    if cache_key in _news_cache:
-        cached_time, cached_result = _news_cache[cache_key]
-        age = (datetime.now() - cached_time).total_seconds()
-        if age < _NEWS_CACHE_TTL:
-            logger.info(f"News cache HIT: {ticker} ({age:.0f}s önce)")
-            return cached_result
+    with _news_cache_lock:
+        if cache_key in _news_cache:
+            cached_time, cached_result = _news_cache[cache_key]
+            age = (datetime.now() - cached_time).total_seconds()
+            if age < _NEWS_CACHE_TTL:
+                logger.info(f"News cache HIT: {ticker} ({age:.0f}s önce)")
+                return cached_result
 
     result = NewsAnalysisResult(language=language)
     cutoff = datetime.now() - timedelta(days=days)
 
-    # ── BERT Sentiment — lazy-load (ilk çağrıda ~500 MB indirilir) ──
+    # BERT Sentiment — lazy-load (ilk çağrıda ~500 MB indirilir)
     bert_loaded = _bert.load()
     if bert_loaded:
         logger.info(f"{ticker} | Sentiment motoru: BERT (savasy/bert-base-turkish-sentiment-cased)")
@@ -1210,16 +1256,16 @@ def analyze_news(
         logger.info(f"{ticker} | Sentiment motoru: Kelime sayma (BERT kurulu değil)")
         result.sentiment_engine = "kelime_sayma"
 
-    # ── Aktif kaynaklar (dil seçeneğine göre) ────────────
+    # Aktif kaynaklar (dil seçeneğine göre)
     source_fns = []
 
     if language in ("TR", "BOTH"):
         source_fns += [
-            # ── Tier 1 (test'te ✅) ──────────────────────────
+            # Tier 1 (test'te ✅)
             _src_haberturk,     # Bloomberg HT, NTV — doğrulandı
             _src_ntv,           # NTV Ekonomi + NTV Para — doğrulandı
             _src_bloomberght,   # Bloomberg HT — doğrulandı
-            # ── Tier 2 (test'te ✅) ──────────────────────────
+            # Tier 2 (test'te ✅)
             _src_hurriyet,      # Hürriyet — doğrulandı
             _src_milliyet,      # Milliyet — doğrulandı
             _src_sabah,         # Sabah Ekonomi + Finans — doğrulandı
@@ -1230,7 +1276,7 @@ def analyze_news(
             _src_paraanaliz,    # Para Analiz — doğrulandı
             _src_foreks,        # Foreks — doğrulandı
             _src_cnnturk,       # CNN Türk Ekonomi — doğrulandı
-            # ── Tier 3 ───────────────────────────────────────
+            # Tier 3
             _src_google_tr,
             _src_bing,
         ]
@@ -1255,7 +1301,7 @@ def analyze_news(
             _src_google_en,
         ]
 
-    # ── Paralel çekme ─────────────────────────────────────
+    # Paralel çekme
     all_raw: list[NewsItem] = []
     with ThreadPoolExecutor(max_workers=12) as ex:
         futures = {ex.submit(fn, ticker, cutoff): fn.__name__ for fn in source_fns}
@@ -1276,7 +1322,7 @@ def analyze_news(
             for f in futures:
                 f.cancel()
 
-    # ── Mükerrer tespiti ve duplicate_count artırımı ──────
+    # Mükerrer tespiti ve duplicate_count artırımı
     # Başlık benzerliğine göre grupla, her grupta en güvenilir kaynağı tut
     normalized_map: dict[str, list[NewsItem]] = {}
     for item in all_raw:
@@ -1290,11 +1336,11 @@ def analyze_news(
         best.duplicate_count = len(group)
         deduplicated.append(best)
 
-    # ── Güven skoru hesapla ───────────────────────────────
+    # Güven skoru hesapla
     for item in deduplicated:
         item.confidence = _compute_confidence(item)
 
-    # ── Spekülasyon filtrele ──────────────────────────────
+    # Spekülasyon filtrele
     clean_items    = [i for i in deduplicated if not i.is_speculation]
     filtered_count = len(deduplicated) - len(clean_items)
     result.filtered_count = filtered_count
@@ -1302,7 +1348,7 @@ def analyze_news(
     if filtered_count > 0:
         logger.info(f"{filtered_count} spekülatif haber filtrelendi")
 
-    # ── Minimum güven eşiği uygula ────────────────────────
+    # Minimum güven eşiği uygula
     scored_items = [i for i in clean_items if i.confidence >= min_confidence]
 
     if not scored_items:
@@ -1315,15 +1361,28 @@ def analyze_news(
         )
         return result
 
-    # ── Ağırlıklı sentiment skoru ─────────────────────────
+    # Ağırlıklı sentiment skoru
     weighted_pos = 0.0
     weighted_neg = 0.0
     total_weight = 0.0
 
     for item in scored_items:
         # Güven skoru üstel ağırlık: %58→0.34, %80→0.64, %99→0.98
-        # Doğrusal yerine karesel: yüksek BERT güveni çok daha fazla etki eder
         w = _get_weight(item.source) * (item.confidence / 100) ** 2
+
+        # Güncellik faktörü: son 2 gün → 1.5x, 3-7 gün → 1.0x, 7+ gün → 0.7x
+        recency = 1.0
+        if item.published:
+            pub_dt = _parse_date(item.published)
+            if pub_dt:
+                age_days = (datetime.now() - pub_dt).days
+                if age_days <= 2:
+                    recency = 1.5
+                elif age_days <= 7:
+                    recency = 1.0
+                else:
+                    recency = 0.7
+        w *= recency
 
         if item.sentiment == "olumlu":
             weighted_pos += w
@@ -1351,9 +1410,10 @@ def analyze_news(
 
     result.score = round(max(0.0, min(100.0, final_score)), 1)
 
-    # ── Çıktıları doldur ──────────────────────────────────
-    scored_items.sort(key=lambda x: (x.tier, -x.confidence, x.published), reverse=False)
-    scored_items.sort(key=lambda x: x.published, reverse=True)
+    # Çıktıları doldur
+    # Önce yeni haberler, aynı tarihte tier (düşük=iyi) ve güven (yüksek=iyi)
+    scored_items.sort(key=lambda x: (x.published or ""), reverse=True)
+    scored_items.sort(key=lambda x: (x.tier, -x.confidence), reverse=False)
 
     result.headlines    = [i.title for i in scored_items]
     result.news_items   = [
@@ -1395,12 +1455,12 @@ def analyze_news(
         f"Kalite: {result.data_quality} | Kaynaklar: {result.data_sources}"
     )
 
-    # ── Cache'e kaydet ────────────────────────────────────
-    _news_cache[cache_key] = (datetime.now(), result)
-    # Eski cache girişlerini temizle (bellek sızıntısı önleme)
-    if len(_news_cache) > 100:
-        oldest_key = min(_news_cache, key=lambda k: _news_cache[k][0])
-        del _news_cache[oldest_key]
+    # Cache'e kaydet
+    with _news_cache_lock:
+        _news_cache[cache_key] = (datetime.now(), result)
+        if len(_news_cache) > 100:
+            oldest_key = min(_news_cache, key=lambda k: _news_cache[k][0])
+            del _news_cache[oldest_key]
 
     return result
 
@@ -1459,7 +1519,7 @@ def analyze_news_for_date(
             )
             try:
                 feed = _safe_feedparser_parse(url)
-                if not feed:
+                if not feed or not hasattr(feed, "entries") or not feed.entries:
                     continue
                 for e in feed.entries[:10]:
                     t = _clean_title(e.get("title") or "")
@@ -1490,9 +1550,7 @@ def analyze_news_for_date(
         return "notr", 0
 
 
-# ─────────────────────────────────────────────────────────
 # STREAMLIT RENDER
-# ─────────────────────────────────────────────────────────
 
 def render_news_panel(result: NewsAnalysisResult):
     try:
@@ -1514,7 +1572,7 @@ def render_news_panel(result: NewsAnalysisResult):
     msg, kind = quality_map.get(result.data_quality, ("", "info"))
     getattr(st, kind)(f"{msg} | {lang_label}")
 
-    # ── Sentiment Motoru Göstergesi ──────────────────────
+    # Sentiment Motoru Göstergesi
     if result.sentiment_engine == "bert":
         st.success("🧠 **BERT AI Aktif** — Türkçe bağlam anlayışıyla sentiment analizi yapılıyor")
     else:
@@ -1587,9 +1645,7 @@ def render_news_panel(result: NewsAnalysisResult):
         st.markdown("")
 
 
-# ─────────────────────────────────────────────────────────
 # CLI TEST
-# ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import sys
