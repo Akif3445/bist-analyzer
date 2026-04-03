@@ -45,7 +45,9 @@ warnings.filterwarnings("ignore")
 
 # Dosya yolları
 _APP_DIR  = os.path.dirname(os.path.abspath(__file__))
-_IS_CLOUD = os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("STREAMLIT_SERVER_HEADLESS")
+_IS_CLOUD = (os.environ.get("STREAMLIT_SHARING_MODE")
+             or os.environ.get("STREAMLIT_SERVER_HEADLESS")
+             or os.path.exists("/mount/src"))
 _DATA_DIR = "/tmp" if (_IS_CLOUD and os.path.isdir("/tmp")) else _APP_DIR
 DB_PATH   = os.path.join(_DATA_DIR, "bist_cache.db")
 LOG_PATH  = os.path.join(_DATA_DIR, "bist_analyzer.log")
@@ -353,30 +355,118 @@ class AnalysisHistoryDB:
     def _init_table(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
-    """)
+                CREATE TABLE IF NOT EXISTS analysis_history (
+                    ticker TEXT PRIMARY KEY,
+                    last_analyzed TEXT,
+                    total_score REAL,
+                    signal TEXT,
+                    price REAL,
+                    teknik_score REAL,
+                    sentiment_score REAL,
+                    prim_score REAL,
+                    deger_score REAL,
+                    rsi REAL,
+                    golden_cross INTEGER,
+                    macd_bullish INTEGER,
+                    analysis_count INTEGER DEFAULT 1
+                )
+            """)
             try:
                 conn.execute("ALTER TABLE analysis_history ADD COLUMN full_data BLOB")
             except sqlite3.OperationalError:
-                pass  # Sütun zaten varsa hata vermesin
+                pass
 
             conn.execute("""
-    """)
-            
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker TEXT,
+                    message TEXT,
+                    created_at TEXT DEFAULT (datetime('now','localtime')),
+                    is_read INTEGER DEFAULT 0
+                )
+            """)
+
             conn.execute("""
-    """)
-            
+                CREATE TABLE IF NOT EXISTS accuracy_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker TEXT,
+                    signal TEXT,
+                    signal_date TEXT,
+                    signal_price REAL,
+                    check_date TEXT,
+                    check_price REAL,
+                    status TEXT DEFAULT 'Bekliyor'
+                )
+            """)
+
             conn.execute("""
-    """)
+                CREATE TABLE IF NOT EXISTS portfolio (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker TEXT UNIQUE,
+                    buy_price REAL,
+                    qty INTEGER,
+                    add_date TEXT
+                )
+            """)
 
             # Backtest tablolari
             conn.execute("""
-    """)
+                CREATE TABLE IF NOT EXISTS backtest_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT,
+                    ticker TEXT,
+                    entry_date TEXT,
+                    entry_price REAL,
+                    exit_date TEXT,
+                    exit_price REAL,
+                    exit_reason TEXT,
+                    return_pct REAL,
+                    hold_days INTEGER,
+                    entry_score REAL,
+                    stop_loss REAL,
+                    take_profit REAL
+                )
+            """)
             conn.execute("""
-    """)
+                CREATE TABLE IF NOT EXISTS backtest_daily (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT,
+                    ticker TEXT,
+                    date TEXT,
+                    score REAL,
+                    rsi REAL,
+                    price REAL,
+                    UNIQUE(run_id, ticker, date)
+                )
+            """)
             conn.execute("""
-    """)
+                CREATE TABLE IF NOT EXISTS backtest_summary (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT,
+                    run_date TEXT,
+                    ticker TEXT,
+                    period TEXT,
+                    total_trades INTEGER,
+                    winning_trades INTEGER,
+                    win_rate REAL,
+                    avg_return_pct REAL,
+                    total_return_pct REAL,
+                    max_drawdown_pct REAL,
+                    best_trade_pct REAL,
+                    worst_trade_pct REAL,
+                    avg_hold_days REAL
+                )
+            """)
             conn.execute("""
-    """)
+                CREATE TABLE IF NOT EXISTS news_backtest_cache (
+                    ticker TEXT,
+                    date TEXT,
+                    sentiment TEXT,
+                    count INTEGER,
+                    fetched_at TEXT,
+                    PRIMARY KEY (ticker, date)
+                )
+            """)
 
             # Performans indexleri
             for _idx_sql in [
@@ -385,7 +475,7 @@ class AnalysisHistoryDB:
                 "CREATE INDEX IF NOT EXISTS idx_alerts_unread ON alerts(is_read)",
                 "CREATE INDEX IF NOT EXISTS idx_accuracy_ticker ON accuracy_log(ticker)",
                 "CREATE INDEX IF NOT EXISTS idx_backtest_runid ON backtest_trades(run_id)",
-                "CREATE INDEX IF NOT EXISTS idx_backtest_scores_runid ON backtest_daily_scores(run_id)",
+                "CREATE INDEX IF NOT EXISTS idx_backtest_scores_runid ON backtest_daily(run_id)",
                 "CREATE INDEX IF NOT EXISTS idx_summary_runid ON backtest_summary(run_id)",
                 "CREATE INDEX IF NOT EXISTS idx_news_cache_ticker ON news_backtest_cache(ticker)",
             ]:
@@ -434,7 +524,12 @@ class AnalysisHistoryDB:
             count = (existing[0] + 1) if existing else 1
             score_data = _score_to_json(score)
             conn.execute("""
-    """, (
+                INSERT OR REPLACE INTO analysis_history
+                    (ticker, last_analyzed, total_score, signal, price,
+                     teknik_score, sentiment_score, prim_score, deger_score,
+                     rsi, golden_cross, macd_bullish, analysis_count, full_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
                 score.ticker, now, score.total_score, score.signal,
                 score.stock.current_price,
                 score.teknik_score, score.sentiment_score,
@@ -488,7 +583,9 @@ class AnalysisHistoryDB:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
-    """, (ticker.upper(), buy_price, qty, now))
+                INSERT OR REPLACE INTO portfolio (ticker, buy_price, qty, add_date)
+                VALUES (?, ?, ?, ?)
+            """, (ticker.upper(), buy_price, qty, now))
             conn.commit()
             
     def remove_portfolio(self, ticker: str) -> None:
@@ -575,7 +672,24 @@ class AnalysisHistoryDB:
         """accuracy_validation tablosunu oluştur + eksik kolonları ekle."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
-    """)
+                CREATE TABLE IF NOT EXISTS accuracy_validation (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker TEXT,
+                    signal TEXT,
+                    score REAL,
+                    signal_date TEXT,
+                    signal_price REAL,
+                    source TEXT DEFAULT 'live',
+                    check_7d_date TEXT,
+                    check_7d_price REAL,
+                    return_7d_pct REAL,
+                    result_7d TEXT DEFAULT 'Bekliyor',
+                    check_30d_date TEXT,
+                    check_30d_price REAL,
+                    return_30d_pct REAL,
+                    result_30d TEXT DEFAULT 'Bekliyor'
+                )
+            """)
             # Eski tabloya yeni kolonları ekle (varsa atla)
             for prefix in ("1d", "3d", "14d"):
                 for col_suffix in ("date TEXT", "price REAL", "pct REAL"):
@@ -619,13 +733,17 @@ class AnalysisHistoryDB:
                     WHERE ticker = ? AND signal_date LIKE ? AND source = ?
                 """, (ticker, f"{today}%", source)).fetchone()
                 if existing:
-                    # Aynı gün tekrar analiz → skoru güncelle, eski takip korunsun
                     conn.execute("""
-    """, (signal, round(score, 1), round(price, 2), now, existing[0]))
+                        UPDATE accuracy_validation
+                        SET signal = ?, score = ?, signal_price = ?, signal_date = ?
+                        WHERE id = ?
+                    """, (signal, round(score, 1), round(price, 2), now, existing[0]))
                 else:
-                    # Yeni gün → yeni kayıt
                     conn.execute("""
-    """, (ticker, signal, round(score, 1), now, round(price, 2), source))
+                        INSERT INTO accuracy_validation
+                            (ticker, signal, score, signal_date, signal_price, source)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (ticker, signal, round(score, 1), now, round(price, 2), source))
                 conn.commit()
         except Exception as exc:
             log.warning("record_signal hatası: %s", exc)
@@ -639,7 +757,13 @@ class AnalysisHistoryDB:
                 conn.row_factory = sqlite3.Row
                 # Herhangi bir periyotta hâlâ bekleyen kayıtları çek
                 pending = conn.execute("""
-    """).fetchall()
+                    SELECT * FROM accuracy_validation
+                    WHERE result_7d = 'Bekliyor'
+                       OR result_30d = 'Bekliyor'
+                       OR result_1d = 'Bekliyor'
+                       OR result_3d = 'Bekliyor'
+                       OR result_14d = 'Bekliyor'
+                """).fetchall()
                 if not pending:
                     return
 
@@ -700,7 +824,11 @@ class AnalysisHistoryDB:
                             ret_pct = round((current_price - sig_price) / sig_price * 100, 2)
                             result = self._evaluate_signal(r["signal"], ret_pct, cal_days)
                             conn.execute(f"""
-    """, (now.strftime("%Y-%m-%d"), round(current_price, 2),
+                                UPDATE accuracy_validation
+                                SET check_{prefix}_date = ?, check_{prefix}_price = ?,
+                                    return_{prefix}_pct = ?, result_{prefix} = ?
+                                WHERE id = ?
+                            """, (now.strftime("%Y-%m-%d"), round(current_price, 2),
                                   ret_pct, result, r["id"]))
 
                 conn.commit()
@@ -1958,9 +2086,35 @@ class PortfolioScanner:
     @staticmethod
     def _init_table():
         with sqlite3.connect(DB_PATH) as conn:
-            # NOT: Artık DROP TABLE yapmıyoruz — cache'i koruyoruz
             conn.execute("""
-    """)
+                CREATE TABLE IF NOT EXISTS portfolio_scan (
+                    ticker TEXT PRIMARY KEY,
+                    scan_date TEXT,
+                    score REAL,
+                    rsi REAL,
+                    adx REAL,
+                    atr_pct REAL,
+                    bb_position REAL,
+                    week52_pos REAL,
+                    obv_trend TEXT,
+                    golden_cross INTEGER,
+                    price_above_sma200 INTEGER,
+                    current_price REAL,
+                    volume_ok INTEGER,
+                    data_rows INTEGER,
+                    error TEXT,
+                    momentum_1m REAL,
+                    momentum_3m REAL,
+                    price_above_sma50 INTEGER,
+                    macd_bullish INTEGER,
+                    adx_strong INTEGER,
+                    volume_ratio REAL,
+                    sma_gap_pct REAL,
+                    bb_squeeze INTEGER,
+                    stoch_oversold INTEGER,
+                    comp_score REAL
+                )
+            """)
             conn.commit()
 
     @staticmethod
@@ -2119,7 +2273,14 @@ class PortfolioScanner:
         with sqlite3.connect(DB_PATH) as conn:
             for r in results:
                 conn.execute("""
-    """, (
+                    INSERT OR REPLACE INTO portfolio_scan
+                        (ticker, scan_date, score, rsi, adx, atr_pct, bb_position,
+                         week52_pos, obv_trend, golden_cross, price_above_sma200,
+                         current_price, volume_ok, data_rows, error, momentum_1m,
+                         momentum_3m, price_above_sma50, macd_bullish, adx_strong,
+                         volume_ratio, sma_gap_pct, bb_squeeze, stoch_oversold, comp_score)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
                     r.ticker, now, r.score, r.rsi, r.adx, r.atr_pct,
                     r.bb_position, r.week52_pos, r.obv_trend,
                     int(r.golden_cross), int(r.price_above_sma200),
@@ -2136,7 +2297,8 @@ class PortfolioScanner:
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 rows = conn.execute("""
-    """).fetchall()
+                    SELECT * FROM portfolio_scan ORDER BY score DESC
+                """).fetchall()
             if not rows:
                 return []
             scan_date_str = rows[0][1]
@@ -2331,11 +2493,48 @@ class TimeMachineEngine:
     def _init_tables():
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute(f"""
-    """)
+                CREATE TABLE IF NOT EXISTS {TimeMachineEngine.TABLE_RUNS} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT UNIQUE,
+                    run_date TEXT,
+                    pit_date TEXT,
+                    market TEXT,
+                    style TEXT,
+                    years_back INTEGER,
+                    num_picks INTEGER,
+                    avg_score REAL,
+                    avg_return REAL,
+                    bench_return REAL,
+                    alpha REAL,
+                    grade TEXT
+                )
+            """)
             conn.execute(f"""
-    """)
+                CREATE TABLE IF NOT EXISTS {TimeMachineEngine.TABLE_PICKS} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT,
+                    ticker TEXT,
+                    score REAL,
+                    price REAL,
+                    current_price REAL,
+                    return_pct REAL,
+                    rsi REAL,
+                    adx REAL,
+                    signal TEXT,
+                    style TEXT
+                )
+            """)
             conn.execute(f"""
-    """)
+                CREATE TABLE IF NOT EXISTS {TimeMachineEngine.TABLE_DAILY} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_date TEXT,
+                    run_id TEXT,
+                    ticker TEXT,
+                    price REAL,
+                    daily_chg REAL,
+                    cum_return REAL
+                )
+            """)
             conn.commit()
 
     # PIT Teknik Analiz (3 yıl önceki verilerle)
@@ -2704,7 +2903,11 @@ class TimeMachineEngine:
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute(f"""
-    """, (
+                    INSERT OR REPLACE INTO {TimeMachineEngine.TABLE_RUNS}
+                        (run_id, run_date, pit_date, market, style, years_back,
+                         num_picks, avg_score, avg_return, bench_return, alpha, grade)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
                     run_id, run_date, pit_date.strftime("%Y-%m-%d"),
                     market, style, years_back, len(picks),
                     round(sum(p["score"] for p in picks) / max(1, len(picks)), 1),
@@ -2713,7 +2916,11 @@ class TimeMachineEngine:
 
                 for p in picks:
                     conn.execute(f"""
-    """, (
+                        INSERT INTO {TimeMachineEngine.TABLE_PICKS}
+                            (run_id, ticker, score, price, current_price, return_pct,
+                             rsi, adx, signal, style)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """, (
                         run_id, p["ticker"], p["score"], p["price"],
                         p.get("current_price", 0), p.get("return_pct", 0),
                         p["rsi"], p["adx"], p["signal"], style,
@@ -2747,7 +2954,7 @@ class TimeMachineEngine:
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 picks = conn.execute(
-                    f"SELECT ticker, pit_price FROM {TimeMachineEngine.TABLE_PICKS} WHERE run_id=?",
+                    f"SELECT ticker, price FROM {TimeMachineEngine.TABLE_PICKS} WHERE run_id=?",
                     (run_id,)
                 ).fetchall()
 
@@ -2784,7 +2991,10 @@ class TimeMachineEngine:
                         cum_ret = ((price / pit_prices[ticker]) - 1) * 100 if pit_prices[ticker] > 0 else 0
 
                         conn.execute(f"""
-    """, (today, run_id, ticker, round(price, 2),
+                            INSERT OR REPLACE INTO {TimeMachineEngine.TABLE_DAILY}
+                                (snapshot_date, run_id, ticker, price, daily_chg, cum_return)
+                            VALUES (?,?,?,?,?,?)
+                        """, (today, run_id, ticker, round(price, 2),
                               round(daily_chg, 2), round(cum_ret, 1)))
                     except Exception:
                         continue
@@ -3782,7 +3992,11 @@ class BacktestEngine:
             # Trades
             for t in trades:
                 conn.execute("""
-    """, (
+                    INSERT INTO backtest_trades
+                        (run_id, ticker, entry_date, entry_price, exit_date, exit_price,
+                         exit_reason, return_pct, hold_days, entry_score, stop_loss, take_profit)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
                     t["run_id"], t["ticker"], t["entry_date"], t["entry_price"],
                     t["exit_date"], t["exit_price"], t["exit_reason"], t["return_pct"],
                     t["hold_days"], t["entry_score"], t["stop_loss"], t["take_profit"],
@@ -3797,7 +4011,12 @@ class BacktestEngine:
             # Summary
             if summary.get("total_trades", 0) > 0:
                 conn.execute("""
-    """, (
+                    INSERT OR REPLACE INTO backtest_summary
+                        (run_id, run_date, ticker, period, total_trades, winning_trades,
+                         win_rate, avg_return_pct, total_return_pct, max_drawdown_pct,
+                         best_trade_pct, worst_trade_pct, avg_hold_days)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
                     run_id, run_date, ticker, period,
                     summary["total_trades"], summary["winning_trades"],
                     summary["win_rate"], summary["avg_return_pct"],
@@ -3814,7 +4033,11 @@ class BacktestEngine:
         try:
             with sqlite3.connect(db_path) as conn:
                 rows = conn.execute("""
-    """).fetchall()
+                    SELECT run_id, run_date, ticker, period, total_trades, winning_trades,
+                           win_rate, avg_return_pct, total_return_pct, max_drawdown_pct,
+                           best_trade_pct, worst_trade_pct, avg_hold_days
+                    FROM backtest_summary ORDER BY run_date DESC
+                """).fetchall()
             cols = ["run_id","run_date","ticker","period","total_trades","winning_trades",
                     "win_rate","avg_return_pct","total_return_pct","max_drawdown_pct",
                     "best_trade_pct","worst_trade_pct","avg_hold_days"]
