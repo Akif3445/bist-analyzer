@@ -2,7 +2,7 @@
 
 A comprehensive stock analysis platform for Borsa Istanbul (BIST) and US markets. The system combines technical analysis, news sentiment analysis, and valuation metrics to generate investment signals with a 0-100 composite scoring model.
 
-Live demo: [bist-analyzer.streamlit.app](https://bist-analyzer.streamlit.app)
+Live demo: [bist-analyzer.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app)
 
 ---
 

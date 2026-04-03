@@ -2,7 +2,7 @@
 
 Borsa Istanbul (BIST) ve ABD piyasalari icin kapsamli bir hisse analiz platformu. Sistem; teknik analiz, haber duyarlilik analizi ve degerleme metriklerini birlestirerek 0-100 araliginda bir bileşik skor uzerinden yatirim sinyalleri uretir.
 
-Canli demo: [bist-analyzer.streamlit.app](https://bist-analyzer.streamlit.app)
+Canli demo: [bist-analyzer.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app)
 
 ---
 
