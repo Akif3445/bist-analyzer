@@ -4590,7 +4590,7 @@ def render_smart_portfolio_page(ui_lang: str):
                 return "background-color: rgba(239,68,68,0.1)"
 
             st.dataframe(
-                scan_df.style.applymap(_score_color, subset=["Skor"]),
+                scan_df.style.map(_score_color, subset=["Skor"]),
                 use_container_width=True, hide_index=True, height=400,
             )
 
@@ -5733,7 +5733,7 @@ def _tm_render_report(result: dict):
                 return "background-color: rgba(239,68,68,0.25)"
 
             st.dataframe(
-                pick_df_display.style.applymap(
+                pick_df_display.style.map(
                     _ret_color, subset=["Getiri%"] if "Getiri%" in pick_df_display.columns else []
                 ),
                 use_container_width=True, hide_index=True,
@@ -7136,8 +7136,8 @@ def render_backtest_page(ui_lang: str):
             df_sum = pd.DataFrame(summary_rows)
             st.dataframe(
                 df_sum.style
-                .applymap(_color_cell, subset=["Ort. %", "Toplam %", "En İyi %"])
-                .applymap(lambda v: _color_cell(v, False), subset=["Max DD %", "En Kötü %"])
+                .map(_color_cell, subset=["Ort. %", "Toplam %", "En İyi %"])
+                .map(lambda v: _color_cell(v, False), subset=["Max DD %", "En Kötü %"])
                 .format({
                     "Kazanma %": "{:.1f}%", "Ort. %": "{:+.2f}%",
                     "Toplam %": "{:+.2f}%", "Max DD %": "{:.1f}%",
@@ -7260,7 +7260,7 @@ def render_backtest_page(ui_lang: str):
                         return ""
 
                     st.dataframe(
-                        df_t.style.applymap(_rc, subset=["Getiri%"])
+                        df_t.style.map(_rc, subset=["Getiri%"])
                         .format({"Getiri%": "{:+.2f}%", "Giriş₺": "{:.2f}",
                                  "Çıkış₺": "{:.2f}", "Stop": "{:.2f}",
                                  "Hedef": "{:.2f}", "Skor": "{:.1f}"}),
@@ -7311,7 +7311,7 @@ def render_backtest_page(ui_lang: str):
                                 return "color:#22c55e" if v > 0 else "color:#ef4444"
                             return ""
                         st.dataframe(
-                            monthly.style.applymap(_rc2, subset=["Ort%","Top%"])
+                            monthly.style.map(_rc2, subset=["Ort%","Top%"])
                             .format({"Ort%":"{:+.2f}%","Top%":"{:+.2f}%"}),
                             use_container_width=True, hide_index=True, height=260,
                         )
