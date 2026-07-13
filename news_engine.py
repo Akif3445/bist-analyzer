@@ -29,6 +29,12 @@ try:
 except ImportError:
     HF_OK = False
 
+try:
+    import borsapy
+    BORSAPY_OK = True
+except ImportError:
+    BORSAPY_OK = False  # borsapy yoksa KAP kaynağı atlanır, diğer kaynaklar çalışır
+
 logger = logging.getLogger("bist.news")
 
 # BERT sentiment analyzer (singleton)
@@ -157,6 +163,16 @@ _STRONG_POS_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     # General strong positive
     r"(çeyreklik|yıllık)\s+(kar|kâr)\s+\d",
     r"(pazar\s+payı)\s+(artışı|yükseldi|büyüdü)",
+    # EBITDA / margin
+    r"ebitda\s+(artış|büyüme|rekor|yükseldi)",
+    r"(kar|kâr)\s+marjı\s+(genişledi|arttı|yükseldi|rekor)",
+    r"(operasyonel|faaliyet)\s+(kar|kâr)\s+(artış|rekor|yükseldi)",
+    # Orders / contracts
+    r"(sipariş|siparişler)\s+(rekoru|artışı|büyüme)",
+    r"\d+\s*(milyon|milyar)\s*(dolarlık|TL'lik|euroluk)\s*(sipariş|sözleşme|ihale|anlaşma)",
+    # Debt improvement
+    r"(borç|borc)\s+(ödendi|azaltıldı|kapatıldı|yapılandırıldı)",
+    r"(kredi|tahvil)\s+(başarıyla|üstü talep|güçlü talep)",
 ]]
 
 # Strong negative patterns
@@ -192,20 +208,79 @@ _STRONG_NEG_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r"(pazar\s+payı)\s+(kaybı|düştü|geriledi)",
     r"(üretim|faaliyet)\s+(durdurul|durduruldu|askıya\s+alındı)",
     r"(çeyreklik|yıllık)\s+zarar\s+\d",
+    # Legal / fraud
+    r"(dolandırıcılık|yolsuzluk|usulsüzlük)\s+(iddia|tespit|soruşturma)",
+    r"(tutuklama|gözaltı|yakalama)\s+(kararı|emri)?",
+    r"\d+\s*(milyon|milyar)\s*(dolarlık|TL'lik|euroluk)\s*(ceza|zarar|kayıp)",
+    # Operational crisis
+    r"(tedarik\s+zinciri|tedarik)\s+(krizi|sorunu|kesintisi)",
+    r"(grev|lokavt|iş\s+bırakma)\s+(başladı|devam|kararı)",
+    r"(ürün\s+geri\s+çağırma|geri\s+çağırma|recall)",
+    # Financial distress
+    r"(nakit\s+yakma|cash\s+burn)\s+(hız|oranı|artış)",
+    r"(sermaye\s+eritme|sermaye\s+azaltma)",
 ]]
 
 # Layer 2 — weighted keyword lists (fallback when BERT is uncertain)
 
+# NEGASYON kalıpları: "zarar azaldı" → olumlu, "kar düştü" → olumsuz
+# Bunlar pozitif terimi negatife veya negatif terimi pozitife çevirir
+_NEGATION_FLIP_TO_POSITIVE = [re.compile(p, re.IGNORECASE) for p in [
+    r"zarar\w*\s+(azaldı|azalma|düştü|geriledi|daraldı|azalıyor)",
+    r"kayıp\w*\s+(azaldı|azalma|düştü|daraldı|azalıyor)",
+    r"borç\w*\s+(azaldı|azalma|düştü|ödendi|kapatıldı|kapattı)",
+    r"npl\w*\s+(düştü|azaldı|geriledi|iyileşti)",
+    r"takipteki\s+alacak\w*\s+(azaldı|düştü|geriledi)",
+    r"enflasyon\w*\s+(düştü|geriledi|azaldı|yavaşladı|beklentinin altında)",
+    r"faiz\w*\s+(düştü|indirildi|indi|düşürüldü|indirim)",
+    r"maliyet\w*\s+(düştü|azaldı|geriledi|düşürüldü)",
+    r"risk\w*\s+(azaldı|azalma|düştü|geriledi)",
+    r"açı[kğ]\w*\s+(kapandı|azaldı|daraldı|düştü)",
+    r"(zarar|kayıp|borç|açık)\w*\s+(kapatıldı|kapattı|kapandı)",
+]]
+
+_NEGATION_FLIP_TO_NEGATIVE = [re.compile(p, re.IGNORECASE) for p in [
+    r"k[aâ]r\w*\s+(düştü|azaldı|geriledi|eridi|daraldı|azalıyor)",
+    r"gelir\w*\s+(düştü|azaldı|geriledi|daraldı|azalıyor)",
+    r"satış\w*\s+(düştü|azaldı|geriledi|daraldı|azalıyor)",
+    r"ihracat\w*\s+(düştü|azaldı|geriledi|daraldı)",
+    r"büyüme\w*\s+(yavaşladı|durdu|geriledi|düştü|sıfır)",
+    r"ciro\w*\s+(düştü|azaldı|geriledi|daraldı)",
+    r"talep\w*\s+(düştü|azaldı|geriledi|daraldı|zayıfladı)",
+    r"kapasite\w*\s+(düştü|azaldı|kullanımı\s+düştü)",
+    r"pazar\s+payı\w*\s+(düştü|azaldı|geriledi|kaybetti)",
+    r"temettü\w*\s+(kesildi|azaltıldı|dağıtılmadı|iptal)",
+    r"faiz\w*\s+(artışı|arttı|artırıldı|yükseldi|yükseltildi)",
+    r"enflasyon\w*\s+(arttı|yükseldi|beklentinin üzerinde|sıçradı)",
+    r"maliyet\w*\s+(arttı|artışı|yükseldi|patladı|sıçradı)",
+]]
+
+def _check_negation_context(text: str) -> str | None:
+    """Negasyon/bağlam kontrolü. Çift yönlü kelimeleri doğru değerlendirir."""
+    for pat in _NEGATION_FLIP_TO_POSITIVE:
+        if pat.search(text):
+            return "olumlu"
+    for pat in _NEGATION_FLIP_TO_NEGATIVE:
+        if pat.search(text):
+            return "olumsuz"
+    return None
+
 # (keyword, weight): 1=normal, 2=strong, 3=very strong
 FIN_POSITIVE_WEIGHTED = [
-    # 3x
+    # 3x — kesin olumlu
     ("rekor kar", 3), ("rekor kâr", 3), ("tarihi yüksek", 3),
     ("beklentinin üzerinde", 3), ("beklenti üstü", 3),
     ("güçlü al", 3), ("al tavsiyesi", 3), ("hedef yükseltildi", 3),
     ("hedef artırıldı", 3), ("kredi notu artırıldı", 3),
     ("kredi notu yükseltildi", 3), ("not artırımı", 3),
     ("ihale kazandı", 3), ("sözleşme imzaladı", 3),
-    # 2x
+    ("konsensüs üstü", 3), ("beklenti aştı", 3),
+    ("tarihi kar", 3), ("tarihi kâr", 3),
+    ("rekor gelir", 3), ("rekor ciro", 3),
+    ("rekor ihracat", 3), ("rekor büyüme", 3),
+    ("en yüksek kar", 3), ("en yüksek kâr", 3),
+    ("operasyonel kar rekor", 3),
+    # 2x — güçlü olumlu
     ("net kar", 2), ("net kâr", 2), ("faaliyet karı", 2),
     ("temettü", 2), ("kar payı", 2), ("kâr payı", 2),
     ("gelir artışı", 2), ("ciro artışı", 2), ("satış artışı", 2),
@@ -215,16 +290,48 @@ FIN_POSITIVE_WEIGHTED = [
     ("anlaşma", 2), ("sözleşme", 2), ("ortaklık", 2),
     ("birleşme", 2), ("satın alma", 2),
     ("rekor", 2), ("başarılı", 2), ("güçlü büyüme", 2),
-    # Banking
+    ("kar marjı arttı", 2), ("kar marjı genişledi", 2),
+    ("ebitda artışı", 2), ("ebitda büyüme", 2),
+    ("operasyonel verimlilik", 2), ("maliyet düşürme", 2),
+    ("organik büyüme", 2), ("pazar payı artışı", 2),
+    ("yeni pazar", 2), ("yeni müşteri", 2),
+    ("sipariş artışı", 2), ("sipariş rekoru", 2),
+    ("yatırım kararı", 2), ("fabrika açılışı", 2),
+    ("yeni tesis", 2), ("üretim artışı", 2),
+    ("ihracat rekoru", 2), ("yurt dışı satış artışı", 2),
+    ("stratejik ortaklık", 2), ("iş birliği", 2),
+    ("halka arz", 2), ("borsa kotasyonu", 2),
+    ("tahvil ihracı başarılı", 2), ("refinansman tamamlandı", 2),
+    ("borç azaltma", 2), ("kaldıraç düşürme", 2),
+    # Banking 2x
     ("aktif büyüme", 2), ("kredi büyümesi", 2), ("mevduat artışı", 2),
     ("sermaye yeterliliği", 2), ("takipteki alacak azaldı", 2),
     ("roe artışı", 2), ("npl düştü", 2),
-    # Energy
+    ("net faiz marjı artışı", 2), ("komisyon geliri artışı", 2),
+    ("özkaynak karlılığı", 2), ("aktif karlılık", 2),
+    ("dijital bankacılık büyüme", 2), ("müşteri sayısı artışı", 2),
+    # Energy 2x
     ("kurulu güç", 2), ("santral", 2), ("lisans aldı", 2),
     ("türbin", 2), ("megavat", 2), ("enerji üretimi", 2),
-    # Construction / real estate
+    ("şarj istasyonu", 2), ("batarya depolama", 2),
+    ("enerji verimliliği", 2), ("karbon azaltma", 2),
+    # Construction / real estate 2x
     ("proje teslimi", 2), ("konut satışı", 2), ("arsa kazandı", 2),
-    # 1x
+    ("inşaat tamamlandı", 2), ("yeni proje", 2), ("imar izni", 2),
+    # Tech / telecom 2x
+    ("abone artışı", 2), ("kullanıcı artışı", 2),
+    ("ar-ge yatırımı", 2), ("patent aldı", 2),
+    ("yazılım ihracatı", 2), ("dijital dönüşüm", 2),
+    # Retail 2x
+    ("mağaza açılışı", 2), ("yeni şube", 2),
+    ("e-ticaret büyüme", 2), ("online satış artışı", 2),
+    # Automotive / industrial 2x
+    ("üretim rekoru", 2), ("ihracat adedi artışı", 2),
+    ("yeni model", 2), ("ar-ge merkezi", 2),
+    # Defense 2x
+    ("savunma ihalesi", 2), ("savunma ihracatı", 2),
+    ("teslimat tamamlandı", 2), ("milli teknoloji", 2),
+    # 1x — hafif olumlu
     ("artış", 1), ("artırdı", 1), ("artıyor", 1), ("arttı", 1),
     ("yükseliş", 1), ("yükseldi", 1), ("büyüme", 1), ("büyüdü", 1),
     ("sıçradı", 1), ("zıpladı", 1), ("toparlandı", 1), ("toparlanma", 1),
@@ -234,31 +341,47 @@ FIN_POSITIVE_WEIGHTED = [
     ("ihracat", 1), ("kapasite", 1), ("büyüyor", 1),
     ("ralli", 1), ("değerlenme", 1), ("destek buldu", 1),
     ("mw", 1), ("rüzgar", 1), ("güneş enerjisi", 1), ("yenilenebilir", 1),
+    ("katkı", 1), ("verimlilik", 1), ("tasarruf", 1), ("optimizasyon", 1),
+    ("sürdürülebilir", 1), ("stratejik", 1), ("inovasyon", 1),
+    ("yeni nesil", 1), ("yerli üretim", 1), ("yerli ve milli", 1),
     # English 3x
     ("earnings beat", 3), ("record profit", 3), ("raised guidance", 3),
     ("price target raised", 3), ("strong buy", 3), ("double upgrade", 3),
     ("blowout quarter", 3), ("exceeds expectations", 3),
+    ("above consensus", 3), ("top line beat", 3), ("bottom line beat", 3),
+    ("record revenue", 3), ("record earnings", 3),
     # English 2x
     ("revenue growth", 2), ("analyst upgrade", 2), ("bullish", 2),
     ("breakout", 2), ("all-time high", 2), ("buyback", 2),
     ("share repurchase", 2), ("margin expansion", 2),
     ("better than expected", 2), ("overweight", 2), ("accumulate", 2),
-    ("guidance raised", 2),
+    ("guidance raised", 2), ("operating leverage", 2),
+    ("free cash flow growth", 2), ("ebitda growth", 2),
+    ("market share gain", 2), ("order backlog", 2),
+    ("strategic acquisition", 2), ("synergy", 2),
+    ("debt reduction", 2), ("deleveraging", 2),
+    ("initiated with buy", 2), ("reiterated buy", 2),
+    ("raised to buy", 2), ("upgraded to outperform", 2),
     # English 1x
     ("growth", 1), ("increase", 1), ("profit", 1), ("revenue", 1),
     ("record", 1), ("gain", 1), ("strong", 1), ("beat", 1),
     ("outperform", 1), ("upgrade", 1), ("buy", 1), ("dividend", 1),
-    ("cash flow", 1),
+    ("cash flow", 1), ("momentum", 1), ("tailwind", 1),
+    ("innovation", 1), ("partnership", 1), ("expansion", 1),
 ]
 
 FIN_NEGATIVE_WEIGHTED = [
-    # 3x
+    # 3x — kesin olumsuz
     ("iflas", 3), ("konkordato", 3), ("temerrüt", 3), ("temerrut", 3),
     ("beklentinin altında", 3), ("hayal kırıklığı", 3),
     ("kredi notu düşürüldü", 3), ("kredi notu indirildi", 3),
     ("not indirimi", 3), ("görevden alındı", 3),
     ("üretim durdu", 3), ("fabrika kapandı", 3),
-    # 2x
+    ("dolandırıcılık", 3), ("yolsuzluk", 3), ("usulsüzlük", 3),
+    ("suç duyurusu", 3), ("tutuklama", 3), ("gözaltı", 3),
+    ("konsensüs altı", 3), ("beklenti altı", 3),
+    ("operasyonel zarar", 3), ("büyük zarar", 3),
+    # 2x — güçlü olumsuz
     ("zarar", 2), ("net zarar", 2), ("faaliyet zararı", 2),
     ("kayıp", 2), ("büyük düşüş", 2), ("sert düşüş", 2),
     ("değer kaybı", 2), ("deger kaybi", 2),
@@ -268,11 +391,32 @@ FIN_NEGATIVE_WEIGHTED = [
     ("sözleşme fesih", 2), ("iptal edildi", 2),
     ("sat sinyali", 2), ("satış baskısı", 2), ("satis baskisi", 2),
     ("hedef düşürüldü", 2), ("hedef indirildi", 2),
-    # Banking
+    ("kar marjı daraldı", 2), ("kar marjı düştü", 2),
+    ("ebitda düşüş", 2), ("ebitda gerileme", 2),
+    ("maliyet artışı", 2), ("maliyet baskısı", 2),
+    ("nakit sıkıntısı", 2), ("likidite sorunu", 2),
+    ("haciz", 2), ("icra", 2), ("el konuldu", 2),
+    ("tedarik sorunu", 2), ("tedarik krizi", 2),
+    ("grev", 2), ("iş bırakma", 2), ("lokavt", 2),
+    ("çevre cezası", 2), ("çevre ihlali", 2),
+    ("manipülasyon", 2), ("insider trading", 2),
+    ("temettü kesildi", 2), ("temettü iptal", 2),
+    ("borç yapılandırma", 2), ("moratoryum", 2),
+    ("sermaye azaltma", 2), ("sermaye eritme", 2),
+    ("müşteri kaybı", 2), ("pazar payı kaybı", 2),
+    # Banking 2x
     ("takipteki alacak arttı", 2), ("npl artışı", 2),
     ("sermaye yetersizliği", 2), ("kredi riski", 2),
-    ("tahsili gecikmiş", 2),
-    # 1x
+    ("tahsili gecikmiş", 2), ("batık kredi", 2),
+    ("mevduat çıkışı", 2), ("likidite riski", 2),
+    ("karşılık artışı", 2), ("provizyon artışı", 2),
+    # Energy 2x
+    ("santral kapatıldı", 2), ("üretim kesintisi", 2),
+    ("lisans iptali", 2), ("çevre davası", 2),
+    # Retail 2x
+    ("mağaza kapanışı", 2), ("şube kapanışı", 2),
+    ("tüketici güveni düştü", 2), ("talep daralması", 2),
+    # 1x — hafif olumsuz
     ("düşüş", 1), ("azaldı", 1), ("geriledi", 1), ("düştü", 1),
     ("azalma", 1), ("gerileme", 1), ("zayıflama", 1), ("kötüleşme", 1),
     ("negatif", 1), ("olumsuz", 1), ("risk", 1), ("uyarı", 1),
@@ -280,10 +424,16 @@ FIN_NEGATIVE_WEIGHTED = [
     ("çekilme", 1), ("erteleme", 1), ("tasfiye", 1),
     ("borç", 1), ("iptal", 1), ("kaybetti", 1),
     ("düşüş trendi", 1), ("düşebilir", 1), ("destek kırdı", 1),
+    ("endişe", 1), ("tedirginlik", 1), ("kaygı", 1),
+    ("durgunluk", 1), ("resesyon", 1), ("stagflasyon", 1),
+    ("volatilite", 1), ("dalgalanma", 1), ("çalkantı", 1),
+    ("yavaşlama", 1), ("duraksama", 1), ("sıkılaşma", 1),
     # English 3x
     ("bankruptcy", 3), ("default", 3), ("profit warning", 3),
     ("earnings warning", 3), ("lowered guidance", 3),
     ("double downgrade", 3), ("below expectations", 3),
+    ("fraud", 3), ("SEC investigation", 3), ("accounting scandal", 3),
+    ("massive loss", 3), ("going concern", 3),
     # English 2x
     ("earnings miss", 2), ("revenue decline", 2), ("price target cut", 2),
     ("analyst downgrade", 2), ("bearish", 2), ("breakdown", 2),
@@ -291,10 +441,17 @@ FIN_NEGATIVE_WEIGHTED = [
     ("dilution", 2), ("guidance cut", 2), ("margin compression", 2),
     ("worse than expected", 2), ("disappointing quarter", 2),
     ("underweight", 2), ("reduce", 2),
+    ("supply chain disruption", 2), ("product recall", 2),
+    ("layoffs", 2), ("restructuring", 2), ("write-down", 2),
+    ("impairment", 2), ("goodwill write-off", 2),
+    ("downgraded to sell", 2), ("initiated with sell", 2),
+    ("reiterated sell", 2), ("lowered to underperform", 2),
     # English 1x
     ("loss", 1), ("decline", 1), ("drop", 1), ("fall", 1),
     ("miss", 1), ("warn", 1), ("downgrade", 1), ("sell", 1),
     ("underperform", 1), ("insolvency", 1), ("share offering", 1),
+    ("headwind", 1), ("slowdown", 1), ("recession", 1),
+    ("uncertainty", 1), ("volatility", 1), ("risk-off", 1),
 ]
 
 # Backward-compat flat lists (strong patterns ve _classify_keywords için)
@@ -314,10 +471,21 @@ def _check_strong_patterns(text: str):
 
 
 def _classify_financial_keywords(text: str) -> str:
-    """Ağırlıklı finans kelime bankası ile sentiment (güçlü override sonrası devreye girer)."""
+    """Ağırlıklı finans kelime bankası + negasyon/bağlam kontrolü ile sentiment."""
+    # Önce negasyon/bağlam kontrolü: "zarar azaldı" → olumlu, "kar düştü" → olumsuz
+    neg_result = _check_negation_context(text)
+    if neg_result is not None:
+        logger.debug(f"Negasyon tespiti: {neg_result!r} | metin={text[:60]!r}")
+        return neg_result
+
     tl = text.lower()
     pos = sum(w for word, w in FIN_POSITIVE_WEIGHTED if word in tl)
     neg = sum(w for word, w in FIN_NEGATIVE_WEIGHTED if word in tl)
+
+    # Eşik farkı: küçük farklar nötr sayılsın (1-2 puanlık fark anlamsız)
+    diff = abs(pos - neg)
+    if diff <= 1 and pos + neg > 0:
+        return "notr"
     if pos > neg:   return "olumlu"
     if neg > pos:   return "olumsuz"
     return "notr"
@@ -327,7 +495,8 @@ def _classify_financial_keywords(text: str) -> str:
 
 SOURCE_TIERS = {
     # Tier 1 — En yüksek güvenilirlik (ağırlık: 3x)
-    # Not: AA Ekonomi ve KAP RSS'leri test'te erişilemez bulundu (404/bağlantı hatası)
+    # Not: KAP RSS bot korumalı — erişim borsapy kütüphanesi üzerinden (_src_kap)
+    "KAP":              {"tier": 1, "weight": 3.0, "label": "Grade A"},
     "Bloomberg HT":     {"tier": 1, "weight": 3.0, "label": "Grade A"},
     "NTV Ekonomi":      {"tier": 1, "weight": 2.5, "label": "Grade A"},
     "Habertürk":        {"tier": 1, "weight": 2.5, "label": "Grade A"},
@@ -453,14 +622,16 @@ POSITIVE_WORDS = [
     "al sinyali", "destek buldu", "yukselebilir", "yükselebilir",
     "hedef fiyat yukari", "rating artirimi", "not artirimi",
     "sözleşme imzalandı", "ihale kazanıldı", "yeni sipariş",
-    # Bankacılık
     "aktif buyume", "aktif büyüme", "kredi buyumesi", "kredi büyümesi",
     "mevduat artisi", "mevduat artışı", "npl dustu", "npl düştü",
-    # Enerji
     "megavat", "enerji uretimi", "enerji üretimi", "santral",
-    # Genel ek
     "pazar payi", "pazar payı", "yeni musteri", "yeni müşteri",
     "stratejik", "verimlilik", "tasarruf",
+    "ebitda", "marj genişleme", "organik buyume", "organik büyüme",
+    "siparis", "sipariş", "teslimat", "devreye alma",
+    "patent", "ar-ge", "inovasyon", "dijital donusum", "dijital dönüşüm",
+    "abone artisi", "abone artışı", "surdurulebilir", "sürdürülebilir",
+    "refinansman", "borc azaltma", "borç azaltma", "kaldirac", "kaldıraç",
 ]
 
 NEGATIVE_WORDS = [
@@ -474,13 +645,20 @@ NEGATIVE_WORDS = [
     "dusus trendi", "düşüş trendi", "dusebilir", "düşebilir",
     "hedef fiyat asagi", "rating indirimi", "not indirimi",
     "sozlesme fesih", "sözleşme fesih", "iptal edildi",
-    # Bankacılık
     "takipteki alacak", "tahsili gecikmis", "tahsili gecikmiş",
     "sermaye yetersizligi", "sermaye yetersizliği",
-    # Genel ek
     "konkordato", "temerrrut", "temerrüt", "haciz", "icra",
     "maliyet artisi", "maliyet artışı", "enflasyon baskisi",
     "operasyonel zarar", "nakit sikintisi", "nakit sıkıntısı",
+    "dolandiricilik", "dolandırıcılık", "yolsuzluk", "usulsuzluk", "usulsüzlük",
+    "grev", "lokavt", "is birakma", "iş bırakma",
+    "manipulasyon", "manipülasyon",
+    "endise", "endişe", "tedirginlik", "kaygi", "kaygı",
+    "durgunluk", "resesyon", "stagflasyon",
+    "volatilite", "dalgalanma", "calkantiı", "çalkantı",
+    "yavasslama", "yavaşlama", "daralsma", "sıkılaşma",
+    "gozalti", "gözaltı", "tutuklama", "suc duyurusu", "suç duyurusu",
+    "batik kredi", "batık kredi", "provizyon", "karsilik artisi", "karşılık artışı",
 ]
 
 # ŞİRKET VE DİL HARİTALARI
@@ -674,9 +852,15 @@ def _classify(text: str) -> str:
     if not text or not text.strip():
         return "notr"
 
-    # KATMAN 0: TEKNİK FİYAT HAREKETİ KONTROLÜ
-    # Salt fiyat hareketi haberlerinde Katman 1 regex hatalı override yapar.
-    # Bu haberleri direkt BERT/kelime sayıma yönlendir.
+    # KATMAN 0a: NEGASYON / BAĞLAM KONTROLÜ
+    # "zarar azaldı" → olumlu, "kar düştü" → olumsuz gibi çift yönlü ifadeler
+    # Bu katman diğer tüm katmanlardan önce çalışır
+    neg_result = _check_negation_context(text)
+    if neg_result is not None:
+        logger.debug(f"Negasyon override: {neg_result!r} | metin={text[:60]!r}")
+        return neg_result
+
+    # KATMAN 0b: TEKNİK FİYAT HAREKETİ KONTROLÜ
     is_tech_move = _is_technical_price_move(text)
 
     if not is_tech_move:
@@ -890,6 +1074,63 @@ def _fetch_rss(
     return items[:max_results]
 
 # KAYNAK FONKSİYONLARI
+
+def _src_kap(ticker, cutoff):
+    """KAP bildirimleri — borsapy üzerinden (KAP RSS/API bot korumalı, tek çalışan yol).
+
+    Bildirimler zaten hisseye özel geldiği için _is_relevant filtresi uygulanmaz.
+    Başlıklar jenerik olabilir ('Özel Durum Açıklaması (Genel)' vb.) — sentiment
+    çoğunlukla nötr kalır ama is_kap/official_bonus güven skorunu besler.
+    """
+    if not BORSAPY_OK:
+        return []
+
+    kap_ticker = ticker.upper().replace(".IS", "")
+    items = []
+    try:
+        df = borsapy.Ticker(kap_ticker).news
+        if df is None or len(df) == 0:
+            return []
+
+        for _, row in df.iterrows():
+            title = _clean_title(str(row.get("Title", "")))
+            if not title or len(title) < 5:
+                continue
+
+            pub = None
+            try:
+                pub = datetime.strptime(str(row.get("Date", "")), "%d.%m.%Y %H:%M:%S")
+            except (ValueError, TypeError):
+                pass
+            if pub and pub < cutoff:
+                continue
+
+            tl = title.lower()
+            is_material = any(k in tl for k in [
+                "özel durum", "finansal rapor", "faaliyet raporu", "temettü",
+                "sermaye artırımı", "pay geri alım", "genel kurul", "birleşme",
+                "sözleşme", "ihale", "kredi derecelendirmesi",
+            ])
+
+            items.append(NewsItem(
+                title=title,
+                source="KAP",
+                published=pub.isoformat() if pub else "",
+                url=str(row.get("URL", "")),
+                sentiment=_classify(title),
+                is_kap=True,
+                is_material=is_material,
+                is_speculation=False,  # KAP resmi kaynak, spekülasyon olamaz
+                official_bonus=max(15, _official_bonus(title)),  # KAP bildirimi taban bonusu
+                tier=_get_tier("KAP"),
+            ))
+
+        logger.info(f"KAP (borsapy): {kap_ticker} -> {len(items)} bildirim")
+
+    except Exception as exc:
+        logger.warning(f"KAP (borsapy) hata: {exc}")
+
+    return items
 
 def _src_haberturk(ticker, cutoff):
     """Habertürk Ekonomi — test'te ✅ doğrulandı."""
@@ -1262,6 +1503,7 @@ def analyze_news(
     if language in ("TR", "BOTH"):
         source_fns += [
             # Tier 1 (test'te ✅)
+            _src_kap,           # KAP bildirimleri (borsapy) — resmi kaynak
             _src_haberturk,     # Bloomberg HT, NTV — doğrulandı
             _src_ntv,           # NTV Ekonomi + NTV Para — doğrulandı
             _src_bloomberght,   # Bloomberg HT — doğrulandı
@@ -1327,6 +1569,10 @@ def analyze_news(
     normalized_map: dict[str, list[NewsItem]] = {}
     for item in all_raw:
         key = _normalize_title(item.title)
+        # KAP başlıkları jenerik ('Özel Durum Açıklaması' vb.) — farklı günlerdeki
+        # farklı bildirimler tek habere indirgenmesin diye tarihi anahtara ekle
+        if item.is_kap and item.source == "KAP":
+            key += "|" + item.published[:10]
         normalized_map.setdefault(key, []).append(item)
 
     deduplicated: list[NewsItem] = []

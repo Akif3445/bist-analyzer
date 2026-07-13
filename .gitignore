@@ -31,3 +31,6 @@ Thumbs.db
 Streamlid.bat
 test_*.py
 faz2_modules.py
+
+# Kalibrasyon veri panelleri (weight_calibration.py ile yeniden üretilebilir)
+calibration_*.csv

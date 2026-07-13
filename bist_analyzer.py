@@ -131,11 +131,16 @@ SECTOR_FK_AVERAGES = {
     "Genel":      10.0,
 }
 
+# Kalibrasyon (weight_calibration.py, Temmuz 2026): teknik momentum skoru
+# IC +0.045 (t=2.8) ile anlamlı; GDELT haber tonu proxy'si her ufukta zayıf (t<1).
+# IC oranı tekniğe %64-80 pay veriyor — temkinli adım olarak 45/25 seçildi
+# (haber motorumuz KAP + TR kaynaklarıyla GDELT'ten iyi olabilir).
+# Sinyal Takip verisi biriktikçe yeniden kalibre edilecek.
 WEIGHTS = {
-    "teknik":    35,   # Teknik analiz (RSI, MACD, trend)
-    "sentiment": 35,   # Haber sentiment — BERT ile artırıldı
-    "prim":      20,   # Fiyat primi / hedef fiyat
-    "deger":     10,   # Değerleme (F/K, PD/DD)
+    "teknik":    45,   # Teknik analiz (momentum stili — kalibrasyonla doğrulandı)
+    "sentiment": 25,   # Haber sentiment (kalibrasyonda öngörü gücü zayıf çıktı)
+    "prim":      20,   # Fiyat primi / hedef fiyat (tarihsel test edilemedi)
+    "deger":     10,   # Değerleme (F/K, PD/DD) (tarihsel test edilemedi)
 }
 
 # BISTScore JSON serialization
@@ -918,7 +923,7 @@ class AnalysisHistoryDB:
                         continue
 
                     try:
-                        tech = TechnicalEngine.compute(hist_df)
+                        tech = TechnicalEngine.compute(hist_df, style=_tech_style_for(ticker, "BIST"))
                         score_val = tech.score
                         signal_str, _ = _score_to_signal(score_val)
                     except Exception:
@@ -1171,7 +1176,7 @@ class TechnicalResult:
 
 class TechnicalEngine:
     @staticmethod
-    def compute(df: pd.DataFrame) -> TechnicalResult:
+    def compute(df: pd.DataFrame, style: str = "dengeli") -> TechnicalResult:
         result = TechnicalResult()
         if df is None or df.empty or len(df) < 50:
             return result
@@ -1330,7 +1335,7 @@ class TechnicalEngine:
             except Exception as exc:
                 log.warning("ADX hesaplama hatası: %s", exc)
 
-        result.score = TechnicalEngine._compute_score(result)
+        result.score = TechnicalEngine._compute_score(result, style)
         return result
 
     # Yardımcı Hesaplamalar
@@ -1388,9 +1393,18 @@ class TechnicalEngine:
             return 0.0
 
     @staticmethod
-    def _compute_score(r: TechnicalResult) -> float:
+    def _compute_score(r: TechnicalResult, style: str = "dengeli") -> float:
+        """0-100 teknik skor.
+
+        style="dengeli"  : Orijinal karma mantık — aşırı satım (düşük RSI/BB/52w)
+                           ödüllendirilir. Kalibrasyon (weight_calibration.py, 2026-07)
+                           bunun BIST-30 mega-cap'lerde çalıştığını gösterdi.
+        style="momentum" : Güç ödüllendirilir — yüksek RSI/BB/52w pozisyonu puan alır.
+                           Kalibrasyon geniş BIST evreninde bu rejimi doğruladı
+                           (52w IC +0.06-0.08, t>3.5, iki alt dönemde de tutarlı).
+        Trend/MACD/hacim blokları iki stilde de aynıdır (yönleri zaten momentum).
         """
-    """
+        momentum = (style == "momentum")
         score = 0.0
 
         # 1. TREND GRUBU (max 20)
@@ -1426,23 +1440,49 @@ class TechnicalEngine:
 
         # 2. MOMENTUM GRUBU — RSI + Stochastic (max 20)
         rsi = r.rsi
-        if rsi < 30:
-            score += 20              # Aşırı satım → en iyi alım fırsatı
-        elif rsi < 40:
-            score += 15              # Ucuz bölge
-        elif rsi < 50:
-            score += 10              # Nötr-hafif ucuz
-        elif rsi < 60:
-            score += 7               # Nötr
-        elif rsi < 70:
-            score += 3               # Hafif pahalı
-        elif rsi < 80:
-            score -= 8               # Aşırı alım → ceza
+        if momentum:
+            # Momentum rejimi: güçlü RSI kazandırır (kalibrasyon: RSI IC +0.05, t=3.1)
+            if rsi >= 80:
+                score += 8           # Çok güçlü ama aşırı ısınmış — temkinli ödül
+            elif rsi >= 70:
+                score += 18          # Güçlü momentum → en iyi bölge
+            elif rsi >= 60:
+                score += 14
+            elif rsi >= 50:
+                score += 9
+            elif rsi >= 40:
+                score += 4
+            elif rsi >= 30:
+                score -= 6           # Zayıf hisse → ceza
+            else:
+                score -= 12          # Çok zayıf — düşen bıçak
         else:
-            score -= 15              # Tehlikeli aşırı alım → ağır ceza
+            if rsi < 30:
+                score += 20          # Aşırı satım → en iyi alım fırsatı
+            elif rsi < 40:
+                score += 15          # Ucuz bölge
+            elif rsi < 50:
+                score += 10          # Nötr-hafif ucuz
+            elif rsi < 60:
+                score += 7           # Nötr
+            elif rsi < 70:
+                score += 3           # Hafif pahalı
+            elif rsi < 80:
+                score -= 8           # Aşırı alım → ceza
+            else:
+                score -= 15          # Tehlikeli aşırı alım → ağır ceza
 
         # Stochastic — RSI'yı destekler ya da çelişir
-        if r.stoch_oversold and rsi < 40:
+        if momentum:
+            if r.stoch_overbought and rsi > 65:
+                score += 5           # İki gösterge de güç diyor → güvenilir
+            elif r.stoch_oversold and rsi < 40:
+                score -= 5           # İki gösterge de zayıflık diyor
+            elif r.stoch_overbought:
+                score += 2
+            elif r.stoch_oversold:
+                score -= 2
+        elif r.stoch_oversold and rsi < 40:
             score += 5               # İki gösterge de aynı fikirde → güvenilir
         elif r.stoch_overbought and rsi > 65:
             score -= 5               # İki gösterge de aşırı alım diyor
@@ -1486,7 +1526,20 @@ class TechnicalEngine:
 
         # 5. BOLLINGER GRUBU (max 10)
         pos = r.bb_position          # 0=alt bant, 1=üst bant
-        if pos <= 0.15:
+        if momentum:
+            if pos >= 0.85:
+                score += 8           # Üst bantta güçlü seyir → momentum onayı
+            elif pos >= 0.70:
+                score += 6
+            elif pos >= 0.50:
+                score += 3
+            elif pos >= 0.30:
+                score += 0
+            elif pos >= 0.15:
+                score -= 4
+            else:
+                score -= 8           # Alt bantta sürünüyor → zayıflık
+        elif pos <= 0.15:
             score += 10              # Alt bantın çok altında → aşırı satım
         elif pos <= 0.30:
             score += 7
@@ -1504,7 +1557,20 @@ class TechnicalEngine:
 
         # 6. 52 HAFTALIK POZİSYON (max 10)
         w = r.week52_position        # 0=dip, 1=zirve
-        if w <= 0.20:
+        if momentum:
+            # Kalibrasyondaki en güçlü sinyal: zirveye yakınlık kazandırır
+            # (IC +0.06-0.08, iki alt dönemde de t>3.5)
+            if w >= 0.80:
+                score += 10          # Zirveye yakın → güç devam ediyor
+            elif w >= 0.60:
+                score += 7
+            elif w >= 0.40:
+                score += 3
+            elif w >= 0.20:
+                score -= 2
+            else:
+                score -= 6           # Yıllık dipte → dipte kalma eğilimi
+        elif w <= 0.20:
             score += 10              # Yıllık dibe yakın → potansiyel yüksek
         elif w <= 0.40:
             score += 7
@@ -1633,6 +1699,20 @@ def _fetch_benchmark_cached(index_symbol: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _tech_style_for(ticker: str, market: str = "BIST") -> str:
+    """Teknik skor stilini piyasaya göre seçer.
+
+    Kalibrasyon bulgusu (weight_calibration.py, Temmuz 2026):
+    - BIST momentum rejiminde: saf momentum skoru tüm evrende IC +0.045 (t=2.8),
+      iki alt dönemde de pozitif. BIST-30'da eski stille berabere → kayıp yok.
+    - Segment-bazlı karma stil DENENDİ ve REDDEDİLDİ: farklı cetvellerle verilen
+      puanlar tek sıralamada karşılaştırılınca kesitsel IC bozuluyor (+0.012'ye
+      düşüyor). Tüm BIST tek stil kullanmalı.
+    - US için kanıt yok → mevcut davranış ("dengeli") korunur.
+    """
+    return "momentum" if market == "BIST" else "dengeli"
+
+
 def compute_bist_score(
     ticker: str,
     analyst_target: Optional[float] = None,
@@ -1641,9 +1721,10 @@ def compute_bist_score(
     market: str = "BIST",
 ) -> BISTScore:
     """
-    Weighted composite score:
-        Total = (Technical x 0.35) + (Sentiment x 0.25)
-              + (Premium   x 0.25) + (Valuation x 0.15)
+    Weighted composite score (bkz. WEIGHTS — kalibrasyonla güncellendi, 2026-07):
+        Total = (Technical x 0.45) + (Sentiment x 0.25)
+              + (Premium   x 0.20) + (Valuation x 0.10)
+    Eksik veri durumunda ağırlıklar mevcut bileşenlere dağıtılır (aşağıda).
     """
     result = BISTScore(ticker=ticker.upper())
 
@@ -1654,8 +1735,8 @@ def compute_bist_score(
         result.signal = "HATA"
         return result
 
-    # Technical Analysis
-    technical           = TechnicalEngine.compute(stock.df)
+    # Technical Analysis — stil hisse segmentine göre (bkz. _tech_style_for)
+    technical           = TechnicalEngine.compute(stock.df, style=_tech_style_for(ticker, market))
 
     # .5: Relative Strength vs benchmark index (cached)
     _bench_idx = _default_index(market)
@@ -1741,16 +1822,16 @@ def compute_bist_score(
     has_fk        = stock.pe_ratio is not None
 
     # Temel ağırlıklar
-    w_teknik    = WEIGHTS["teknik"]     # 35
-    w_sentiment = WEIGHTS["sentiment"]  # 35
+    w_teknik    = WEIGHTS["teknik"]     # 45
+    w_sentiment = WEIGHTS["sentiment"]  # 25
     w_prim      = WEIGHTS["prim"]       # 20
     w_deger     = WEIGHTS["deger"]      # 10
 
     # Hedef fiyat yoksa prim ağırlığını teknik + sentimente eşit böl
     if not has_target:
         extra = w_prim
-        w_teknik    += extra // 2         # +10 → 45
-        w_sentiment += extra - extra // 2  # +10 → 45
+        w_teknik    += extra // 2         # +10 → 55
+        w_sentiment += extra - extra // 2  # +10 → 35
         w_prim       = 0
 
     # F/K yoksa değer ağırlığını tekniğe ver
@@ -2186,8 +2267,8 @@ class PortfolioScanner:
                 if "Low"    not in df.columns: df["Low"]    = df["Close"]
                 if "Volume" not in df.columns: df["Volume"] = 0.0
 
-                # TechnicalEngine ile tam analiz
-                tech = TechnicalEngine.compute(df)
+                # TechnicalEngine ile tam analiz — stil hisse segmentine göre
+                tech = TechnicalEngine.compute(df, style=_tech_style_for(ticker, "BIST"))
 
                 result.score             = tech.score
                 result.rsi               = tech.rsi
@@ -2591,8 +2672,9 @@ class TimeMachineEngine:
                 if len(df) < 60:
                     continue
 
-                # Teknik analiz (BacktestEngine vektörize skor)
-                scores, atr, rsi = BacktestEngine._vectorized_scores(df)
+                # Teknik analiz (BacktestEngine vektörize skor) — canlı skorlamayla aynı stil
+                scores, atr, rsi = BacktestEngine._vectorized_scores(
+                    df, style=_tech_style_for(ticker, market))
 
                 pit_score = float(scores.iloc[-1])
                 pit_rsi   = float(rsi.iloc[-1])
@@ -3279,11 +3361,15 @@ class BacktestEngine:
 
     # Vektörize Skor Hesaplama
     @staticmethod
-    def _vectorized_scores(df: pd.DataFrame) -> pd.Series:
+    def _vectorized_scores(df: pd.DataFrame, style: str = "dengeli") -> pd.Series:
         """
         Tüm geçmiş için tek seferde teknik skor hesaplar.
         pandas rolling() geriye dönük olduğundan lookahead bias YOK.
+
+        style: "dengeli" (orijinal, kontrarian) | "momentum" — canlı skorlamayla
+        (TechnicalEngine._compute_score) aynı rejim mantığı, bkz. _tech_style_for.
         """
+        momentum = (style == "momentum")
         close = df["Close"]
         high  = df.get("High",   close)
         low   = df.get("Low",    close)
@@ -3319,17 +3405,27 @@ class BacktestEngine:
         rsi_rising = rsi_delta.fillna(0) > 2  # en az 2 puan artmış
 
         rsi_score = pd.Series(0.0, index=df.index)
-        # Mean-reversion odaklı: dipten dönüşe büyük prim
-        # RSI < 30 ve yükseliyorsa → güçlü dönüş sinyali (max puan)
-        rsi_score[(rsi < 30) & rsi_rising]            = 28
-        rsi_score[(rsi < 30) & ~rsi_rising]           = 18   # dip ama henüz dönüş yok
-        rsi_score[(rsi >= 30) & (rsi < 40) & rsi_rising]  = 22  # dönüş konfirme
-        rsi_score[(rsi >= 30) & (rsi < 40) & ~rsi_rising] = 14
-        rsi_score[(rsi >= 40) & (rsi < 50)]           = 10
-        rsi_score[(rsi >= 50) & (rsi < 60)]           =  6
-        rsi_score[(rsi >= 60) & (rsi < 70)]           =  2
-        rsi_score[(rsi >= 70) & (rsi < 80)]           = -10
-        rsi_score[rsi >= 80]                          = -18
+        if momentum:
+            # Momentum rejimi: güçlü RSI kazandırır (kalibrasyon: IC +0.05, t=3.1)
+            rsi_score[rsi >= 80]                          =   8  # aşırı ısınmış — temkinli
+            rsi_score[(rsi >= 70) & (rsi < 80)]           =  18
+            rsi_score[(rsi >= 60) & (rsi < 70)]           =  14
+            rsi_score[(rsi >= 50) & (rsi < 60)]           =   9
+            rsi_score[(rsi >= 40) & (rsi < 50)]           =   4
+            rsi_score[(rsi >= 30) & (rsi < 40)]           =  -6
+            rsi_score[rsi < 30]                           = -12
+        else:
+            # Mean-reversion odaklı: dipten dönüşe büyük prim
+            # RSI < 30 ve yükseliyorsa → güçlü dönüş sinyali (max puan)
+            rsi_score[(rsi < 30) & rsi_rising]            = 28
+            rsi_score[(rsi < 30) & ~rsi_rising]           = 18   # dip ama henüz dönüş yok
+            rsi_score[(rsi >= 30) & (rsi < 40) & rsi_rising]  = 22  # dönüş konfirme
+            rsi_score[(rsi >= 30) & (rsi < 40) & ~rsi_rising] = 14
+            rsi_score[(rsi >= 40) & (rsi < 50)]           = 10
+            rsi_score[(rsi >= 50) & (rsi < 60)]           =  6
+            rsi_score[(rsi >= 60) & (rsi < 70)]           =  2
+            rsi_score[(rsi >= 70) & (rsi < 80)]           = -10
+            rsi_score[rsi >= 80]                          = -18
 
         # MACD
         ema12  = close.ewm(span=12, adjust=False).mean()
@@ -3351,12 +3447,19 @@ class BacktestEngine:
         bb_pos = (close - (sma20 - 2*std20)) / (4 * std20).replace(0, np.nan)
 
         bb_score = pd.Series(0.0, index=df.index)
-        bb_score[bb_pos <= 0.15]                       =  10
-        bb_score[(bb_pos > 0.15) & (bb_pos <= 0.30)]  =   7
-        bb_score[(bb_pos > 0.30) & (bb_pos <= 0.50)]  =   4
-        bb_score[(bb_pos > 0.50) & (bb_pos <= 0.70)]  =   1
-        bb_score[(bb_pos > 0.70) & (bb_pos <= 0.85)]  =  -4
-        bb_score[bb_pos > 0.85]                        =  -8
+        if momentum:
+            bb_score[bb_pos > 0.85]                        =   8
+            bb_score[(bb_pos > 0.70) & (bb_pos <= 0.85)]  =   6
+            bb_score[(bb_pos > 0.50) & (bb_pos <= 0.70)]  =   3
+            bb_score[(bb_pos > 0.15) & (bb_pos <= 0.30)]  =  -4
+            bb_score[bb_pos <= 0.15]                       =  -8
+        else:
+            bb_score[bb_pos <= 0.15]                       =  10
+            bb_score[(bb_pos > 0.15) & (bb_pos <= 0.30)]  =   7
+            bb_score[(bb_pos > 0.30) & (bb_pos <= 0.50)]  =   4
+            bb_score[(bb_pos > 0.50) & (bb_pos <= 0.70)]  =   1
+            bb_score[(bb_pos > 0.70) & (bb_pos <= 0.85)]  =  -4
+            bb_score[bb_pos > 0.85]                        =  -8
 
         # 52 Haftalık Pozisyon
         w52_hi  = close.rolling(252, min_periods=50).max()
@@ -3364,11 +3467,19 @@ class BacktestEngine:
         w52_pos = (close - w52_lo) / (w52_hi - w52_lo).replace(0, np.nan)
 
         w52_score = pd.Series(0.0, index=df.index)
-        w52_score[w52_pos <= 0.20]                          =  10
-        w52_score[(w52_pos > 0.20) & (w52_pos <= 0.40)]    =   7
-        w52_score[(w52_pos > 0.40) & (w52_pos <= 0.60)]    =   3
-        w52_score[(w52_pos > 0.60) & (w52_pos <= 0.80)]    =  -2
-        w52_score[w52_pos > 0.80]                           =  -6
+        if momentum:
+            # Kalibrasyondaki en güçlü sinyal: zirveye yakınlık kazandırır (t>3.5)
+            w52_score[w52_pos > 0.80]                           =  10
+            w52_score[(w52_pos > 0.60) & (w52_pos <= 0.80)]    =   7
+            w52_score[(w52_pos > 0.40) & (w52_pos <= 0.60)]    =   3
+            w52_score[(w52_pos > 0.20) & (w52_pos <= 0.40)]    =  -2
+            w52_score[w52_pos <= 0.20]                          =  -6
+        else:
+            w52_score[w52_pos <= 0.20]                          =  10
+            w52_score[(w52_pos > 0.20) & (w52_pos <= 0.40)]    =   7
+            w52_score[(w52_pos > 0.40) & (w52_pos <= 0.60)]    =   3
+            w52_score[(w52_pos > 0.60) & (w52_pos <= 0.80)]    =  -2
+            w52_score[w52_pos > 0.80]                           =  -6
 
         # Hacim
         avg_vol10 = vol.rolling(10, min_periods=3).mean()
@@ -3476,7 +3587,8 @@ class BacktestEngine:
         if len(raw) < min_rows:
             raise ValueError(f"Yeterli veri yok: {len(raw)} < {min_rows} gün")
 
-        scores, atr_s, rsi_s = BacktestEngine._vectorized_scores(raw)
+        scores, atr_s, rsi_s = BacktestEngine._vectorized_scores(
+            raw, style=_tech_style_for(ticker, market))
         dates  = raw.index.to_list()
         opens  = raw["Open"].values
         highs  = raw["High"].values
@@ -6926,34 +7038,27 @@ def render_us_system_portfolios_page(ui_lang: str):
 
 
 def render_backtest_page(ui_lang: str):
-    """Backtest — tarihsel sinyal simülasyonu."""
-    st.markdown("# 🧪 Backtest — Tarihsel Sinyal Testi")
+    """Birleşik Backtest sayfası — Manuel Hisse Seçimi + Zaman Makinesi tek çatı altında."""
+    st.markdown("# 🧪 Backtest")
     st.caption(
-        "Sistem geçmiş verileri kullanarak AL/SAT sinyalleri üretir ve bu sinyallerin "
-        "gerçekleştirilmesi halinde ne kadar kâr/zarar edileceğini simüle eder. "
-        "Giriş ertesi gün açılıştan, çıkış gün içi High/Low ile tetiklenir. "
+        "Geçmiş verileri kullanarak AL/SAT simülasyonu yapar. "
+        "Manuel hisse seçimi veya Zaman Makinesi ile otomatik portföy testi. "
         "**Komisyon: round-trip %0.4 dahil.**"
     )
 
-    # Sidebar
+    # Mod seçici
+    bt_mode_tab = st.radio(
+        "Backtest Modu",
+        ["Manuel Hisse Seçimi", "Zaman Makinesi"],
+        horizontal=True,
+        key="bt_mode_tab",
+        help="Manuel: Kendi seçtiğin hisselerle test. Zaman Makinesi: Sistem otomatik portföy seçer ve test eder."
+    )
+    st.markdown("---")
+
+    # Ortak sidebar ayarları
     with st.sidebar:
-        st.markdown("## ⚙️ Backtest Ayarları")
-        # Sistem Portföyleri'nden gelen ön-yükleme varsa kullan
-        _preload = st.session_state.pop("preload_bt_tickers", None)
-        _default_tickers = _preload if _preload else [t for t in BACKTEST_TICKERS if t in BIST_SCAN_UNIVERSE]
-        selected_tickers = st.multiselect(
-            "Test Edilecek Hisseler",
-            options=sorted(BIST_SCAN_UNIVERSE),
-            default=[t for t in _default_tickers if t in BIST_SCAN_UNIVERSE],
-            placeholder="Hisse kodu ara (örn: THYAO)...",
-            help="BIST hisselerinden seçin. 5-10 hisse önerilir."
-        )
-        bt_period = st.selectbox(
-            "Veri Periyodu",
-            options=["1y", "2y", "3y"],
-            index=1,
-            format_func=lambda x: {"1y": "1 Yıl", "2y": "2 Yıl", "3y": "3 Yıl"}[x],
-        )
+        st.markdown("## Backtest Ayarları")
         bt_mode = st.radio(
             "Strateji Modu",
             options=["swing", "trend", "universal", "investor", "buyhold"],
@@ -6963,101 +7068,235 @@ def render_backtest_page(ui_lang: str):
                 f"**{BacktestEngine.MODES[k]['label']}**: {BacktestEngine.MODES[k]['desc']}"
                 for k in ["swing", "trend", "universal", "investor", "buyhold"]
             ),
+            key="bt_strategy_mode",
         )
         use_news_filter = st.checkbox(
-            "📰 Haber Filtresi",
+            "Haber Filtresi",
             value=True,
-            help="AL sinyali üretildiğinde o tarihe ait haberleri kontrol eder. "
-                 "Güçlü negatif haber varsa AL yapmaz. İlk çalıştırmada yavaş olabilir (cache'lenir)."
+            help="AL sinyalinde negatif haber varsa atlar.",
+            key="bt_news_filter",
         )
         st.markdown("---")
-        st.markdown("**Gelişmiş Ayarlar**")
-        enable_short = st.checkbox(
-            "📉 Açığa Satış (Short)",
-            value=False,
-            help="Düşüş trendinde Short pozisyon açar. VİOP/açığa satış simülasyonu."
-        )
-        enable_scaling = st.checkbox(
-            "📊 Kademeli Kâr Al",
-            value=True,
-            help="Kâr hedefinin yarısında pozisyonun %50'sini kapatır, kalanı trailing stop ile takip eder."
-        )
-        enable_optimizer = st.checkbox(
-            "🔬 Walk-Forward Optimize",
-            value=False,
-            help="Her hisse için en iyi parametreleri otomatik bulur. Yavaş ama daha isabetli."
-        )
-        risk_slider = st.slider(
-            "İşlem Başına Risk %",
-            min_value=0.5, max_value=5.0, value=2.0, step=0.5,
-            help="Her işlemde kasanın max yüzde kaçı riske atılsın."
-        ) / 100.0
-        run_btn = st.button(
-            "▶ Backtest Çalıştır",
-            type="primary", use_container_width=True,
-            disabled=len(selected_tickers) < 1,
-        )
+
+        if bt_mode_tab == "Manuel Hisse Seçimi":
+            _preload = st.session_state.pop("preload_bt_tickers", None)
+            _default_tickers = _preload if _preload else [t for t in BACKTEST_TICKERS if t in BIST_SCAN_UNIVERSE]
+            selected_tickers = st.multiselect(
+                "Test Edilecek Hisseler",
+                options=sorted(BIST_SCAN_UNIVERSE),
+                default=[t for t in _default_tickers if t in BIST_SCAN_UNIVERSE],
+                placeholder="Hisse kodu ara...",
+                help="5-10 hisse önerilir.",
+                key="bt_manual_tickers",
+            )
+            bt_period = st.selectbox(
+                "Veri Periyodu",
+                options=["1y", "2y", "3y"],
+                index=1,
+                format_func=lambda x: {"1y": "1 Yıl", "2y": "2 Yıl", "3y": "3 Yıl"}[x],
+                key="bt_period_sel",
+            )
+            st.markdown("---")
+            st.markdown("**Gelişmiş**")
+            enable_short = st.checkbox("Aciga Satis (Short)", value=False, key="bt_short")
+            enable_scaling = st.checkbox("Kademeli Kar Al", value=True, key="bt_scaling")
+            enable_optimizer = st.checkbox("Walk-Forward Optimize", value=False, key="bt_optimizer")
+            risk_slider = st.slider(
+                "Islem Basina Risk %",
+                min_value=0.5, max_value=5.0, value=2.0, step=0.5, key="bt_risk",
+            ) / 100.0
+            run_btn = st.button(
+                "Backtest Calistir",
+                type="primary", use_container_width=True,
+                disabled=len(selected_tickers) < 1,
+                key="bt_run_manual",
+            )
+        else:
+            # Zaman Makinesi ayarları
+            _styles = TimeMachineEngine.PORTFOLIO_STYLES
+            _style_keys = [k for k in _styles if k != "custom"]
+            tm_years = st.selectbox(
+                "Kac Yil Geriye?", [1, 2, 3, 5], index=2,
+                format_func=lambda x: f"{x} Yil",
+                key="bt_tm_years",
+            )
+            tm_market = st.radio("Piyasa", ["BIST", "US"], index=0, key="bt_tm_market")
+            tm_style = st.radio(
+                "Portfoy Stili",
+                _style_keys,
+                index=0,
+                format_func=lambda x: _styles[x]["label"],
+                key="bt_tm_style",
+            )
+            st.caption(f"_{_styles[tm_style]['desc']}_")
+            st.markdown("---")
+            _all_tickers = BIST_SCAN_UNIVERSE if tm_market == "BIST" else US_POPULAR_TICKERS
+            custom_tickers = st.multiselect(
+                "Ozel Portfoy (istege bagli)",
+                options=sorted(_all_tickers),
+                default=[],
+                key="bt_tm_custom",
+                placeholder="Kendi hisselerini sec...",
+            )
+            run_btn = st.button(
+                "Zaman Makinesi Calistir",
+                type="primary", use_container_width=True,
+                key="bt_run_tm",
+            )
+            # Dummy vars for manual mode
+            selected_tickers = []
+            bt_period = "2y"
+            enable_short = False
+            enable_scaling = True
+            enable_optimizer = False
+            risk_slider = 0.02
+
         st.markdown("---")
         cfg_disp = BacktestEngine.MODES.get(bt_mode, BacktestEngine.MODES["universal"])
         st.caption(
             f"**{cfg_disp['label']}** — {cfg_disp['desc']}  \n"
-            f"AL eşiği : ≥{cfg_disp['BUY_THRESHOLD']} puan  \n"
-            f"SAT eşiği: ≤{cfg_disp['SELL_THRESHOLD']} puan  \n"
+            f"AL esigi : >={cfg_disp['BUY_THRESHOLD']} puan  \n"
+            f"SAT esigi: <={cfg_disp['SELL_THRESHOLD']} puan  \n"
             f"Stop-Loss: %{cfg_disp['STOP_PCT']*100:.0f}  \n"
             f"Take-Profit: %{cfg_disp['TP_PCT']*100:.0f}  \n"
-            f"Max süre : {cfg_disp['MAX_HOLD_DAYS']} gün  \n"
-            f"Komisyon : round-trip %{BacktestEngine.COMMISSION*200:.1f}"
+            f"Max sure : {cfg_disp['MAX_HOLD_DAYS']} gun"
         )
 
-    # Backtest çalıştır
-    if run_btn and selected_tickers:
-        progress_bar = st.progress(0, text="Başlatılıyor...")
-        status_area  = st.empty()
-        total = len(selected_tickers)
-        run_id   = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{bt_mode}"
-        run_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # ==================== MANUEL BACKTEST ====================
+    if bt_mode_tab == "Manuel Hisse Seçimi":
+        if run_btn and selected_tickers:
+            progress_bar = st.progress(0, text="Baslatiliyor...")
+            status_area  = st.empty()
+            total = len(selected_tickers)
+            run_id   = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{bt_mode}"
+            run_date = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        for idx, ticker in enumerate(selected_tickers):
-            status_area.info(f"⏳ **{ticker}** işleniyor... ({idx+1}/{total})")
-            try:
-                opt_params = None
-                if enable_optimizer:
-                    try:
-                        status_area.info(f"🔬 {ticker} optimize ediliyor...")
-                        opt_params = BacktestEngine.optimize(ticker, "6mo")
-                    except Exception:
-                        opt_params = None
-                trades, summary, daily_scores = BacktestEngine._run_single(
-                    ticker, bt_period, run_id,
-                    mode=bt_mode, use_news=use_news_filter,
-                    enable_short=enable_short, enable_scaling=enable_scaling,
-                    risk_per_trade=risk_slider, optimized_params=opt_params,
+            for idx, ticker in enumerate(selected_tickers):
+                status_area.info(f"**{ticker}** isleniyor... ({idx+1}/{total})")
+                try:
+                    opt_params = None
+                    if enable_optimizer:
+                        try:
+                            status_area.info(f"{ticker} optimize ediliyor...")
+                            opt_params = BacktestEngine.optimize(ticker, "6mo")
+                        except Exception:
+                            opt_params = None
+                    trades, summary, daily_scores = BacktestEngine._run_single(
+                        ticker, bt_period, run_id,
+                        mode=bt_mode, use_news=use_news_filter,
+                        enable_short=enable_short, enable_scaling=enable_scaling,
+                        risk_per_trade=risk_slider, optimized_params=opt_params,
+                    )
+                    BacktestEngine._save(DB_PATH, run_id, run_date, ticker, bt_period, trades, summary, daily_scores)
+                    status_area.success(
+                        f"**{ticker}** — {summary.get('total_trades',0)} islem | "
+                        f"Kazanma: %{summary.get('win_rate',0):.0f} | "
+                        f"Getiri: %{summary.get('total_return_pct',0):+.1f}"
+                    )
+                except Exception as exc:
+                    status_area.warning(f"**{ticker}** — {exc}")
+                progress_bar.progress((idx + 1) / total)
+
+            progress_bar.progress(1.0, text="Tamamlandi!")
+            st.session_state["bt_run_id"] = run_id
+            st.rerun()
+
+        # Kayıtlı sonuçları göster
+        _render_backtest_results(ui_lang)
+
+    # ==================== ZAMAN MAKİNESİ ====================
+    else:
+        if run_btn:
+            _styles = TimeMachineEngine.PORTFOLIO_STYLES
+            is_custom = len(custom_tickers) > 0
+
+            if is_custom:
+                st.markdown(f"## Ozel Portfoy — {tm_years} Yil Testi")
+                _tm_run_analysis(
+                    custom_tickers, tm_years, tm_market, "custom",
+                    bt_mode, use_news_filter, is_custom=True
                 )
-                BacktestEngine._save(DB_PATH, run_id, run_date, ticker, bt_period, trades, summary, daily_scores)
-                _dir_info = ""
-                if summary.get("short_trades", 0) > 0:
-                    _dir_info = f" (L:{summary['long_trades']} S:{summary['short_trades']})"
-                status_area.success(
-                    f"✅ **{ticker}** — {summary.get('total_trades',0)} işlem{_dir_info} | "
-                    f"Kazanma: %{summary.get('win_rate',0):.0f} | "
-                    f"Getiri: %{summary.get('total_return_pct',0):+.1f} | "
-                    f"Kasa: {summary.get('final_capital',100000):,.0f}₺"
-                )
-            except Exception as exc:
-                status_area.warning(f"⚠️ **{ticker}** — {exc}")
-            progress_bar.progress((idx + 1) / total)
+            else:
+                style_label = _styles[tm_style]["label"]
+                st.markdown(f"## {tm_years} Yil Oncesi — {style_label} Portfoy Testi")
 
-        progress_bar.progress(1.0, text="✅ Tamamlandı!")
-        st.session_state["bt_run_id"] = run_id
-        st.rerun()
+                progress = st.progress(0, text="PIT skorlari hesaplaniyor...")
+                status_txt = st.empty()
 
-    # Sonuç yok
+                def _progress(msg, pct):
+                    progress.progress(pct, text=msg)
+                    status_txt.caption(msg)
+
+                with st.spinner(f"{tm_years} yil onceki veriler analiz ediliyor..."):
+                    result = TimeMachineEngine.run_full_pit(
+                        years_back=tm_years,
+                        market=tm_market,
+                        style=tm_style,
+                        progress_cb=_progress,
+                    )
+
+                progress.progress(1.0, text="PIT analizi tamamlandi!")
+                status_txt.empty()
+
+                st.session_state["tm_last_result"] = result
+
+                try:
+                    TimeMachineEngine.save_daily_snapshot(result["run_id"], tm_market)
+                except Exception:
+                    pass
+
+                picks = result.get("picks", [])
+                if picks:
+                    _tm_run_backtest_for_picks(picks, tm_years, tm_market, bt_mode, use_news_filter)
+
+        # Zaman Makinesi sonuçlarını göster
+        result = st.session_state.get("tm_last_result")
+        if result:
+            _tm_render_report(result)
+
+        # Onceki calismalar
+        try:
+            tm_market_val = st.session_state.get("bt_tm_market", "BIST")
+            prev_runs = TimeMachineEngine.load_previous_runs(tm_market_val)
+            if prev_runs:
+                st.markdown("---")
+                with st.expander(f"Onceki Calismalar ({len(prev_runs)} kayit)", expanded=False):
+                    for run in prev_runs[:10]:
+                        _g = run.get("back_test_grade", 0)
+                        gc = "#22c55e" if _g >= 65 else "#f97316" if _g >= 40 else "#ef4444"
+                        st.markdown(
+                            f"<div style='background:#1e293b;border:1px solid #334155;"
+                            f"border-radius:8px;padding:10px 14px;margin-bottom:6px'>"
+                            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                            f"<span style='font-weight:700;color:#e2e8f0'>"
+                            f"{run.get('pit_date','')} -> Bugun "
+                            f"({run.get('portfolio','').title()})</span>"
+                            f"<span style='color:{gc};font-weight:700;font-size:18px'>"
+                            f"{_g:.0f}/100</span>"
+                            f"</div>"
+                            f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>"
+                            f"Portfoy: %{run.get('portfolio_return_pct',0):+.1f} | "
+                            f"Endeks: %{run.get('benchmark_return_pct',0):+.1f} | "
+                            f"Alfa: %{run.get('alpha_pct',0):+.1f} | "
+                            f"{run.get('stock_count',0)} hisse | "
+                            f"{run.get('run_date','')}"
+                            f"</div></div>",
+                            unsafe_allow_html=True
+                        )
+        except Exception:
+            pass
+
+    st.markdown("---")
+    st.caption("Backtest gecmis performansi simule eder. Yatirim tavsiyesi degildir.")
+
+
+def _render_backtest_results(ui_lang: str):
+    """Manuel backtest sonuclarini gosterir."""
     all_runs = BacktestEngine.load_runs()
     if not all_runs:
-        st.info("📌 Sol menüden hisseleri seçip **▶ Backtest Çalıştır** butonuna bas.")
+        st.info("Sol menuден hisseleri secip **Backtest Calistir** butonuna bas.")
         return
 
-    # Run seçici
     run_ids = list(dict.fromkeys(r["run_id"] for r in all_runs))
     default_run = st.session_state.get("bt_run_id", run_ids[0])
     if default_run not in run_ids:
@@ -7066,7 +7305,7 @@ def render_backtest_page(ui_lang: str):
     col_sel, _ = st.columns([2, 3])
     with col_sel:
         selected_run = st.selectbox(
-            "Backtest Seç",
+            "Backtest Sec",
             options=run_ids,
             index=run_ids.index(default_run),
             format_func=lambda r: next(
@@ -7083,14 +7322,11 @@ def render_backtest_page(ui_lang: str):
     if not run_rows:
         return
 
-    # TAB YAPISI
-    tab_ozet, tab_detay = st.tabs(["📊 Özet", "🔍 Hisse Detayı"])
+    tab_ozet, tab_detay = st.tabs(["Ozet", "Hisse Detayi"])
 
-    # TAB 1 — ÖZET
     with tab_ozet:
         valid = [r for r in run_rows if r["total_trades"] > 0]
 
-        # Genel metrikler
         if valid:
             total_trades = sum(r["total_trades"] for r in valid)
             total_wins   = sum(r["winning_trades"] for r in valid)
@@ -7100,15 +7336,14 @@ def render_backtest_page(ui_lang: str):
             worst_h = min(valid, key=lambda r: r["total_return_pct"])
 
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Toplam İşlem",     total_trades)
-            m2.metric("Kazanma Oranı",    f"%{avg_win_rate:.1f}")
-            m3.metric("Ort. Getiri/İşlem", f"%{avg_return:+.2f}")
-            m4.metric("En İyi",  best_h["ticker"],  f"%{best_h['total_return_pct']:+.1f}")
-            m5.metric("En Kötü", worst_h["ticker"], f"%{worst_h['total_return_pct']:+.1f}")
+            m1.metric("Toplam Islem",     total_trades)
+            m2.metric("Kazanma Orani",    f"%{avg_win_rate:.1f}")
+            m3.metric("Ort. Getiri/Islem", f"%{avg_return:+.2f}")
+            m4.metric("En Iyi",  best_h["ticker"],  f"%{best_h['total_return_pct']:+.1f}")
+            m5.metric("En Kotu", worst_h["ticker"], f"%{worst_h['total_return_pct']:+.1f}")
 
         st.markdown("---")
 
-        # Özet tablo
         def _color_cell(val, good_high=True):
             if isinstance(val, (int, float)):
                 return "color: #22c55e" if (val > 0) == good_high else "color: #ef4444"
@@ -7116,38 +7351,37 @@ def render_backtest_page(ui_lang: str):
 
         summary_rows = []
         for row in run_rows:
-            emoji = ("🟢" if row["win_rate"] >= 55 and row["total_return_pct"] > 0
-                     else "🔴" if row["win_rate"] < 45 or row["total_return_pct"] < -5
-                     else "🟡")
+            emoji = ("+" if row["win_rate"] >= 55 and row["total_return_pct"] > 0
+                     else "-" if row["win_rate"] < 45 or row["total_return_pct"] < -5
+                     else "~")
             summary_rows.append({
                 "":            emoji,
                 "Hisse":       row["ticker"],
-                "İşlem":       row["total_trades"],
+                "Islem":       row["total_trades"],
                 "Kazanma %":   row["win_rate"],
                 "Ort. %":      row["avg_return_pct"],
                 "Toplam %":    row["total_return_pct"],
                 "Max DD %":    -row["max_drawdown_pct"],
-                "En İyi %":    row["best_trade_pct"],
-                "En Kötü %":   row["worst_trade_pct"],
-                "Ort. Gün":    row["avg_hold_days"],
+                "En Iyi %":    row["best_trade_pct"],
+                "En Kotu %":   row["worst_trade_pct"],
+                "Ort. Gun":    row["avg_hold_days"],
             })
 
         if summary_rows:
             df_sum = pd.DataFrame(summary_rows)
             st.dataframe(
                 df_sum.style
-                .map(_color_cell, subset=["Ort. %", "Toplam %", "En İyi %"])
-                .map(lambda v: _color_cell(v, False), subset=["Max DD %", "En Kötü %"])
+                .map(_color_cell, subset=["Ort. %", "Toplam %", "En Iyi %"])
+                .map(lambda v: _color_cell(v, False), subset=["Max DD %", "En Kotu %"])
                 .format({
                     "Kazanma %": "{:.1f}%", "Ort. %": "{:+.2f}%",
                     "Toplam %": "{:+.2f}%", "Max DD %": "{:.1f}%",
-                    "En İyi %": "{:+.2f}%", "En Kötü %": "{:+.2f}%",
-                    "Ort. Gün": "{:.1f}",
+                    "En Iyi %": "{:+.2f}%", "En Kotu %": "{:+.2f}%",
+                    "Ort. Gun": "{:.1f}",
                 }),
                 use_container_width=True, hide_index=True,
             )
 
-        # Bar chart
         if valid:
             st.markdown("---")
             sorted_valid = sorted(valid, key=lambda r: r["total_return_pct"], reverse=True)
@@ -7160,7 +7394,7 @@ def render_backtest_page(ui_lang: str):
                 textposition="outside",
             ))
             fig_bar.update_layout(
-                title="Hisse Bazında Kümülatif Backtest Getirisi",
+                title="Hisse Bazinda Kumulatif Backtest Getirisi",
                 paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
                 font=dict(color="#e2e8f0"),
                 yaxis=dict(gridcolor="#334155", ticksuffix="%"),
@@ -7170,44 +7404,39 @@ def render_backtest_page(ui_lang: str):
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
-    # TAB 2 — HİSSE DETAYI
     with tab_detay:
         ticker_opts = [r["ticker"] for r in run_rows]
         if not ticker_opts:
-            st.info("Bu backtest'te işlenmiş hisse yok.")
+            st.info("Bu backtest'te islenmis hisse yok.")
         else:
-            sel_ticker = st.selectbox("Hisse Seç", ticker_opts, key="bt_detail_ticker2")
+            sel_ticker = st.selectbox("Hisse Sec", ticker_opts, key="bt_detail_ticker2")
             trades_raw = BacktestEngine.load_trades(selected_run, sel_ticker)
             run_period = next((r["period"] for r in run_rows if r["ticker"] == sel_ticker), "2y")
 
             if not trades_raw:
-                st.info(f"{sel_ticker} için bu backtest'te işlem kaydı yok.")
+                st.info(f"{sel_ticker} icin bu backtest'te islem kaydi yok.")
             else:
-                # İşlem istatistikleri — mini metrikler
                 sel_row = next((r for r in run_rows if r["ticker"] == sel_ticker), {})
                 if sel_row:
                     s1, s2, s3, s4 = st.columns(4)
-                    s1.metric("İşlem", sel_row.get("total_trades", 0))
+                    s1.metric("Islem", sel_row.get("total_trades", 0))
                     s2.metric("Kazanma", f"%{sel_row.get('win_rate', 0):.0f}")
                     s3.metric("Toplam Getiri", f"%{sel_row.get('total_return_pct', 0):+.2f}")
                     s4.metric("Max Drawdown", f"%{sel_row.get('max_drawdown_pct', 0):.1f}")
 
                 st.markdown("---")
-
-                # Grafik 1: Fiyat + AL/SAT noktaları
                 _render_price_chart_with_trades(sel_ticker, run_period, trades_raw, height=420)
 
-                # Grafik 2: Kümülatif sermaye eğrisi
                 returns_list = [t["return_pct"] for t in trades_raw]
                 equity = [100.0]
-                labels = ["Başlangıç"]
+                labels = ["Baslangic"]
                 for r2, t2 in zip(returns_list, trades_raw):
                     equity.append(equity[-1] * (1 + r2 / 100))
                     labels.append(t2.get("exit_date", ""))
 
                 fig_eq = go.Figure()
-                eq_color    = "#22c55e" if equity[-1] >= 100 else "#ef4444"
-                eq_fill     = "rgba(34,197,94,0.08)" if equity[-1] >= 100 else "rgba(239,68,68,0.08)"
+                eq_color = "#22c55e" if equity[-1] >= 100 else "#ef4444"
+                eq_fill  = "rgba(34,197,94,0.08)" if equity[-1] >= 100 else "rgba(239,68,68,0.08)"
                 fig_eq.add_trace(go.Scatter(
                     x=labels, y=equity,
                     mode="lines+markers",
@@ -7217,9 +7446,9 @@ def render_backtest_page(ui_lang: str):
                     hovertemplate="%{x}<br>Sermaye: %{y:.1f}<extra></extra>",
                 ))
                 fig_eq.add_hline(y=100, line_dash="dash", line_color="#64748b",
-                                 annotation_text="Başlangıç (100)")
+                                 annotation_text="Baslangic (100)")
                 fig_eq.update_layout(
-                    title=f"{sel_ticker} — Kümülatif Sermaye Eğrisi",
+                    title=f"{sel_ticker} — Kumulatif Sermaye Egrisi",
                     paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
                     font=dict(color="#e2e8f0"),
                     yaxis=dict(gridcolor="#334155", title="Sermaye"),
@@ -7229,14 +7458,11 @@ def render_backtest_page(ui_lang: str):
                 )
                 st.plotly_chart(fig_eq, use_container_width=True)
 
-                # İşlem tablosu
-                with st.expander("📋 İşlem Listesi", expanded=False):
+                with st.expander("Islem Listesi", expanded=False):
                     reason_map = {
-                        "STOP_LOSS":   "🔴 Stop-Loss",
-                        "TAKE_PROFIT": "🟢 Hedef",
-                        "SAT_SINYAL":  "🟠 SAT Sinyali",
-                        "MAX_SURE":    "⏰ Max Süre",
-                        "HALA_ACIK":   "🔵 Açık Pozisyon",
+                        "STOP_LOSS": "Stop-Loss", "TAKE_PROFIT": "Hedef",
+                        "SAT_SINYAL": "SAT Sinyali", "MAX_SURE": "Max Sure",
+                        "HALA_ACIK": "Acik Pozisyon",
                     }
                     df_t = pd.DataFrame(trades_raw)
                     cols_show = [c for c in
@@ -7245,11 +7471,11 @@ def render_backtest_page(ui_lang: str):
                          "stop_loss","take_profit"]
                         if c in df_t.columns]
                     df_t = df_t[cols_show].rename(columns={
-                        "entry_date":  "Giriş", "entry_price": "Giriş₺",
-                        "exit_date":   "Çıkış", "exit_price":  "Çıkış₺",
-                        "exit_reason": "Neden", "return_pct":  "Getiri%",
-                        "hold_days":   "Gün",   "entry_score": "Skor",
-                        "stop_loss":   "Stop",  "take_profit": "Hedef",
+                        "entry_date": "Giris", "entry_price": "Giris TL",
+                        "exit_date": "Cikis", "exit_price": "Cikis TL",
+                        "exit_reason": "Neden", "return_pct": "Getiri%",
+                        "hold_days": "Gun", "entry_score": "Skor",
+                        "stop_loss": "Stop", "take_profit": "Hedef",
                     })
                     if "Neden" in df_t.columns:
                         df_t["Neden"] = df_t["Neden"].map(lambda x: reason_map.get(x, x))
@@ -7261,32 +7487,25 @@ def render_backtest_page(ui_lang: str):
 
                     st.dataframe(
                         df_t.style.map(_rc, subset=["Getiri%"])
-                        .format({"Getiri%": "{:+.2f}%", "Giriş₺": "{:.2f}",
-                                 "Çıkış₺": "{:.2f}", "Stop": "{:.2f}",
+                        .format({"Getiri%": "{:+.2f}%", "Giris TL": "{:.2f}",
+                                 "Cikis TL": "{:.2f}", "Stop": "{:.2f}",
                                  "Hedef": "{:.2f}", "Skor": "{:.1f}"}),
                         use_container_width=True, hide_index=True,
                     )
 
-                # Çıkış sebebi dağılımı
                 col_pie, col_monthly = st.columns([1, 1.5])
                 with col_pie:
                     reason_counts = {}
                     for t3 in trades_raw:
                         r3 = reason_map.get(t3.get("exit_reason",""), t3.get("exit_reason",""))
                         reason_counts[r3] = reason_counts.get(r3, 0) + 1
-                    pie_colors_map = {
-                        "🔴 Stop-Loss": "#ef4444", "🟢 Hedef": "#22c55e",
-                        "🟠 SAT Sinyali": "#f97316", "⏰ Max Süre": "#a78bfa",
-                        "🔵 Açık Pozisyon": "#60a5fa",
-                    }
                     fig_pie = go.Figure(go.Pie(
                         labels=list(reason_counts.keys()),
                         values=list(reason_counts.values()),
-                        marker_colors=[pie_colors_map.get(l, "#94a3b8") for l in reason_counts.keys()],
                         hole=0.4, textinfo="label+percent", textfont=dict(size=11),
                     ))
                     fig_pie.update_layout(
-                        title="Çıkış Sebepleri",
+                        title="Cikis Sebepleri",
                         paper_bgcolor="#0f172a", font=dict(color="#e2e8f0"),
                         showlegend=False, height=280,
                         margin=dict(l=10, r=10, t=45, b=10),
@@ -7298,14 +7517,14 @@ def render_backtest_page(ui_lang: str):
                     if "entry_date" in df_m.columns and "return_pct" in df_m.columns:
                         df_m["ay"] = pd.to_datetime(df_m["entry_date"]).dt.to_period("M").astype(str)
                         monthly = df_m.groupby("ay").agg(
-                            İşlem=("ay","count"),
+                            Islem=("ay","count"),
                             Kazanan=("return_pct", lambda x: (x>0).sum()),
                             Ort=("return_pct","mean"),
                             Top=("return_pct","sum"),
                         ).reset_index().rename(columns={"ay":"Ay","Ort":"Ort%","Top":"Top%"})
                         monthly["Ort%"] = monthly["Ort%"].round(2)
                         monthly["Top%"] = monthly["Top%"].round(2)
-                        st.markdown("**Aylık Özet**")
+                        st.markdown("**Aylik Ozet**")
                         def _rc2(v):
                             if isinstance(v, float):
                                 return "color:#22c55e" if v > 0 else "color:#ef4444"
@@ -7315,9 +7534,6 @@ def render_backtest_page(ui_lang: str):
                             .format({"Ort%":"{:+.2f}%","Top%":"{:+.2f}%"}),
                             use_container_width=True, hide_index=True, height=260,
                         )
-
-    st.markdown("---")
-    st.caption("⚠️ Backtest geçmiş performansı simüle eder. Yatırım tavsiyesi değildir.")
 
 
 def render_portfolio_page(ui_lang):
@@ -8416,36 +8632,41 @@ def run_app():
             pages = [
                 "Piyasa Ozeti", "BIST Listesi", "Hisse Analizi",
                 "Portfolyum", "Backtest", "Sistem Portfolyleri",
-                "Zaman Makinesi", "Sinyal Takip",
+                "Sinyal Takip",
             ]
             page_icons = [
                 "speedometer2", "list-ul", "search",
                 "briefcase", "clock-history", "robot",
-                "hourglass-split", "graph-up-arrow",
+                "graph-up-arrow",
             ]
             _default_page = "Hisse Analizi"
         else:  # US
             pages = [
                 "US Analiz", "US Backtest",
                 "US Stock List", "US Portfolios",
-                "Portfolyum", "Zaman Makinesi", "US Sinyal Takip",
+                "Portfolyum", "US Sinyal Takip",
             ]
             page_icons = [
                 "search", "clock-history",
                 "list-ul", "robot",
-                "briefcase", "hourglass-split", "graph-up-arrow",
+                "briefcase", "graph-up-arrow",
             ]
             _default_page = "US Analiz"
 
+        _nav_redirect = False
         if "nav_page" in st.session_state:
             nav = st.session_state.pop("nav_page")
             if nav in pages:
                 st.session_state["nav_radio"] = nav
+                _nav_redirect = True
 
         if "nav_radio" not in st.session_state or st.session_state["nav_radio"] not in pages:
             st.session_state["nav_radio"] = _default_page
 
         default_idx = pages.index(st.session_state["nav_radio"]) if st.session_state["nav_radio"] in pages else 0
+
+        # nav_redirect durumunda option_menu key'ini değiştirerek widget'ı resetle
+        _nav_key_suffix = f"_{st.session_state['nav_radio']}" if _nav_redirect else ""
 
         if OPTION_MENU_OK:
             page = option_menu(
@@ -8454,7 +8675,7 @@ def run_app():
                 icons=page_icons,
                 menu_icon="cast",
                 default_index=default_idx,
-                key=f"nav_option_menu_{active_market}",
+                key=f"nav_option_menu_{active_market}{_nav_key_suffix}",
                 styles={
                     "container":             {"padding": "0!important", "background-color": "#1e293b"},
                     "icon":                  {"color": "#60a5fa", "font-size": "16px"},
@@ -8521,8 +8742,6 @@ def run_app():
             _safe_render(render_backtest_page, ui_lang)
         elif page == "Sistem Portfolyleri":
             _safe_render(render_smart_portfolio_page, ui_lang)
-        elif page == "Zaman Makinesi":
-            _safe_render(render_time_machine_page, ui_lang)
         elif page == "Sinyal Takip":
             _safe_render(render_validation_page, ui_lang)
     else:  # US Markets
@@ -8536,8 +8755,6 @@ def run_app():
             _safe_render(render_us_system_portfolios_page, ui_lang)
         elif page == "Portfolyum":
             _safe_render(render_portfolio_page, ui_lang)
-        elif page == "Zaman Makinesi":
-            _safe_render(render_time_machine_page, ui_lang)
         elif page == "US Sinyal Takip":
             _safe_render(render_us_validation_page, ui_lang)
 
