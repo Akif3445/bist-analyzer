@@ -2573,6 +2573,456 @@ class SmartPortfolioBuilder:
 
 # 7B. STRATEJI ZAMAN MAKİNESİ (TIME MACHINE ENGINE)
 
+# PORTFÖY YÖNETİCİSİ v2 — ENAG reel getiri + piyasa rejimi + vade/profil portföyleri
+
+# ENAG E-TÜFE aylık artışları (%). Kaynak: enagrup.org / basın duyuruları.
+# "tahmini" işaretliler: 2025 yıllığı %56.14'ten türetildi (ay verisi bulunamadı).
+# Yeni aylar UI'daki "ENAG Verisi" bölümünden eklenir — tablo DB'de tutulur.
+ENAG_MOM_DEFAULTS = {
+    "2025-01": (5.10, "tahmini"), "2025-02": (5.10, "tahmini"),
+    "2025-03": (5.10, "tahmini"), "2025-04": (4.46, "resmi"),
+    "2025-05": (3.66, "resmi"),   "2025-06": (1.94, "resmi"),
+    "2025-07": (5.10, "tahmini"), "2025-08": (3.23, "resmi"),
+    "2025-09": (3.79, "resmi"),   "2025-10": (3.74, "resmi"),
+    "2025-11": (2.13, "resmi"),   "2025-12": (2.11, "resmi"),
+    "2026-01": (6.32, "resmi"),   "2026-02": (4.01, "resmi"),
+    "2026-03": (4.10, "resmi"),   "2026-04": (5.07, "resmi"),
+    "2026-05": (2.16, "resmi"),   "2026-06": (1.94, "resmi"),
+}
+
+
+class InflationEngine:
+    """ENAG bazlı reel getiri hesaplayıcı.
+
+    Nominal getiri yanıltıcıdır: %40 kazanç, ENAG yıllık %55 iken kayıptır.
+    deflator(): dönem boyunca kümülatif enflasyon çarpanı (gün bazında oranlanır).
+    Eksik aylar için son 12 bilinen ayın ortalaması kullanılır (yaklaşık).
+    """
+
+    @staticmethod
+    def _init_table():
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS enag_monthly (
+                    ym TEXT PRIMARY KEY,   -- "2026-01"
+                    mom_pct REAL,
+                    kaynak TEXT DEFAULT 'resmi'
+                )
+            """)
+            for ym, (pct, src) in ENAG_MOM_DEFAULTS.items():
+                conn.execute("INSERT OR IGNORE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?,?)",
+                             (ym, pct, src))
+            conn.commit()
+
+    @staticmethod
+    def rates() -> dict:
+        InflationEngine._init_table()
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                rows = conn.execute("SELECT ym, mom_pct, kaynak FROM enag_monthly ORDER BY ym").fetchall()
+            return {r[0]: (r[1], r[2]) for r in rows}
+        except Exception:
+            return {k: v for k, v in ENAG_MOM_DEFAULTS.items()}
+
+    @staticmethod
+    def set_rate(ym: str, pct: float):
+        InflationEngine._init_table()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("INSERT OR REPLACE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?, 'resmi')",
+                         (ym, pct))
+            conn.commit()
+
+    @staticmethod
+    def _monthly_rate(ym: str, table: dict) -> float:
+        if ym in table:
+            return table[ym][0]
+        known = sorted(table.keys())
+        last12 = [table[k][0] for k in known[-12:]] if known else [3.0]
+        return float(np.mean(last12))
+
+    @staticmethod
+    def deflator(start, end) -> float:
+        """start→end arası kümülatif ENAG enflasyon çarpanı (>= 1.0)."""
+        if isinstance(start, str): start = datetime.strptime(start[:10], "%Y-%m-%d")
+        if isinstance(end, str):   end   = datetime.strptime(end[:10], "%Y-%m-%d")
+        if end <= start:
+            return 1.0
+        table  = InflationEngine.rates()
+        factor = 1.0
+        cur    = start
+        while cur < end:
+            # Ay sonu
+            if cur.month == 12:
+                month_end = datetime(cur.year + 1, 1, 1)
+            else:
+                month_end = datetime(cur.year, cur.month + 1, 1)
+            seg_end   = min(end, month_end)
+            days_used = (seg_end - cur).days
+            days_in_m = (month_end - datetime(cur.year, cur.month, 1)).days
+            r = InflationEngine._monthly_rate(cur.strftime("%Y-%m"), table) / 100.0
+            factor *= (1.0 + r) ** (days_used / max(days_in_m, 1))
+            cur = seg_end
+        return factor
+
+    @staticmethod
+    def real_return(nominal_pct: float, start, end) -> float:
+        """Nominal % getiriyi ENAG ile reel %'ye çevirir."""
+        d = InflationEngine.deflator(start, end)
+        return round(((1 + nominal_pct / 100.0) / d - 1) * 100, 2)
+
+
+def _sector_of(ticker: str) -> str:
+    """BIST_STOCKS kategorilerinden sektör bulur (BIST 30 hariç)."""
+    for cat, ts in BIST_STOCKS.items():
+        if cat == "BIST 30":
+            continue
+        if ticker in ts:
+            return cat
+    return "Diğer"
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def compute_market_regime() -> dict:
+    """Piyasa rejimi: XU100 trendi + piyasa genişliği + kur baskısı → 0-7 puan.
+
+    Amaç 'gereksiz para kaybetmemek': Ayı rejiminde kısa vadeli alımlar frenlenir.
+    """
+    out = {"score": 0, "regime": "Belirsiz", "detay": [], "color": "#9ca3af"}
+    pts = 0
+    try:
+        xu = yf.download("XU100.IS", period="1y", interval="1d",
+                         auto_adjust=True, progress=False)
+        if isinstance(xu.columns, pd.MultiIndex):
+            xu.columns = xu.columns.get_level_values(0)
+        c = xu["Close"].dropna()
+        if len(c) >= 200:
+            sma50  = float(c.rolling(50).mean().iloc[-1])
+            sma200 = float(c.rolling(200).mean().iloc[-1])
+            last   = float(c.iloc[-1])
+            mom1m  = (last / float(c.iloc[-21]) - 1) * 100 if len(c) >= 21 else 0
+            if last > sma200: pts += 2; out["detay"].append("XU100 SMA200 üstünde ✓")
+            else:             out["detay"].append("XU100 SMA200 ALTINDA ✗")
+            if sma50 > sma200: pts += 1; out["detay"].append("Golden cross aktif ✓")
+            if mom1m > 0:      pts += 1; out["detay"].append(f"1 aylık momentum %{mom1m:+.1f} ✓")
+            else:              out["detay"].append(f"1 aylık momentum %{mom1m:+.1f} ✗")
+            out["xu100_mom1m"] = round(mom1m, 1)
+    except Exception as exc:
+        out["detay"].append(f"XU100 verisi alınamadı: {exc}")
+
+    # Piyasa genişliği — BIST30 içinde SMA200 üstündeki hisse oranı
+    try:
+        b30 = [t + ".IS" for t in BIST_STOCKS["BIST 30"][:30]]
+        bulk = yf.download(b30, period="1y", interval="1d",
+                           auto_adjust=True, progress=False, group_by="ticker")
+        above = total = 0
+        for t in b30:
+            try:
+                cl = bulk[t]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
+                if len(cl) >= 200:
+                    total += 1
+                    if float(cl.iloc[-1]) > float(cl.rolling(200).mean().iloc[-1]):
+                        above += 1
+            except Exception:
+                continue
+        if total >= 10:
+            breadth = above / total * 100
+            out["breadth"] = round(breadth, 0)
+            if breadth >= 60: pts += 2; out["detay"].append(f"Genişlik: hisselerin %{breadth:.0f}'i SMA200 üstünde ✓")
+            elif breadth >= 40: pts += 1; out["detay"].append(f"Genişlik: %{breadth:.0f} (nötr)")
+            else: out["detay"].append(f"Genişlik ZAYIF: sadece %{breadth:.0f} SMA200 üstünde ✗")
+    except Exception:
+        pass
+
+    # Kur baskısı — USDTRY 1 aylık değişim
+    try:
+        fx = yf.download("TRY=X", period="3mo", interval="1d",
+                         auto_adjust=True, progress=False)
+        if isinstance(fx.columns, pd.MultiIndex):
+            fx.columns = fx.columns.get_level_values(0)
+        fc = fx["Close"].dropna()
+        if len(fc) >= 21:
+            fx1m = (float(fc.iloc[-1]) / float(fc.iloc[-21]) - 1) * 100
+            out["usdtry_1m"] = round(fx1m, 1)
+            if fx1m < 4.0: pts += 1; out["detay"].append(f"USDTRY sakin (%{fx1m:+.1f}/ay) ✓")
+            else: out["detay"].append(f"USDTRY BASKILI (%{fx1m:+.1f}/ay) ✗")
+    except Exception:
+        pass
+
+    out["score"] = pts
+    if pts >= 5:   out["regime"], out["color"] = "Boğa",  "#22c55e"
+    elif pts >= 3: out["regime"], out["color"] = "Nötr",  "#eab308"
+    else:          out["regime"], out["color"] = "Ayı",   "#ef4444"
+    return out
+
+
+class PortfolioManager:
+    """Vade × yatırımcı profili matrisinden portföy önerir, kaydeder, izler.
+
+    Performans defteri: her kayıtlı portföyün NAV'ı (100 bazlı) günlük yazılır;
+    nominal, ENAG-reel ve XU100-göreli getiri buradan ölçülür.
+    """
+
+    PROFILES = {
+        "Temkinli": {"max_pos": 5, "max_atr": 3.0, "sector_cap": 1,
+                     "aciklama": "Düşük oynaklık, az sayıda büyük hisse, sıkı stop"},
+        "Dengeli":  {"max_pos": 6, "max_atr": 4.5, "sector_cap": 2,
+                     "aciklama": "Orta oynaklık, sektör çeşitliliği"},
+        "Agresif":  {"max_pos": 8, "max_atr": 99.0, "sector_cap": 2,
+                     "aciklama": "Yüksek momentum toleransı, geniş evren"},
+    }
+    HORIZONS = {
+        "Kısa (1-3 hafta)":  "kisa",
+        "Orta (1-3 ay)":     "orta",
+        "Uzun (6-12 ay)":    "uzun",
+    }
+
+    @staticmethod
+    def _init_tables():
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pm_portfolios (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT, horizon TEXT, profile TEXT,
+                    created_at TEXT, status TEXT DEFAULT 'aktif',
+                    regime_at_start TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pm_positions (
+                    pid INTEGER, ticker TEXT, entry_price REAL, weight REAL,
+                    stop_price REAL, target_price REAL,
+                    PRIMARY KEY (pid, ticker)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pm_nav (
+                    pid INTEGER, date TEXT, nav REAL, xu100_close REAL,
+                    PRIMARY KEY (pid, date)
+                )
+            """)
+            conn.commit()
+
+    # PORTFÖY ÖNERİSİ
+
+    @staticmethod
+    def propose(scan_results: list, horizon: str, profile_name: str, regime: dict) -> tuple:
+        """Returns (picks: list[dict], warning: str)."""
+        prof = PortfolioManager.PROFILES[profile_name]
+        valid = [r for r in scan_results
+                 if not r.error and r.data_rows >= 200 and r.current_price > 0
+                 and r.volume_ok and r.atr_pct <= prof["max_atr"]]
+
+        warning = ""
+        if regime.get("regime") == "Ayı":
+            if horizon == "kisa":
+                return [], ("Piyasa AYI rejiminde — kısa vadeli alım önerilmez. "
+                            "Sermayeyi korumak da bir pozisyondur; rejim dönene kadar nakit/kısa vadeli mevduat.")
+            warning = "Piyasa AYI rejiminde: pozisyon boyutlarını yarıya indirmek ve stopları sıkmak önerilir."
+
+        # Vadeye göre filtre + sıralama anahtarı
+        if horizon == "kisa":
+            pool = [r for r in valid if r.adx >= 25 and r.macd_bullish
+                    and r.momentum_1m > 0 and r.score >= 57]
+            keyf = lambda r: r.score + r.momentum_1m * 0.8 + (r.volume_ratio - 1) * 8
+        elif horizon == "orta":
+            pool = [r for r in valid if r.price_above_sma200 and r.score >= 50
+                    and r.momentum_3m > -3]
+            keyf = lambda r: r.score + r.momentum_3m * 0.4 + (10 if r.golden_cross else 0)
+        else:  # uzun
+            pool = [r for r in valid if r.golden_cross and r.price_above_sma200
+                    and r.week52_pos >= 0.45]
+            keyf = lambda r: r.score + r.week52_pos * 20 + (5 if r.obv_trend == "yukari" else 0) - r.atr_pct * 2
+
+        pool.sort(key=keyf, reverse=True)
+
+        picks, sector_count = [], {}
+        stop_mult   = {"kisa": 1.5, "orta": 2.5, "uzun": 3.5}[horizon]
+        target_mult = {"kisa": 2.5, "orta": 4.0, "uzun": 6.0}[horizon]
+        for r in pool:
+            sec = _sector_of(r.ticker)
+            if sector_count.get(sec, 0) >= prof["sector_cap"]:
+                continue
+            atr_abs = r.current_price * r.atr_pct / 100.0
+            picks.append({
+                "ticker": r.ticker, "sektor": sec,
+                "fiyat": round(r.current_price, 2),
+                "skor": round(r.score, 1),
+                "atr_pct": round(r.atr_pct, 2),
+                "stop": round(r.current_price - stop_mult * atr_abs, 2),
+                "hedef": round(r.current_price + target_mult * atr_abs, 2),
+                "gerekce": f"Skor {r.score:.0f} | ADX {r.adx:.0f} | 3A %{r.momentum_3m:+.0f} | 52H %{r.week52_pos*100:.0f}",
+            })
+            sector_count[sec] = sector_count.get(sec, 0) + 1
+            if len(picks) >= prof["max_pos"]:
+                break
+
+        n = len(picks)
+        for p in picks:
+            p["agirlik"] = round(100.0 / n, 1) if n else 0
+        return picks, warning
+
+    # KAYIT & NAV TAKİBİ
+
+    @staticmethod
+    def save_portfolio(name: str, horizon: str, profile: str, picks: list, regime: str) -> int:
+        PortfolioManager._init_tables()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with sqlite3.connect(DB_PATH) as conn:
+            cur = conn.execute("""
+                INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start)
+                VALUES (?,?,?,?,?)
+            """, (name, horizon, profile, now, regime))
+            pid = cur.lastrowid
+            for p in picks:
+                conn.execute("""
+                    INSERT OR REPLACE INTO pm_positions (pid, ticker, entry_price, weight, stop_price, target_price)
+                    VALUES (?,?,?,?,?,?)
+                """, (pid, p["ticker"], p["fiyat"], p["agirlik"], p["stop"], p["hedef"]))
+            # Gün-0 NAV kaydı
+            conn.execute("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
+                         (pid, datetime.now().strftime("%Y-%m-%d"), 100.0,
+                          PortfolioManager._xu100_close()))
+            conn.commit()
+        return pid
+
+    @staticmethod
+    def _xu100_close() -> float:
+        try:
+            xu = yf.download("XU100.IS", period="5d", interval="1d",
+                             auto_adjust=True, progress=False)
+            if isinstance(xu.columns, pd.MultiIndex):
+                xu.columns = xu.columns.get_level_values(0)
+            return round(float(xu["Close"].dropna().iloc[-1]), 2)
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def active_portfolios() -> list:
+        PortfolioManager._init_tables()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM pm_portfolios WHERE status='aktif' ORDER BY created_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def positions(pid: int) -> list:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM pm_positions WHERE pid=?", (pid,)).fetchall()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def update_navs():
+        """Aktif portföylerin bugünkü NAV'ını yazar (oturum başına 1 kez çağrılır)."""
+        PortfolioManager._init_tables()
+        ports = PortfolioManager.active_portfolios()
+        if not ports:
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        all_tickers = set()
+        pos_map = {}
+        for p in ports:
+            pos = PortfolioManager.positions(p["id"])
+            pos_map[p["id"]] = pos
+            all_tickers.update(x["ticker"] for x in pos)
+        if not all_tickers:
+            return
+        try:
+            syms = [t + ".IS" for t in all_tickers]
+            bulk = yf.download(syms, period="5d", interval="1d",
+                               auto_adjust=True, progress=False, group_by="ticker")
+            price = {}
+            for t in all_tickers:
+                try:
+                    s = t + ".IS"
+                    cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
+                    if len(cl):
+                        price[t] = float(cl.iloc[-1])
+                except Exception:
+                    continue
+            xu = PortfolioManager._xu100_close()
+            with sqlite3.connect(DB_PATH) as conn:
+                for p in ports:
+                    pos = pos_map[p["id"]]
+                    nav, w_used = 0.0, 0.0
+                    for x in pos:
+                        if x["ticker"] in price and x["entry_price"] > 0:
+                            nav += x["weight"] * (price[x["ticker"]] / x["entry_price"])
+                            w_used += x["weight"]
+                    if w_used > 0:
+                        nav = nav / w_used * 100.0
+                        conn.execute("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
+                                     (p["id"], today, round(nav, 2), xu))
+                conn.commit()
+        except Exception as exc:
+            log.warning("PortfolioManager.update_navs hatası: %s", exc)
+
+    @staticmethod
+    def nav_history(pid: int) -> pd.DataFrame:
+        with sqlite3.connect(DB_PATH) as conn:
+            df = pd.read_sql_query(
+                "SELECT date, nav, xu100_close FROM pm_nav WHERE pid=? ORDER BY date", conn, params=(pid,))
+        return df
+
+    @staticmethod
+    def performance(p: dict) -> dict:
+        """Nominal, ENAG-reel ve XU100-göreli getiri."""
+        df = PortfolioManager.nav_history(p["id"])
+        out = {"nominal": 0.0, "reel": 0.0, "xu100_rel": 0.0, "gun": 0}
+        if len(df) < 1:
+            return out
+        start = p["created_at"][:10]
+        end   = df["date"].iloc[-1]
+        nominal = float(df["nav"].iloc[-1]) - 100.0
+        out["nominal"] = round(nominal, 2)
+        out["reel"]    = InflationEngine.real_return(nominal, start, end)
+        out["gun"]     = (datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(start, "%Y-%m-%d")).days
+        xu0 = float(df["xu100_close"].iloc[0]) if float(df["xu100_close"].iloc[0]) > 0 else 0
+        xu1 = float(df["xu100_close"].iloc[-1])
+        if xu0 > 0 and xu1 > 0:
+            out["xu100_rel"] = round(nominal - (xu1 / xu0 - 1) * 100, 2)
+        return out
+
+    @staticmethod
+    def archive(pid: int):
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("UPDATE pm_portfolios SET status='arsiv' WHERE id=?", (pid,))
+            conn.commit()
+
+    # AKTİF REBALANS
+
+    @staticmethod
+    def rebalance_suggestions(p: dict, scan_results: list) -> list:
+        """Skoru bozulan/stop kesen pozisyonlar için ÇIKAR, güçlü adaylar için EKLE önerir."""
+        pos = PortfolioManager.positions(p["id"])
+        held = {x["ticker"] for x in pos}
+        by_ticker = {r.ticker: r for r in scan_results if not r.error}
+        suggestions = []
+        for x in pos:
+            r = by_ticker.get(x["ticker"])
+            if r is None:
+                continue
+            if r.current_price <= x["stop_price"]:
+                suggestions.append({"tip": "ÇIKAR", "ticker": x["ticker"],
+                                    "neden": f"Stop seviyesi kesildi ({r.current_price:.2f} ≤ {x['stop_price']:.2f}) — zararı büyütme"})
+            elif r.score < 43:
+                suggestions.append({"tip": "ÇIKAR", "ticker": x["ticker"],
+                                    "neden": f"Skor {r.score:.0f}'a düştü (SAT bölgesi)"})
+            elif x["target_price"] > 0 and r.current_price >= x["target_price"]:
+                suggestions.append({"tip": "KÂR AL", "ticker": x["ticker"],
+                                    "neden": f"Hedef fiyata ulaşıldı ({r.current_price:.2f} ≥ {x['target_price']:.2f}) — kısmi satış düşünülebilir"})
+        # Ekleme adayları: portföyde olmayan en güçlü 3
+        cands = sorted([r for r in scan_results
+                        if not r.error and r.ticker not in held
+                        and r.score >= 60 and r.price_above_sma200],
+                       key=lambda r: r.score, reverse=True)[:3]
+        for r in cands:
+            suggestions.append({"tip": "EKLE (aday)", "ticker": r.ticker,
+                                "neden": f"Skor {r.score:.0f}, SMA200 üstünde — çıkarılanın yerine değerlendirilebilir"})
+        return suggestions
+
+
 class TimeMachineEngine:
     """
     """
@@ -8559,6 +9009,147 @@ def render_analysis_page(ui_lang):
         st.info("No news data available for this ticker.")
 
 
+def render_portfolio_manager_page(ui_lang):
+    """Portföy Yöneticisi — rejim analizi, vade×profil portföy önerisi, ENAG-reel performans defteri."""
+    st.markdown("# " + ("Portföy Yöneticisi" if ui_lang == "TR" else "Portfolio Manager"))
+    st.caption(
+        "Piyasa rejimini okur, vade ve yatırımcı profiline göre portföy önerir, "
+        "kaydettiğiniz portföylerin performansını nominal + ENAG-reel + XU100-göreli ölçer."
+        if ui_lang == "TR" else
+        "Reads market regime, proposes portfolios by horizon and investor profile, "
+        "tracks saved portfolios in nominal + ENAG-real + XU100-relative terms."
+    )
+
+    # 1) PİYASA REJİMİ BANDI
+    regime = compute_market_regime()
+    st.markdown(
+        f"<div style='background:#1e293b;border-left:6px solid {regime['color']};"
+        f"border-radius:8px;padding:12px 16px;margin:8px 0'>"
+        f"<b style='color:{regime['color']};font-size:18px'>Piyasa Rejimi: {regime['regime']}"
+        f" ({regime['score']}/7)</b><br>"
+        f"<span style='color:#94a3b8;font-size:13px'>{' • '.join(regime['detay'])}</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    tab_new, tab_perf, tab_enag = st.tabs([
+        "Yeni Portföy Öner" if ui_lang == "TR" else "Propose New",
+        "Portföylerim & Performans" if ui_lang == "TR" else "My Portfolios & Performance",
+        "ENAG Verisi" if ui_lang == "TR" else "ENAG Data",
+    ])
+
+    # 2) YENİ PORTFÖY
+    with tab_new:
+        c1, c2 = st.columns(2)
+        with c1:
+            horizon_label = st.selectbox("Vade" if ui_lang == "TR" else "Horizon",
+                                         list(PortfolioManager.HORIZONS.keys()))
+        with c2:
+            profile = st.selectbox("Yatırımcı Profili" if ui_lang == "TR" else "Investor Profile",
+                                   list(PortfolioManager.PROFILES.keys()), index=1)
+        st.caption(PortfolioManager.PROFILES[profile]["aciklama"])
+        horizon = PortfolioManager.HORIZONS[horizon_label]
+
+        if st.button("Tara ve Portföy Öner" if ui_lang == "TR" else "Scan & Propose",
+                     type="primary", use_container_width=True):
+            prog = st.progress(0, text="Taranıyor...")
+            def _cb(t, i, n): prog.progress(min(i / max(n, 1), 1.0), text=f"{t} ({i}/{n})")
+            scan = PortfolioScanner.scan_all(progress_cb=_cb)
+            prog.empty()
+            picks, warning = PortfolioManager.propose(scan, horizon, profile, regime)
+            st.session_state["pm_last_proposal"] = (picks, warning, horizon, profile)
+
+        if "pm_last_proposal" in st.session_state:
+            picks, warning, h_saved, p_saved = st.session_state["pm_last_proposal"]
+            if warning:
+                st.warning(warning)
+            if not picks:
+                if not warning:
+                    st.info("Kriterlere uyan hisse bulunamadı — filtreler bilinçli olarak seçici. "
+                            "Rejim/piyasa düzelince tekrar deneyin.")
+            else:
+                dfp = pd.DataFrame(picks)[["ticker", "sektor", "fiyat", "agirlik",
+                                           "skor", "stop", "hedef", "gerekce"]]
+                dfp.columns = ["Hisse", "Sektör", "Fiyat", "Ağırlık %",
+                               "Skor", "Stop", "Hedef", "Gerekçe"]
+                st.dataframe(dfp, use_container_width=True, hide_index=True)
+                st.caption("Stop = giriş − ATR×katsayı (vadeye göre 1.5-3.5×). "
+                           "Stop kesilirse çıkmak, 'gereksiz para kaybetmeme' kuralının ta kendisidir.")
+                pname = st.text_input("Portföy adı" if ui_lang == "TR" else "Portfolio name",
+                                      value=f"{p_saved} {h_saved} {datetime.now().strftime('%d.%m')}")
+                if st.button("Portföyü Kaydet ve İzlemeye Al" if ui_lang == "TR" else "Save & Track",
+                             use_container_width=True):
+                    pid = PortfolioManager.save_portfolio(pname, h_saved, p_saved, picks, regime["regime"])
+                    del st.session_state["pm_last_proposal"]
+                    st.success(f"Portföy #{pid} kaydedildi — performansı 'Portföylerim' sekmesinde izlenecek.")
+                    st.rerun()
+
+    # 3) PERFORMANS DEFTERİ
+    with tab_perf:
+        ports = PortfolioManager.active_portfolios()
+        if not ports:
+            st.info("Henüz kayıtlı portföy yok. 'Yeni Portföy Öner' sekmesinden oluşturun.")
+        for p in ports:
+            perf = PortfolioManager.performance(p)
+            with st.expander(f"📁 {p['name']}  ({p['horizon']} / {p['profile']} / "
+                             f"{p['created_at'][:10]} / başlangıç rejimi: {p.get('regime_at_start','?')})",
+                             expanded=True):
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Nominal", f"%{perf['nominal']:+.1f}")
+                m2.metric("ENAG-Reel", f"%{perf['reel']:+.1f}",
+                          help="Enflasyondan arındırılmış gerçek getiri (ENAG E-TÜFE)")
+                m3.metric("XU100'e Göre", f"%{perf['xu100_rel']:+.1f}",
+                          help="Endeksi yendiyseniz pozitif")
+                m4.metric("Gün", perf["gun"])
+
+                nav_df = PortfolioManager.nav_history(p["id"])
+                if len(nav_df) >= 2:
+                    chart = nav_df.set_index("date")[["nav"]].rename(columns={"nav": "Portföy (100 baz)"})
+                    st.line_chart(chart, height=200)
+
+                pos_df = pd.DataFrame(PortfolioManager.positions(p["id"]))
+                if not pos_df.empty:
+                    pos_df = pos_df[["ticker", "entry_price", "weight", "stop_price", "target_price"]]
+                    pos_df.columns = ["Hisse", "Giriş", "Ağırlık %", "Stop", "Hedef"]
+                    st.dataframe(pos_df, use_container_width=True, hide_index=True)
+
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    if st.button("🔄 Rebalans Önerisi", key=f"pm_reb_{p['id']}",
+                                 use_container_width=True):
+                        with st.spinner("Güncel tarama ile karşılaştırılıyor..."):
+                            scan = PortfolioScanner.scan_all()
+                            sugg = PortfolioManager.rebalance_suggestions(p, scan)
+                        if not sugg:
+                            st.success("Değişiklik önerisi yok — portföy sağlıklı görünüyor.")
+                        for s in sugg:
+                            icon = {"ÇIKAR": "🔴", "KÂR AL": "🟡"}.get(s["tip"], "🟢")
+                            st.markdown(f"{icon} **{s['tip']} — {s['ticker']}**: {s['neden']}")
+                with rc2:
+                    if st.button("📦 Arşivle (izlemeyi durdur)", key=f"pm_arc_{p['id']}",
+                                 use_container_width=True):
+                        PortfolioManager.archive(p["id"])
+                        st.rerun()
+
+    # 4) ENAG VERİ YÖNETİMİ
+    with tab_enag:
+        st.markdown("ENAG E-TÜFE aylık oranları. Yeni ay açıklandığında buradan ekleyin — "
+                    "reel getiri hesapları bu tabloyu kullanır.")
+        rates = InflationEngine.rates()
+        df_r = pd.DataFrame([{"Ay": k, "Aylık %": v[0], "Kaynak": v[1]} for k, v in sorted(rates.items())])
+        st.dataframe(df_r.tail(18), use_container_width=True, hide_index=True)
+        ec1, ec2, ec3 = st.columns([2, 2, 1])
+        with ec1:
+            new_ym = st.text_input("Ay (YYYY-AA)", value=datetime.now().strftime("%Y-%m"))
+        with ec2:
+            new_pct = st.number_input("Aylık artış %", value=3.0, step=0.01, format="%.2f")
+        with ec3:
+            st.write("")
+            if st.button("Kaydet", key="enag_save"):
+                InflationEngine.set_rate(new_ym.strip(), float(new_pct))
+                st.success(f"{new_ym}: %{new_pct} kaydedildi.")
+                st.rerun()
+
+
 def check_portfolio_alerts(ui_lang):
     portfolio = _history_db.get_portfolio()
     unread_alerts = [a["ticker"] for a in _history_db.get_unread_alerts()]
@@ -8620,6 +9211,10 @@ def run_app():
             _history_db.check_pending_signals()
         except Exception:
             pass
+        try:
+            PortfolioManager.update_navs()  # kayıtlı portföylerin günlük değeri
+        except Exception:
+            pass
         st.session_state["validation_checked"] = True
 
     # TOP BAR — Market Secici (BIST vs US)
@@ -8674,12 +9269,12 @@ def run_app():
 
         if active_market == "BIST":
             pages = [
-                "Piyasa Ozeti", "BIST Listesi", "Hisse Analizi",
+                "Piyasa Ozeti", "Portfoy Yoneticisi", "BIST Listesi", "Hisse Analizi",
                 "Portfolyum", "Backtest", "Sistem Portfolyleri",
                 "Sinyal Takip",
             ]
             page_icons = [
-                "speedometer2", "list-ul", "search",
+                "speedometer2", "wallet2", "list-ul", "search",
                 "briefcase", "clock-history", "robot",
                 "graph-up-arrow",
             ]
@@ -8776,6 +9371,8 @@ def run_app():
     if active_market == "BIST":
         if page == "Piyasa Ozeti":
             _safe_render(render_dashboard_page, ui_lang)
+        elif page == "Portfoy Yoneticisi":
+            _safe_render(render_portfolio_manager_page, ui_lang)
         elif page == "BIST Listesi":
             _safe_render(render_bist_list_page, ui_lang)
         elif page == "Hisse Analizi":
