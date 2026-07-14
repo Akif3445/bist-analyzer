@@ -3085,44 +3085,78 @@ class PortfolioManager:
                     and r.week52_pos >= 0.45]
             keyf = lambda r: r.score + r.week52_pos * 20 + (5 if r.obv_trend == "yukari" else 0) - r.atr_pct * 2
 
-        pool.sort(key=keyf, reverse=True)
-
-        picks, sector_count = [], {}
         stop_mult   = {"kisa": 1.5, "orta": 2.5, "uzun": 3.5}[horizon]
         target_mult = {"kisa": 2.5, "orta": 4.0, "uzun": 6.0}[horizon]
-        for r in pool:
-            sec = _sector_of(r.ticker)
-            if sector_count.get(sec, 0) >= prof["sector_cap"]:
-                continue
-            atr_abs = r.current_price * r.atr_pct / 100.0
-            picks.append({
-                "ticker": r.ticker, "sektor": sec,
-                "fiyat": round(r.current_price, 2),
-                "skor": round(r.score, 1),
-                "atr_pct": round(r.atr_pct, 2),
-                "stop": round(r.current_price - stop_mult * atr_abs, 2),
-                "hedef": round(r.current_price + target_mult * atr_abs, 2),
-                "gerekce": f"Skor {r.score:.0f} | ADX {r.adx:.0f} | 3A %{r.momentum_3m:+.0f} | 52H %{r.week52_pos*100:.0f}",
-            })
-            sector_count[sec] = sector_count.get(sec, 0) + 1
-            if len(picks) >= prof["max_pos"]:
-                break
-
-        n = len(picks)
-        for p in picks:
-            p["agirlik"] = round(100.0 / n, 1) if n else 0
+        picks = PortfolioManager._format_picks(pool, keyf, prof["max_pos"],
+                                               prof["sector_cap"], stop_mult, target_mult)
         return picks, warning
+
+    # Günlük kapanış serisi cache'i (korelasyon filtresi için — günde 1 indirme)
+    _closes_cache = {"date": None, "series": {}}
+
+    @staticmethod
+    def _fetch_closes(tickers: list, period: str = "6mo") -> dict:
+        """Korelasyon hesabı için kapanış serileri (gün içi cache'li, toplu indirme)."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        cache = PortfolioManager._closes_cache
+        if cache["date"] != today:
+            PortfolioManager._closes_cache = {"date": today, "series": {}}
+            cache = PortfolioManager._closes_cache
+        missing = [t for t in tickers if t not in cache["series"]]
+        if missing:
+            try:
+                syms = [t + ".IS" for t in missing]
+                bulk = yf.download(syms, period=period, interval="1d",
+                                   auto_adjust=True, progress=False, group_by="ticker")
+                for t in missing:
+                    try:
+                        s = t + ".IS"
+                        cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
+                        if len(cl) >= 60:
+                            cache["series"][t] = cl.pct_change().dropna()
+                    except Exception:
+                        continue
+            except Exception as exc:
+                log.warning("Korelasyon serisi indirilemedi: %s", exc)
+        return {t: cache["series"][t] for t in tickers if t in cache["series"]}
+
+    CORR_LIMIT = 0.85   # bu eşiğin üstü "aynı bahis" sayılır, çeşitleme sahtedir
 
     @staticmethod
     def _format_picks(pool: list, keyf, max_pos: int, sector_cap: int,
                       stop_mult: float, target_mult: float) -> list:
-        """Havuzdan sıralı seçim + stop/hedef/ağırlık formatı (ortak yardımcı)."""
+        """Havuzdan sıralı seçim + risk katmanı:
+        - Sektör limiti (mevcut)
+        - KORELASYON eleme: seçilmiş bir hisseyle günlük getiri korelasyonu
+          > 0.85 olan aday atlanır (üç banka almak çeşitleme değildir)
+        - ATR-ters-orantılı ağırlık: oynak hisseye az, sakin hisseye çok
+          (eşit ağırlık yerine risk dengeli dağılım; tek pozisyon max %30)
+        """
         pool = sorted(pool, key=keyf, reverse=True)
-        picks, sector_count = [], {}
+        # Korelasyon serilerini aday havuzunun başı için hazırla (tek toplu indirme)
+        returns = PortfolioManager._fetch_closes([r.ticker for r in pool[:max_pos * 3]])
+
+        picks, sector_count, kept_returns = [], {}, {}
         for r in pool:
             sec = _sector_of(r.ticker)
             if sector_cap > 0 and sector_count.get(sec, 0) >= sector_cap:
                 continue
+            # Korelasyon kontrolü
+            cand = returns.get(r.ticker)
+            too_correlated = False
+            if cand is not None:
+                for kt, ks in kept_returns.items():
+                    try:
+                        c = cand.corr(ks)
+                        if pd.notna(c) and c > PortfolioManager.CORR_LIMIT:
+                            too_correlated = True
+                            log.info("Korelasyon eleme: %s ~ %s (r=%.2f)", r.ticker, kt, c)
+                            break
+                    except Exception:
+                        continue
+            if too_correlated:
+                continue
+
             atr_abs = r.current_price * r.atr_pct / 100.0
             picks.append({
                 "ticker": r.ticker, "sektor": sec,
@@ -3134,11 +3168,28 @@ class PortfolioManager:
                 "gerekce": f"Skor {r.score:.0f} | ADX {r.adx:.0f} | 3A %{r.momentum_3m:+.0f} | 52H %{r.week52_pos*100:.0f}",
             })
             sector_count[sec] = sector_count.get(sec, 0) + 1
+            if cand is not None:
+                kept_returns[r.ticker] = cand
             if len(picks) >= max_pos:
                 break
-        n = len(picks)
-        for p in picks:
-            p["agirlik"] = round(100.0 / n, 1) if n else 0
+
+        # ATR-ters-orantılı ağırlık (risk paritesi hafif versiyonu)
+        if picks:
+            inv = [1.0 / max(p["atr_pct"], 0.5) for p in picks]
+            tot = sum(inv)
+            ws = [x / tot * 100.0 for x in inv]
+            # Tek pozisyon tavanı %30 — fazlası diğerlerine orantılı dağıtılır
+            for _ in range(3):
+                over = sum(max(0.0, w - 30.0) for w in ws)
+                if over <= 0.01:
+                    break
+                ws = [min(w, 30.0) for w in ws]
+                under_ix = [i for i, w in enumerate(ws) if w < 30.0]
+                under_tot = sum(ws[i] for i in under_ix)
+                for i in under_ix:
+                    ws[i] += over * (ws[i] / under_tot) if under_tot > 0 else 0
+            for p, w in zip(picks, ws):
+                p["agirlik"] = round(w, 1)
         return picks
 
     @staticmethod
@@ -3309,6 +3360,104 @@ class PortfolioManager:
     @staticmethod
     def archive(pid: int):
         _PMDB.execute("UPDATE pm_portfolios SET status='arsiv' WHERE id=?", (pid,))
+
+    # RİSK ALARMLARI — stop kırılımı, hedef, portföy freni
+    # Günlük robot (daily_robot.py) ve PM sayfası tarafından paylaşılır.
+
+    DRAWDOWN_LIMITS = {"Temkinli": 7.0, "Dengeli": 10.0, "Agresif": 15.0}  # % tepe-düşüş freni
+
+    @staticmethod
+    def _init_alerts():
+        _PMDB.execute("""
+            CREATE TABLE IF NOT EXISTS pm_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT, pid INTEGER, ticker TEXT,
+                tip TEXT, mesaj TEXT, okundu INTEGER DEFAULT 0
+            )
+        """)
+
+    @staticmethod
+    def _recent_alert_exists(pid: int, ticker: str, tip: str, days: int = 7) -> bool:
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        rows = _PMDB.execute(
+            "SELECT COUNT(*) AS c FROM pm_alerts WHERE pid=? AND ticker=? AND tip=? AND created_at >= ?",
+            (pid, ticker, tip, cutoff))["rows"]
+        return bool(rows and rows[0].get("c", 0) > 0)
+
+    @staticmethod
+    def check_risk_alerts() -> list:
+        """Aktif portföyleri tarar: stop kırılımı / hedefe ulaşma / portföy freni.
+        Yeni alarmları pm_alerts'e yazar (7 gün tekrar-yazma koruması). Dönüş: yeni alarmlar."""
+        PortfolioManager._init_alerts()
+        ports = PortfolioManager.active_portfolios()
+        if not ports:
+            return []
+        all_tickers, pos_map = set(), {}
+        for p in ports:
+            pos = PortfolioManager.positions(p["id"])
+            pos_map[p["id"]] = pos
+            all_tickers.update(x["ticker"] for x in pos)
+        # Güncel fiyatlar (tek toplu indirme)
+        price = {}
+        try:
+            syms = [t + ".IS" for t in all_tickers]
+            bulk = yf.download(syms, period="5d", interval="1d",
+                               auto_adjust=True, progress=False, group_by="ticker")
+            for t in all_tickers:
+                try:
+                    s = t + ".IS"
+                    cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
+                    if len(cl):
+                        price[t] = float(cl.iloc[-1])
+                except Exception:
+                    continue
+        except Exception as exc:
+            log.warning("Alarm fiyat indirme hatası: %s", exc)
+            return []
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        new_alerts = []
+        for p in ports:
+            golge = " (gölge)" if p.get("kind") == "golge" else ""
+            # 1) Pozisyon bazlı: stop / hedef
+            for x in pos_map[p["id"]]:
+                t, cur = x["ticker"], price.get(x["ticker"])
+                if not cur:
+                    continue
+                if x["stop_price"] and cur <= x["stop_price"] and not PortfolioManager._recent_alert_exists(p["id"], t, "STOP"):
+                    new_alerts.append((now, p["id"], t, "STOP",
+                        f"🔴 {t}: stop kesildi ({cur:.2f} ≤ {x['stop_price']:.2f}) — '{p['name']}'{golge}. Zararı büyütmemek için çıkış değerlendirilmeli."))
+                elif x["target_price"] and cur >= x["target_price"] and not PortfolioManager._recent_alert_exists(p["id"], t, "HEDEF"):
+                    new_alerts.append((now, p["id"], t, "HEDEF",
+                        f"🟡 {t}: hedef fiyata ulaşıldı ({cur:.2f} ≥ {x['target_price']:.2f}) — '{p['name']}'{golge}. Kısmi kâr alma düşünülebilir."))
+            # 2) Portföy freni: tepe NAV'dan düşüş profil limitini aşarsa
+            nav = PortfolioManager.nav_history(p["id"])
+            if len(nav) >= 2:
+                peak = float(nav["nav"].max())
+                last = float(nav["nav"].iloc[-1])
+                dd = (peak - last) / peak * 100 if peak > 0 else 0
+                limit = PortfolioManager.DRAWDOWN_LIMITS.get(p["profile"], 10.0)
+                if dd >= limit and not PortfolioManager._recent_alert_exists(p["id"], "*", "FREN"):
+                    new_alerts.append((now, p["id"], "*", "FREN",
+                        f"⛔ '{p['name']}'{golge}: tepe değerden %{dd:.1f} düşüş ({p['profile']} limiti %{limit:.0f}). "
+                        f"Tüm pozisyonları gözden geçir — rejim değişmiş olabilir."))
+
+        if new_alerts:
+            _PMDB.execute_batch([
+                ("INSERT INTO pm_alerts (created_at, pid, ticker, tip, mesaj) VALUES (?,?,?,?,?)", a)
+                for a in new_alerts])
+            log.info("Risk alarmı: %d yeni", len(new_alerts))
+        return [a[4] for a in new_alerts]
+
+    @staticmethod
+    def unread_alerts() -> list:
+        PortfolioManager._init_alerts()
+        return _PMDB.execute(
+            "SELECT * FROM pm_alerts WHERE okundu=0 ORDER BY created_at DESC LIMIT 20")["rows"]
+
+    @staticmethod
+    def mark_alerts_read():
+        _PMDB.execute("UPDATE pm_alerts SET okundu=1 WHERE okundu=0")
 
     # GÖLGE PORTFÖYLER — "Ne olurdu?" panosu
     # Sistem her hafta 9 kombinasyonun (3 vade × 3 profil) önerisini otomatik
@@ -9471,6 +9620,21 @@ def render_portfolio_manager_page(ui_lang):
         f"<span style='color:#94a3b8;font-size:13px'>{' • '.join(regime['detay'])}</span></div>",
         unsafe_allow_html=True,
     )
+
+    # RİSK ALARMLARI BANDI — robot veya oturum kontrolünün bulduğu uyarılar
+    try:
+        _alerts = PortfolioManager.unread_alerts()
+        if _alerts:
+            with st.container():
+                st.markdown("### 🚨 " + ("Risk Alarmları" if ui_lang == "TR" else "Risk Alerts"))
+                for a in _alerts:
+                    st.warning(f"{a['mesaj']}  \n*{a['created_at']}*")
+                if st.button("Tümünü okundu işaretle" if ui_lang == "TR" else "Mark all read",
+                             key="pm_alerts_read"):
+                    PortfolioManager.mark_alerts_read()
+                    st.rerun()
+    except Exception as exc:
+        log.warning("Alarm bandı hatası: %s", exc)
 
     # HAFTALIK GÖLGE PORTFÖY SETİ — sistem kendi önerilerini otomatik kaydeder
     _week = datetime.now().strftime("%G-W%V")

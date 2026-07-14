@@ -1,0 +1,28 @@
+name: daily-robot
+
+on:
+  schedule:
+    # Hafta içi 15:40 UTC = 18:40 TR (BIST kapanışı 18:00'den sonra)
+    - cron: "40 15 * * 1-5"
+  workflow_dispatch: {}   # elle tetikleme (Actions sekmesinden "Run workflow")
+
+jobs:
+  robot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Bağımlılıkları kur
+        run: pip install -r requirements.txt
+
+      - name: Robotu çalıştır
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: python daily_robot.py
