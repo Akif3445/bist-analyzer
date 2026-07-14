@@ -239,20 +239,30 @@ _NEGATION_FLIP_TO_POSITIVE = [re.compile(p, re.IGNORECASE) for p in [
     r"(zarar|kayıp|borç|açık)\w*\s+(kapatıldı|kapattı|kapandı)",
 ]]
 
+# (?:\s+\S+){0,2} = isim ile fiil arasına en fazla 2 kelime girebilir
+# ("kâr YÜZDE 30 azaldı", "borç YÜKÜ rekor seviyede" gibi)
 _NEGATION_FLIP_TO_NEGATIVE = [re.compile(p, re.IGNORECASE) for p in [
-    r"k[aâ]r\w*\s+(düştü|azaldı|geriledi|eridi|daraldı|azalıyor)",
-    r"gelir\w*\s+(düştü|azaldı|geriledi|daraldı|azalıyor)",
-    r"satış\w*\s+(düştü|azaldı|geriledi|daraldı|azalıyor)",
-    r"ihracat\w*\s+(düştü|azaldı|geriledi|daraldı)",
-    r"büyüme\w*\s+(yavaşladı|durdu|geriledi|düştü|sıfır)",
-    r"ciro\w*\s+(düştü|azaldı|geriledi|daraldı)",
-    r"talep\w*\s+(düştü|azaldı|geriledi|daraldı|zayıfladı)",
+    r"k[aâ]r\w*(?:\s+\S+){0,2}\s+(düştü|düşüyor|azaldı|azalıyor|geriledi|eridi|daraldı)",
+    r"gelir\w*(?:\s+\S+){0,2}\s+(düştü|düşüyor|azaldı|azalıyor|geriledi|daraldı)",
+    r"satış\w*(?:\s+\S+){0,2}\s+(düştü|düşüyor|azaldı|azalıyor|geriledi|daraldı)",
+    r"ihracat\w*(?:\s+\S+){0,2}\s+(düştü|azaldı|geriledi|daraldı)",
+    r"büyüme\w*(?:\s+\S+){0,2}\s+(yavaşladı|durdu|geriledi|düştü|sıfır)",
+    r"ciro\w*(?:\s+\S+){0,2}\s+(düştü|azaldı|geriledi|daraldı)",
+    r"talep\w*(?:\s+\S+){0,2}\s+(düştü|azaldı|geriledi|daraldı|zayıfladı)",
     r"kapasite\w*\s+(düştü|azaldı|kullanımı\s+düştü)",
-    r"pazar\s+payı\w*\s+(düştü|azaldı|geriledi|kaybetti)",
+    r"pazar\s+payı\w*\s+(düştü|azaldı|geriledi|kaybetti|eridi)",
     r"temettü\w*\s+(kesildi|azaltıldı|dağıtılmadı|iptal)",
     r"faiz\w*\s+(artışı|arttı|artırıldı|yükseldi|yükseltildi)",
     r"enflasyon\w*\s+(arttı|yükseldi|beklentinin üzerinde|sıçradı)",
-    r"maliyet\w*\s+(arttı|artışı|yükseldi|patladı|sıçradı)",
+    r"maliyet\w*(?:\s+\S+){0,2}\s+(arttı|artıyor|artışı|yükseldi|yükseliyor|patladı|sıçradı)",
+    # "Kötü şey artıyor/büyüyor" ailesi — pozitif fiil (büyü, art, rekor)
+    # negatif ismi nitelediğinde haber OLUMSUZDUR ("zararı büyüdü" vb.)
+    # Not: saf fiyat hareketi ("hisse düştü") bilerek YOK — o teknik skorun işi,
+    # _is_technical_price_move zaten filtreler (çifte sayım olmasın).
+    r"(zarar|kayıp|kayb|borç|ceza|risk|açık)\w*(?:\s+\S+){0,2}\s+(arttı|artıyor|artışı|büyüdü|büyüyor|yükseldi|yükseliyor|derinleş\w*|katlan\w*|rekor\w*)",
+    r"rekor\s+(zarar|ceza|kayıp|borç|vergi\s+cezası)",
+    r"yatırımcı\s+kayb\w*",
+    r"(üretim|faaliyet)\w*\s+(durdu|durduruldu|askıya)",
 ]]
 
 def _check_negation_context(text: str) -> str | None:
@@ -1643,10 +1653,14 @@ def analyze_news(
 
     result.total_news = len(scored_items)
 
-    # Ağırlıklı oran
-    if total_weight > 0:
-        raw_score = (weighted_pos / (weighted_pos + weighted_neg) * 100
-                     if (weighted_pos + weighted_neg) > 0 else 50.0)
+    # Ağırlıklı oran — nötr haberler paydada %50 ağırlıkla yer alır.
+    # Eski formül nötrleri tamamen yok sayıyordu: 2 olumlu + 8 nötr = skor 100
+    # çıkıyordu (aşırı iyimser). Şimdi aynı durum ~%67 verir; nötr çoğunluk
+    # skoru 50'ye doğru çeker, tek tük habere aşırı tepki engellenir.
+    weighted_neu = max(total_weight - weighted_pos - weighted_neg, 0.0)
+    denom = weighted_pos + weighted_neg + 0.5 * weighted_neu
+    if denom > 0:
+        raw_score = 50.0 + (weighted_pos - weighted_neg) / denom * 50.0
     else:
         raw_score = 50.0
 
