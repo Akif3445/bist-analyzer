@@ -3343,6 +3343,48 @@ class PortfolioManager:
         return created
 
     @staticmethod
+    def snapshot_tv_targets() -> int:
+        """Haftalık analist hedef fiyat fotoğrafı → tv_target_history (Turso'da kalıcı).
+
+        Amaç: prim bileşeninin IC testi için point-in-time veri arşivi kurmak.
+        Tarihsel analist hedefi ücretsiz hiçbir kaynakta yok (Wayback dahil
+        tarandı, 2026-07) — tek yol bugünden itibaren kendi arşivimizi
+        biriktirmek. ~10-12 haftada ilk kaba IC okuması mümkün olur.
+        """
+        _PMDB.execute("""
+            CREATE TABLE IF NOT EXISTS tv_target_history (
+                date TEXT, ticker TEXT, target REAL, analyst_count INTEGER, close REAL,
+                PRIMARY KEY (date, ticker)
+            )
+        """)
+        week_start = (datetime.now() - timedelta(days=datetime.now().weekday())).strftime("%Y-%m-%d")
+        rows = _PMDB.execute("SELECT COUNT(*) AS c FROM tv_target_history WHERE date >= ?",
+                             (week_start,))["rows"]
+        if rows and rows[0].get("c", 0) > 0:
+            return 0  # bu hafta çekilmiş
+        try:
+            from tradingview_screener import Query
+            _n, df = (Query().set_markets("turkey")
+                      .select("name", "close", "price_target_average", "recommendation_total")
+                      .limit(700).get_scanner_data())
+        except Exception as exc:
+            log.warning("TV hedef fotoğrafı alınamadı: %s", exc)
+            return 0
+        today = datetime.now().strftime("%Y-%m-%d")
+        stmts = []
+        for _, r in df.iterrows():
+            t, tgt, cnt = str(r.get("name") or ""), r.get("price_target_average"), r.get("recommendation_total")
+            if t and pd.notna(tgt) and pd.notna(cnt) and float(cnt) >= 3:
+                cl = float(r["close"]) if pd.notna(r.get("close")) else None
+                stmts.append(("INSERT OR REPLACE INTO tv_target_history (date, ticker, target, analyst_count, close) VALUES (?,?,?,?,?)",
+                              (today, t, float(tgt), int(cnt), cl)))
+        if stmts:
+            for i in range(0, len(stmts), 40):
+                _PMDB.execute_batch(stmts[i:i + 40])
+        log.info("TV hedef fotoğrafı: %d hisse kaydedildi (%s)", len(stmts), today)
+        return len(stmts)
+
+    @staticmethod
     def auto_archive_shadows() -> int:
         """Vadesi dolan gölge portföyleri arşivler — aktif liste şişmesin."""
         archived = 0
@@ -9446,6 +9488,7 @@ def render_portfolio_manager_page(ui_lang):
                 if _n:
                     st.toast(f"👻 {_n} gölge portföy kaydedildi ({_week})")
             PortfolioManager.auto_archive_shadows()
+            PortfolioManager.snapshot_tv_targets()  # haftalık analist hedef arşivi
         except Exception as exc:
             log.warning("Gölge portföy haftalık kontrol hatası: %s", exc)
         st.session_state["pm_shadow_week"] = _week
