@@ -9031,9 +9031,11 @@ def render_portfolio_manager_page(ui_lang):
         unsafe_allow_html=True,
     )
 
-    tab_new, tab_perf, tab_enag = st.tabs([
+    tab_new, tab_perf, tab_sector, tab_report, tab_enag = st.tabs([
         "Yeni Portföy Öner" if ui_lang == "TR" else "Propose New",
         "Portföylerim & Performans" if ui_lang == "TR" else "My Portfolios & Performance",
+        "Sektör Rotasyonu" if ui_lang == "TR" else "Sector Rotation",
+        "Aylık Rapor" if ui_lang == "TR" else "Monthly Report",
         "ENAG Verisi" if ui_lang == "TR" else "ENAG Data",
     ])
 
@@ -9130,7 +9132,171 @@ def render_portfolio_manager_page(ui_lang):
                         PortfolioManager.archive(p["id"])
                         st.rerun()
 
-    # 4) ENAG VERİ YÖNETİMİ
+    # 4) SEKTÖR ROTASYONU
+    with tab_sector:
+        st.markdown("Para hangi sektöre akıyor? Her sektörün 1 ay / 3 ay momentumu "
+                    "dört çeyreğe ayrılır: **Lider** (ikisi de +), **Toparlanan** (kısa vade döndü), "
+                    "**Zayıflayan** (kısa vade bozuldu), **Geride** (ikisi de −).")
+        if st.button("Sektör Analizini Çalıştır" if ui_lang == "TR" else "Run Sector Analysis",
+                     use_container_width=True, key="pm_sector_btn"):
+            with st.spinner("Tarama verisi hazırlanıyor..."):
+                scan = PortfolioScanner.scan_all()
+            rows = {}
+            for r in scan:
+                if r.error or r.data_rows < 100:
+                    continue
+                sec = _sector_of(r.ticker)
+                rows.setdefault(sec, []).append(r)
+            sec_stats = []
+            for sec, rs in rows.items():
+                if len(rs) < 2:
+                    continue
+                sec_stats.append({
+                    "Sektör": sec,
+                    "Hisse": len(rs),
+                    "1A Mom %": round(np.mean([r.momentum_1m for r in rs]), 1),
+                    "3A Mom %": round(np.mean([r.momentum_3m for r in rs]), 1),
+                    "Ort. Skor": round(np.mean([r.score for r in rs]), 1),
+                    "SMA200 Üstü %": round(np.mean([r.price_above_sma200 for r in rs]) * 100, 0),
+                })
+            if sec_stats:
+                st.session_state["pm_sector_stats"] = sec_stats
+
+        if "pm_sector_stats" in st.session_state:
+            sec_stats = st.session_state["pm_sector_stats"]
+            sdf = pd.DataFrame(sec_stats)
+
+            # Çeyrek (kadran) grafiği: x=3A, y=1A momentum
+            fig = go.Figure()
+            for s in sec_stats:
+                x, y = s["3A Mom %"], s["1A Mom %"]
+                if x >= 0 and y >= 0:   color, quad = "#22c55e", "Lider"
+                elif x < 0 and y >= 0:  color, quad = "#3b82f6", "Toparlanan"
+                elif x >= 0 and y < 0:  color, quad = "#eab308", "Zayıflayan"
+                else:                   color, quad = "#ef4444", "Geride"
+                fig.add_trace(go.Scatter(
+                    x=[x], y=[y], mode="markers+text",
+                    marker=dict(size=10 + s["Hisse"] * 2, color=color, opacity=0.85),
+                    text=[s["Sektör"]], textposition="top center",
+                    textfont=dict(size=11, color="#e2e8f0"),
+                    name=quad, showlegend=False,
+                    hovertemplate=f"{s['Sektör']}<br>3A: %{{x}}<br>1A: %{{y}}<br>"
+                                  f"Skor: {s['Ort. Skor']}<extra></extra>",
+                ))
+            fig.add_hline(y=0, line_color="#475569", line_width=1)
+            fig.add_vline(x=0, line_color="#475569", line_width=1)
+            fig.update_layout(
+                template="plotly_dark", height=420,
+                xaxis_title="3 Aylık Momentum %", yaxis_title="1 Aylık Momentum %",
+                paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+                margin=dict(l=40, r=20, t=30, b=40),
+                title="Sektör Rotasyon Haritası — sağ üst köşe güçlü",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            sdf = sdf.sort_values("Ort. Skor", ascending=False)
+            st.dataframe(sdf, use_container_width=True, hide_index=True)
+            best = sdf.iloc[0]
+            st.info(f"💡 En güçlü sektör: **{best['Sektör']}** (ort. skor {best['Ort. Skor']}, "
+                    f"hisselerin %{best['SMA200 Üstü %']:.0f}'i uzun vadeli trend üstünde). "
+                    f"Portföy önerileri bu tabloyu otomatik yansıtır — skor zaten momentum bazlı.")
+
+    # 5) AYLIK RAPOR
+    with tab_report:
+        st.markdown("Tüm portföylerin aylık karnesi: nominal + ENAG-reel + XU100-göreli. "
+                    "Rapor indirilebilir (Markdown).")
+        # Ay seçenekleri: portföylerin var olduğu aylar + son 6 ay
+        month_opts = []
+        cur = datetime.now()
+        for i in range(6):
+            m = (cur.replace(day=1) - timedelta(days=i * 28)).strftime("%Y-%m")
+            if m not in month_opts:
+                month_opts.append(m)
+        sel_month = st.selectbox("Rapor ayı" if ui_lang == "TR" else "Report month", month_opts)
+
+        if st.button("Raporu Oluştur" if ui_lang == "TR" else "Generate Report",
+                     use_container_width=True, key="pm_report_btn"):
+            m_start = f"{sel_month}-01"
+            next_m  = (datetime.strptime(m_start, "%Y-%m-%d") + timedelta(days=32)).replace(day=1)
+            m_end   = next_m.strftime("%Y-%m-%d")
+
+            lines = [f"# Aylık Portföy Raporu — {sel_month}",
+                     f"*Oluşturulma: {datetime.now().strftime('%Y-%m-%d %H:%M')}*", ""]
+
+            # ENAG ayı
+            enag_m = InflationEngine.rates().get(sel_month)
+            if enag_m:
+                lines.append(f"**ENAG aylık enflasyon:** %{enag_m[0]} ({enag_m[1]})")
+            lines.append("")
+
+            # Portföyler (aktif + arşiv, o ay NAV'ı olanlar)
+            PortfolioManager._init_tables()
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                ports_all = [dict(r) for r in conn.execute("SELECT * FROM pm_portfolios").fetchall()]
+
+            lines.append("## Portföy Performansları")
+            lines.append("")
+            lines.append("| Portföy | Vade/Profil | Ay içi Nominal % | Ay içi ENAG-Reel % | XU100'e Göre % |")
+            lines.append("|---|---|---|---|---|")
+            any_row = False
+            for p in ports_all:
+                nav = PortfolioManager.nav_history(p["id"])
+                nav_m = nav[(nav["date"] >= m_start) & (nav["date"] < m_end)]
+                if len(nav_m) < 2:
+                    continue
+                any_row = True
+                n0, n1 = float(nav_m["nav"].iloc[0]), float(nav_m["nav"].iloc[-1])
+                nom = (n1 / n0 - 1) * 100
+                reel = InflationEngine.real_return(nom, nav_m["date"].iloc[0], nav_m["date"].iloc[-1])
+                x0, x1 = float(nav_m["xu100_close"].iloc[0]), float(nav_m["xu100_close"].iloc[-1])
+                xrel = nom - (x1 / x0 - 1) * 100 if x0 > 0 else 0.0
+                lines.append(f"| {p['name']} | {p['horizon']}/{p['profile']} "
+                             f"| %{nom:+.1f} | %{reel:+.1f} | %{xrel:+.1f} |")
+            if not any_row:
+                lines.append("| *(bu ay NAV verisi olan portföy yok)* | | | | |")
+            lines.append("")
+
+            # Sinyal istatistikleri (o ay üretilen sinyaller)
+            try:
+                with sqlite3.connect(DB_PATH) as conn:
+                    conn.row_factory = sqlite3.Row
+                    sigs = [dict(r) for r in conn.execute(
+                        "SELECT signal, result_7d, result_30d, score_version FROM accuracy_validation "
+                        "WHERE signal_date >= ? AND signal_date < ?", (m_start, m_end)).fetchall()]
+                if sigs:
+                    lines.append("## Sinyal Karnesi")
+                    lines.append(f"- Üretilen sinyal: **{len(sigs)}**")
+                    for col, lbl in [("result_7d", "7 gün"), ("result_30d", "30 gün")]:
+                        done = [s for s in sigs if s[col] in ("Basarili", "Basarisiz")]
+                        if done:
+                            ok = sum(1 for s in done if s[col] == "Basarili")
+                            lines.append(f"- {lbl} isabet: **%{ok/len(done)*100:.0f}** ({ok}/{len(done)})")
+                    v2n = sum(1 for s in sigs if s.get("score_version") == "v2")
+                    lines.append(f"- v2 (momentum) sinyal oranı: {v2n}/{len(sigs)}")
+                    lines.append("")
+            except Exception:
+                pass
+
+            lines.append("---")
+            lines.append("*Bu rapor yatırım tavsiyesi değildir. ENAG-reel getiri, ENAG E-TÜFE "
+                         "aylık verisiyle gün-oranlı hesaplanır.*")
+            report_md = "\n".join(lines)
+            st.session_state["pm_last_report"] = (sel_month, report_md)
+
+        if "pm_last_report" in st.session_state:
+            rep_month, rep_md = st.session_state["pm_last_report"]
+            st.markdown("---")
+            st.markdown(rep_md)
+            st.download_button(
+                "📥 Raporu İndir (.md)" if ui_lang == "TR" else "📥 Download report (.md)",
+                data=rep_md.encode("utf-8"),
+                file_name=f"portfoy_raporu_{rep_month}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+    # 6) ENAG VERİ YÖNETİMİ
     with tab_enag:
         st.markdown("ENAG E-TÜFE aylık oranları. Yeni ay açıklandığında buradan ekleyin — "
                     "reel getiri hesapları bu tabloyu kullanır.")
