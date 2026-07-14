@@ -143,6 +143,11 @@ WEIGHTS = {
     "deger":     10,   # Değerleme (F/K, PD/DD) (tarihsel test edilemedi)
 }
 
+# Sinyal kayıtlarına yazılan skor sistemi versiyonu — Sinyal Takip'te v1/v2
+# isabet karşılaştırması için. v1: kontrarian teknik + 35/35/20/10 ağırlıklar
+# (2026-07-13 öncesi). v2: momentum teknik + 45/25/20/10 (kalibrasyon sonrası).
+SCORING_VERSION = "v2"
+
 # BISTScore JSON serialization
 
 def _score_to_json(score: "BISTScore") -> str:
@@ -692,9 +697,15 @@ class AnalysisHistoryDB:
                     check_30d_date TEXT,
                     check_30d_price REAL,
                     return_30d_pct REAL,
-                    result_30d TEXT DEFAULT 'Bekliyor'
+                    result_30d TEXT DEFAULT 'Bekliyor',
+                    score_version TEXT DEFAULT 'v1'
                 )
             """)
+            # Eski tabloya skor versiyonu kolonu ekle (2026-07 kalibrasyonu öncesi = v1)
+            try:
+                conn.execute("ALTER TABLE accuracy_validation ADD COLUMN score_version TEXT DEFAULT 'v1'")
+            except sqlite3.OperationalError:
+                pass
             # Eski tabloya yeni kolonları ekle (varsa atla)
             for prefix in ("1d", "3d", "14d"):
                 for col_suffix in ("date TEXT", "price REAL", "pct REAL"):
@@ -740,15 +751,15 @@ class AnalysisHistoryDB:
                 if existing:
                     conn.execute("""
                         UPDATE accuracy_validation
-                        SET signal = ?, score = ?, signal_price = ?, signal_date = ?
+                        SET signal = ?, score = ?, signal_price = ?, signal_date = ?, score_version = ?
                         WHERE id = ?
-                    """, (signal, round(score, 1), round(price, 2), now, existing[0]))
+                    """, (signal, round(score, 1), round(price, 2), now, SCORING_VERSION, existing[0]))
                 else:
                     conn.execute("""
                         INSERT INTO accuracy_validation
-                            (ticker, signal, score, signal_date, signal_price, source)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (ticker, signal, round(score, 1), now, round(price, 2), source))
+                            (ticker, signal, score, signal_date, signal_price, source, score_version)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (ticker, signal, round(score, 1), now, round(price, 2), source, SCORING_VERSION))
                 conn.commit()
         except Exception as exc:
             log.warning("record_signal hatası: %s", exc)
@@ -949,9 +960,10 @@ class AnalysisHistoryDB:
                         sig_date_str = signal_date.strftime("%Y-%m-%d %H:%M")
                         with sqlite3.connect(self.db_path) as conn:
                             # Dinamik SQL oluştur
-                            cols = ["ticker", "signal", "score", "signal_date", "signal_price", "source"]
+                            cols = ["ticker", "signal", "score", "signal_date", "signal_price",
+                                    "source", "score_version"]
                             vals = [ticker, signal_str, round(score_val, 1),
-                                    sig_date_str, round(signal_price, 2), "backfill"]
+                                    sig_date_str, round(signal_price, 2), "backfill", SCORING_VERSION]
                             for prefix, (d, p, r, res) in period_data.items():
                                 cols += [f"check_{prefix}_date", f"check_{prefix}_price",
                                          f"return_{prefix}_pct", f"result_{prefix}"]
@@ -5074,6 +5086,38 @@ def render_validation_page(ui_lang: str):
                 f"Dogruluk ({period_desc})" if ui_lang == "TR" else f"Accuracy ({period_desc})",
                 "Bekliyor" if ui_lang == "TR" else "Pending"
             )
+
+    # Skor Sistemi Karşılaştırması — v1 (eski, kontrarian) vs v2 (momentum, 2026-07 kalibrasyonu)
+    # Tüm zamanlardaki kayıtlar üzerinden hesaplanır (dönem filtresinden bağımsız),
+    # çünkü v1 kayıtları geçmişte kaldı — adil karşılaştırma tüm veriyle olur.
+    if "score_version" in df_all.columns and df_all["score_version"].nunique() > 1:
+        st.markdown("---")
+        st.markdown("### " + (
+            "Skor Sistemi Karsilastirmasi (v1 eski / v2 momentum)"
+            if ui_lang == "TR" else "Scoring System Comparison (v1 old / v2 momentum)"
+        ))
+        st.caption(
+            "v2, 2026-07 kalibrasyonuyla gelen momentum-hizali skorlama. "
+            "Iki sistemin gercek sinyal isabetleri asagida — veri biriktikce netlesir."
+            if ui_lang == "TR" else
+            "v2 is the momentum-aligned scoring from the 2026-07 calibration. "
+            "Real-world hit rates of both systems below — clarity improves as data accumulates."
+        )
+        ver_rows = []
+        for ver in sorted(df_all["score_version"].dropna().unique()):
+            dv = df_all[df_all["score_version"] == ver]
+            row = {("Sistem" if ui_lang == "TR" else "System"): ver,
+                   ("Sinyal" if ui_lang == "TR" else "Signals"): len(dv)}
+            for p_key, p_lbl in [("7d", "7g"), ("14d", "14g"), ("30d", "30g")]:
+                rc = f"result_{p_key}"
+                if rc in dv.columns:
+                    done = dv[dv[rc].isin(["Basarili", "Basarisiz"])]
+                    row[p_lbl if ui_lang == "TR" else p_key] = (
+                        f"%{len(done[done[rc] == 'Basarili']) / len(done) * 100:.0f} ({len(done)})"
+                        if len(done) > 0 else "—"
+                    )
+            ver_rows.append(row)
+        st.dataframe(pd.DataFrame(ver_rows), use_container_width=True, hide_index=True)
 
     # AL Sinyalleri Tablosu
     if not al_sinyalleri.empty:
