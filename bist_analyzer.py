@@ -2832,7 +2832,7 @@ def compute_market_regime() -> dict:
 
     Amaç 'gereksiz para kaybetmemek': Ayı rejiminde kısa vadeli alımlar frenlenir.
     """
-    out = {"score": 0, "regime": "Belirsiz", "detay": [], "color": "#6b6357"}
+    out = {"score": 0, "regime": "Belirsiz", "detay": [], "color": _theme()["muted"]}
     pts = 0
     try:
         xu = yf.download("XU100.IS", period="1y", interval="1d",
@@ -5275,7 +5275,7 @@ def create_gauge_chart(score: float, title: str = "BIST Buy Score") -> go.Figure
         number={"font": {"size": 36, "color": "#1a1712"}},
         gauge={
             "axis": {"range": [0, 100], "tickcolor": "#b8ae9a",
-                     "tickfont": {"color": "#6b6357"}},
+                     "tickfont": {"color": _theme()["muted"]}},
             "bar": {"color": bar_color},
             "bgcolor": "#efe9db",
             "steps": [
@@ -5285,12 +5285,12 @@ def create_gauge_chart(score: float, title: str = "BIST Buy Score") -> go.Figure
                 {"range": [55, 75],  "color": "#cfe0d4"},
                 {"range": [75, 100], "color": "#b9d4c2"},
             ],
-            "threshold": {"line": {"color": "#1a1712", "width": 3},
+            "threshold": {"line": {"color": _theme()["ink"], "width": 3},
                           "thickness": 0.75, "value": score},
         },
     ))
     fig.update_layout(
-        paper_bgcolor="#f7f3ea", plot_bgcolor="#f7f3ea",
+        paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["bg"],
         height=280, margin=dict(l=30, r=30, t=40, b=20),
     )
     return fig
@@ -5325,8 +5325,8 @@ def create_candlestick_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
         
     fig.update_layout(
         title=f"{ticker} — Price, MAs & Volume",
-        paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-        font=dict(color="#1a1712"),
+        paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+        font=dict(color=_theme()["ink"]),
         xaxis_rangeslider_visible=False,
         legend=dict(bgcolor="#efe9db"), height=500,
         margin=dict(l=30, r=30, t=40, b=20)
@@ -5851,8 +5851,8 @@ def render_smart_portfolio_page(ui_lang: str):
                     ))
                     fig_bt.update_layout(
                         title=f"{port_name} Portföy — Hisse Bazında Getiri",
-                        paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                        font=dict(color="#1a1712"),
+                        paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                        font=dict(color=_theme()["ink"]),
                         yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
                         xaxis=dict(gridcolor="#d8d0c0"),
                         showlegend=False,
@@ -5909,8 +5909,8 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
         if not trades:
             fig.update_layout(
                 title=f"{ticker} — Fiyat Grafiği (İşlem Yok)",
-                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                font=dict(color="#1a1712"),
+                paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                font=dict(color=_theme()["ink"]),
                 yaxis=dict(gridcolor="#d8d0c0", title="Fiyat (₺)"),
                 xaxis=dict(gridcolor="#d8d0c0"),
                 height=height, margin=dict(l=10, r=10, t=50, b=10),
@@ -5981,8 +5981,8 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
 
         fig.update_layout(
             title=f"{ticker} — Fiyat & AL/SAT Noktaları",
-            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-            font=dict(color="#1a1712"),
+            paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+            font=dict(color=_theme()["ink"]),
             yaxis=dict(gridcolor="#d8d0c0", title="Fiyat (₺)"),
             xaxis=dict(gridcolor="#d8d0c0", rangeslider=dict(visible=False)),
             height=height, margin=dict(l=10, r=10, t=50, b=10),
@@ -6281,8 +6281,8 @@ def render_validation_page(ui_lang: str):
             hole=0.4,
         )])
         fig_pie.update_layout(
-            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-            font=dict(color="#1a1712"), height=350,
+            paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+            font=dict(color=_theme()["ink"]), height=350,
             margin=dict(l=20, r=20, t=30, b=20),
             legend=dict(bgcolor="#efe9db"),
         )
@@ -6856,8 +6856,8 @@ def _tm_render_report(result: dict):
                 ))
                 fig_bt_bar.update_layout(
                     title="Backtest — Hisse Bazlı Getiri",
-                    paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                    font=dict(color="#1a1712"),
+                    paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                    font=dict(color=_theme()["ink"]),
                     yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
                     xaxis=dict(gridcolor="#d8d0c0"),
                     showlegend=False,
@@ -6951,8 +6951,8 @@ def _tm_render_report(result: dict):
             ))
             fig_bar.update_layout(
                 title=f"PIT Portföy — Hisse Bazlı Getiri ({result['pit_date']} → Bugün)",
-                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                font=dict(color="#1a1712"),
+                paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                font=dict(color=_theme()["ink"]),
                 yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
                 xaxis=dict(gridcolor="#d8d0c0"),
                 showlegend=False,
@@ -7112,8 +7112,8 @@ def _tm_render_equity_curve(bt_results: dict, run_id: str, color: str):
 
         fig.update_layout(
             title="Portföy Equity Curve (100 Bazlı)",
-            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-            font=dict(color="#1a1712"),
+            paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+            font=dict(color=_theme()["ink"]),
             yaxis=dict(gridcolor="#d8d0c0", title="Endeksli Değer"),
             xaxis=dict(gridcolor="#d8d0c0"),
             height=400, margin=dict(l=10, r=10, t=50, b=10),
@@ -7237,7 +7237,7 @@ def _tm_render_technical_chart(ticker: str, period: str, run_id: str,
                                  line=dict(color="#b45309", width=1, dash="dot")), row=3, col=1)
 
         fig.update_layout(
-            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+            paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
             font=dict(color="#1a1712", size=11),
             height=600, margin=dict(l=10, r=10, t=40, b=10),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
@@ -7472,8 +7472,8 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
         fig.add_hline(y=30, line_dash="dash", line_color="#1d6f4e", row=3, col=1)
 
         fig.update_layout(
-            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-            font=dict(color="#1a1712"),
+            paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+            font=dict(color=_theme()["ink"]),
             height=650, margin=dict(l=10, r=10, t=40, b=10),
             xaxis_rangeslider_visible=False,
             showlegend=True,
@@ -7509,8 +7509,8 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
             fig_score.add_hline(y=22, line_dash="dash", line_color="#9e2b25",
                                 annotation_text="SELL")
             fig_score.update_layout(
-                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                font=dict(color="#1a1712"),
+                paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                font=dict(color=_theme()["ink"]),
                 yaxis=dict(gridcolor="#d8d0c0", title="Score", range=[-5, 105]),
                 xaxis=dict(gridcolor="#d8d0c0"),
                 height=300, margin=dict(l=10, r=10, t=30, b=10),
@@ -7648,8 +7648,8 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                 ))
                 fig_bar.update_layout(
                     title="Cumulative Return by Stock",
-                    paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                    font=dict(color="#1a1712"),
+                    paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                    font=dict(color=_theme()["ink"]),
                     yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
                     xaxis=dict(gridcolor="#d8d0c0"),
                     showlegend=False,
@@ -7705,8 +7705,8 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                                      annotation_text="Start (100)")
                     fig_eq.update_layout(
                         title=f"{sel_ticker} — Cumulative Equity Curve",
-                        paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                        font=dict(color="#1a1712"),
+                        paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                        font=dict(color=_theme()["ink"]),
                         yaxis=dict(gridcolor="#d8d0c0", title="Capital (100=start)"),
                         xaxis=dict(gridcolor="#d8d0c0"),
                         height=340, margin=dict(l=10, r=10, t=50, b=10),
@@ -8482,8 +8482,8 @@ def _render_backtest_results(ui_lang: str):
             ))
             fig_bar.update_layout(
                 title="Hisse Bazinda Kumulatif Backtest Getirisi",
-                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                font=dict(color="#1a1712"),
+                paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                font=dict(color=_theme()["ink"]),
                 yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
                 xaxis=dict(gridcolor="#d8d0c0"),
                 showlegend=False,
@@ -8536,8 +8536,8 @@ def _render_backtest_results(ui_lang: str):
                                  annotation_text="Baslangic (100)")
                 fig_eq.update_layout(
                     title=f"{sel_ticker} — Kumulatif Sermaye Egrisi",
-                    paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                    font=dict(color="#1a1712"),
+                    paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                    font=dict(color=_theme()["ink"]),
                     yaxis=dict(gridcolor="#d8d0c0", title="Sermaye"),
                     xaxis=dict(gridcolor="#d8d0c0", tickangle=-30),
                     height=280, margin=dict(l=10, r=10, t=45, b=50),
@@ -8593,7 +8593,7 @@ def _render_backtest_results(ui_lang: str):
                     ))
                     fig_pie.update_layout(
                         title="Cikis Sebepleri",
-                        paper_bgcolor="#f7f3ea", font=dict(color="#1a1712"),
+                        paper_bgcolor=_theme()["bg"], font=dict(color=_theme()["ink"]),
                         showlegend=False, height=280,
                         margin=dict(l=10, r=10, t=45, b=10),
                     )
@@ -8801,8 +8801,8 @@ def render_portfolio_page(ui_lang):
             ))
             fig_bar.update_layout(
                 title="Hisse Bazında K/Z (%)" if ui_lang == "TR" else "P&L per Stock (%)",
-                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
-                font=dict(color="#1a1712"),
+                paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["panel"],
+                font=dict(color=_theme()["ink"]),
                 yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
                 xaxis=dict(gridcolor="#d8d0c0"),
                 showlegend=False,
@@ -8821,8 +8821,8 @@ def render_portfolio_page(ui_lang):
             ))
             fig_pie.update_layout(
                 title="Portföy Dağılımı (Maliyet)" if ui_lang == "TR" else "Portfolio Allocation (Cost)",
-                paper_bgcolor="#f7f3ea",
-                font=dict(color="#1a1712"),
+                paper_bgcolor=_theme()["bg"],
+                font=dict(color=_theme()["ink"]),
                 height=360, margin=dict(l=20, r=20, t=50, b=20),
             )
             st.plotly_chart(fig_pie, use_container_width=True)
@@ -9617,24 +9617,26 @@ def render_kokpit_page(ui_lang):
     Tasarım ilkesi: 'bugün ne yapmalıyım?' sorusuna 10 saniyede cevap.
     Ağır indirme yok — rejim cache'i, tarama cache'i ve DB'den okur.
     """
+    t = _theme()
     now = datetime.now()
     tarih = f"{now.day} {_TR_AYLAR[now.month-1]} {now.year}, {_TR_GUNLER[now.weekday()]}"
 
     # ---- MANŞET ----
     regime = compute_market_regime()
+    _rejim_renk = {"Boğa": t["up"], "Nötr": t["warn"], "Ayı": t["down"]}.get(regime["regime"], t["muted"])
     st.markdown(
         f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
-        f"border-bottom:3px double #1a1712;padding-bottom:10px;margin-bottom:4px'>"
+        f"border-bottom:3px double {t['ink']};padding-bottom:10px;margin-bottom:4px'>"
         f"<span style=\"font-family:'Playfair Display',Georgia,serif;font-size:34px;"
-        f"font-weight:800;color:#1a1712\">Piyasa Defteri</span>"
+        f"font-weight:800;color:{t['ink']}\">Piyasa Defteri</span>"
         f"<span style='font-family:\"Source Serif 4\",serif;font-style:italic;"
-        f"color:#6b6357;font-size:13px'>{tarih}</span>"
+        f"color:{t['muted']};font-size:13px'>{tarih}</span>"
         f"<span style='font-family:Inter,sans-serif;font-size:12px;font-weight:600;"
-        f"letter-spacing:1px;text-transform:uppercase;color:{regime['color']}'>"
+        f"letter-spacing:1px;text-transform:uppercase;color:{_rejim_renk}'>"
         f"● {regime['regime']} Piyasası — {regime['score']}/7</span></div>",
         unsafe_allow_html=True)
     st.markdown(
-        f"<div style='font-family:Inter,sans-serif;font-size:11.5px;color:#6b6357;"
+        f"<div style='font-family:Inter,sans-serif;font-size:11.5px;color:{t['muted']};"
         f"margin-bottom:16px'>{' · '.join(regime['detay'])}</div>",
         unsafe_allow_html=True)
 
@@ -9686,10 +9688,10 @@ def render_kokpit_page(ui_lang):
                     sig, renk = _score_to_signal(r.score)
                     st.markdown(
                         f"<div style='display:flex;justify-content:space-between;align-items:center;"
-                        f"padding:7px 2px;border-bottom:1px solid #e4dccb;font-size:14px'>"
+                        f"padding:7px 2px;border-bottom:1px solid {t['line2']};font-size:14px'>"
                         f"<span><img src='{_logo_url(r.ticker)}' width='18' "
                         f"style='vertical-align:middle;border-radius:4px;margin-right:8px'>"
-                        f"<b>{r.ticker}</b> <span style='color:#6b6357;font-size:12px'>"
+                        f"<b>{r.ticker}</b> <span style='color:{t['muted']};font-size:12px'>"
                         f"{_sector_of(r.ticker)}</span></span>"
                         f"<span style='font-family:Inter,sans-serif'>₺{r.current_price:,.2f}</span>"
                         f"<span style='font-family:Inter,sans-serif;font-size:11.5px;font-weight:600;"
@@ -9728,8 +9730,8 @@ def render_kokpit_page(ui_lang):
         for k, v in satirlar:
             st.markdown(
                 f"<div style='display:flex;justify-content:space-between;padding:6px 2px;"
-                f"border-bottom:1px solid #e4dccb;font-size:13.5px'>"
-                f"<span style='color:#6b6357'>{k}</span>"
+                f"border-bottom:1px solid {t['line2']};font-size:13.5px'>"
+                f"<span style='color:{t['muted']}'>{k}</span>"
                 f"<span style='font-family:Inter,sans-serif;font-size:12.5px'>{v}</span></div>",
                 unsafe_allow_html=True)
 
@@ -9953,8 +9955,8 @@ def render_portfolio_manager_page(ui_lang):
                 mode="lines", name="XU100 (endeks)",
                 line=dict(width=2, color="#6b6357", dash="dash")))
         fig_cmp.update_layout(
-            template="plotly_white", height=430,
-            paper_bgcolor="#f7f3ea", plot_bgcolor="#f7f3ea",
+            template=_theme()["plotly"], height=430,
+            paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["bg"],
             yaxis_title="Değer (başlangıç = 100)",
             margin=dict(l=40, r=20, t=20, b=30),
             legend=dict(font=dict(size=10), orientation="h", y=-0.15),
@@ -10116,9 +10118,9 @@ def render_portfolio_manager_page(ui_lang):
             fig.add_hline(y=0, line_color="#b8ae9a", line_width=1)
             fig.add_vline(x=0, line_color="#b8ae9a", line_width=1)
             fig.update_layout(
-                template="plotly_white", height=420,
+                template=_theme()["plotly"], height=420,
                 xaxis_title="3 Aylık Momentum %", yaxis_title="1 Aylık Momentum %",
-                paper_bgcolor="#f7f3ea", plot_bgcolor="#f7f3ea",
+                paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["bg"],
                 margin=dict(l=40, r=20, t=30, b=40),
                 title="Sektör Rotasyon Haritası — sağ üst köşe güçlü",
             )
@@ -10289,62 +10291,108 @@ def display_sidebar_alerts(ui_lang):
                 _history_db.mark_alerts_read([a["id"] for a in unread])
                 st.rerun()
 
-def _inject_gazete_css():
-    """'Gazete' tasarım kimliği — fildişi zemin, serif başlıklar, bordo vurgu.
+# TEMA SİSTEMİ — aynı gazete kimliği, iki baskı
+# "gunduz": fildişi kâğıt (varsayılan) · "gece": gece matbaası (sıcak kömür)
+THEMES = {
+    "gunduz": {
+        "ad": "🌞 Gündüz Baskısı",
+        "bg": "#f7f3ea", "bg2": "#fdfbf5", "panel": "#efe9db",
+        "line": "#d8d0c0", "line2": "#e4dccb",
+        "ink": "#1a1712", "muted": "#6b6357",
+        "up": "#1d6f4e", "down": "#9e2b25", "warn": "#a2701d",
+        "accent": "#9e2b25", "navy": "#27509e", "gold": "#8a6d1d",
+        "plotly": "plotly_white",
+    },
+    "gece": {
+        "ad": "🌙 Gece Baskısı",
+        "bg": "#16130d", "bg2": "#1c1810", "panel": "#211d15",
+        "line": "#3a3426", "line2": "#2c271c",
+        "ink": "#e8e0cd", "muted": "#a39a85",
+        "up": "#4caf82", "down": "#e06055", "warn": "#d9a94b",
+        "accent": "#d4574e", "navy": "#7d9fd4", "gold": "#d9b45b",
+        "plotly": "plotly_dark",
+    },
+}
 
-    Palet: zemin #f7f3ea · panel #efe9db · çizgi #d8d0c0 · mürekkep #1a1712
-           soluk #6b6357 · yeşil #1d6f4e · bordo #9e2b25 · lacivert #27509e
+
+def _theme() -> dict:
+    """Aktif tema paleti. Seçim query param'da saklanır (?tema=gece)."""
+    try:
+        key = st.session_state.get("tema_sec") or st.query_params.get("tema", "gunduz")
+    except Exception:
+        key = "gunduz"
+    return THEMES.get(key, THEMES["gunduz"])
+
+
+def _inject_gazete_css():
+    """'Gazete' tasarım kimliği — aktif temaya göre iki baskıdan biri.
+
     Başlıklar Playfair Display, gövde Source Serif 4, veri/etiket Inter.
+    Gece Baskısı: config.toml aydınlık kalır, CSS katmanı koyuya boyar.
     """
-    st.markdown("""
+    t = _theme()
+    st.markdown(f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600;700&display=swap');
 
-    html, body, .stApp, [data-testid="stAppViewContainer"] {
+    html, body, .stApp, [data-testid="stAppViewContainer"] {{
         font-family: 'Source Serif 4', Georgia, serif;
-    }
+        background: {t['bg']}; color: {t['ink']};
+    }}
+    [data-testid="stHeader"] {{ background: {t['bg']}; }}
     /* Manşet: çift çizgili gazete başlığı */
-    h1 {
+    h1 {{
         font-family: 'Playfair Display', Georgia, serif !important;
-        border-bottom: 3px double #1a1712;
+        border-bottom: 3px double {t['ink']};
         padding-bottom: .35rem;
         letter-spacing: -0.01em;
-    }
-    h2, h3, h4 { font-family: 'Playfair Display', Georgia, serif !important; }
+        color: {t['ink']} !important;
+    }}
+    h2, h3, h4 {{ font-family: 'Playfair Display', Georgia, serif !important; color: {t['ink']} !important; }}
+    p, li, span, label, .stMarkdown {{ color: {t['ink']}; }}
 
     /* Metrikler: tabular rakamlar, gazete etiketi */
-    [data-testid="stMetricValue"] {
-        font-family: Inter, sans-serif; font-variant-numeric: tabular-nums;
-    }
-    [data-testid="stMetricLabel"] {
+    [data-testid="stMetricValue"] {{
+        font-family: Inter, sans-serif; font-variant-numeric: tabular-nums; color: {t['ink']};
+    }}
+    [data-testid="stMetricLabel"] {{
         font-family: Inter, sans-serif; text-transform: uppercase;
-        letter-spacing: .08em; font-size: .72rem; color: #6b6357;
-    }
+        letter-spacing: .08em; font-size: .72rem; color: {t['muted']};
+    }}
 
     /* Kenar çubuğu ve paneller */
-    [data-testid="stSidebar"] { background: #efe9db; border-right: 1px solid #d8d0c0; }
-    div[data-testid="stExpander"] {
-        border: 1px solid #d8d0c0 !important; border-radius: 4px; background: #fdfbf5;
-    }
-    div[data-testid="stExpander"] summary { font-family: Inter, sans-serif; }
+    [data-testid="stSidebar"] {{ background: {t['panel']}; border-right: 1px solid {t['line']}; }}
+    [data-testid="stSidebar"] * {{ color: {t['ink']}; }}
+    div[data-testid="stExpander"] {{
+        border: 1px solid {t['line']} !important; border-radius: 4px; background: {t['bg2']};
+    }}
+    div[data-testid="stExpander"] summary {{ font-family: Inter, sans-serif; color: {t['ink']}; }}
+
+    /* Girdi bileşenleri */
+    [data-baseweb="select"] > div, .stTextInput input, .stNumberInput input {{
+        background: {t['bg2']} !important; color: {t['ink']} !important;
+        border-color: {t['line']} !important;
+    }}
+    [data-baseweb="popover"] li {{ background: {t['bg2']}; color: {t['ink']}; }}
 
     /* Tablolar ve butonlar: Inter, ince çerçeve */
-    div[data-testid="stDataFrame"] { border: 1px solid #d8d0c0; }
-    div[data-testid="stDataFrame"] * { font-family: Inter, sans-serif; }
-    .stButton>button, .stDownloadButton>button {
-        font-family: Inter, sans-serif; border: 1px solid #1a1712;
-        border-radius: 3px; background: #f7f3ea; color: #1a1712;
-    }
-    .stButton>button:hover { background: #1a1712; color: #f7f3ea; border-color: #1a1712; }
-    .stButton>button[kind="primary"], .stButton>button[data-testid="baseButton-primary"] {
-        background: #9e2b25; color: #fdfbf5; border-color: #9e2b25;
-    }
-    .stTabs [data-baseweb="tab"] { font-family: Inter, sans-serif; }
-    .stTabs [aria-selected="true"] { color: #9e2b25 !important; }
+    div[data-testid="stDataFrame"] {{ border: 1px solid {t['line']}; }}
+    div[data-testid="stDataFrame"] * {{ font-family: Inter, sans-serif; }}
+    .stButton>button, .stDownloadButton>button {{
+        font-family: Inter, sans-serif; border: 1px solid {t['ink']};
+        border-radius: 3px; background: {t['bg']}; color: {t['ink']};
+    }}
+    .stButton>button:hover {{ background: {t['ink']}; color: {t['bg']}; border-color: {t['ink']}; }}
+    .stButton>button[kind="primary"], .stButton>button[data-testid="baseButton-primary"] {{
+        background: {t['accent']}; color: #fdfbf5; border-color: {t['accent']};
+    }}
+    .stTabs [data-baseweb="tab"] {{ font-family: Inter, sans-serif; color: {t['muted']}; }}
+    .stTabs [aria-selected="true"] {{ color: {t['accent']} !important; }}
     .stRadio label, .stSelectbox label, .stCheckbox label, .stTextInput label,
-    .stNumberInput label { font-family: Inter, sans-serif; }
-    hr { border-color: #d8d0c0 !important; }
-    [data-testid="stCaptionContainer"] { color: #6b6357; }
+    .stNumberInput label {{ font-family: Inter, sans-serif; }}
+    hr {{ border-color: {t['line']} !important; }}
+    [data-testid="stCaptionContainer"], .stCaption, small {{ color: {t['muted']} !important; }}
+    [data-testid="stAlert"] {{ background: {t['panel']}; color: {t['ink']}; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -10356,6 +10404,12 @@ def run_app():
         initial_sidebar_state="expanded",
     )
     _inject_gazete_css()
+    # Plotly varsayılan şablonu temaya bağla (eksen/yazı renkleri otomatik uyar)
+    try:
+        import plotly.io as _pio
+        _pio.templates.default = _theme()["plotly"]
+    except Exception:
+        pass
 
     # Uygulama açılışında bekleyen sinyalleri otomatik kontrol et (1 kez)
     if "validation_checked" not in st.session_state:
@@ -10387,13 +10441,13 @@ def run_app():
             orientation="horizontal",
             key="market_selector",
             styles={
-                "container":         {"padding": "0!important", "background-color": "#efe9db",
+                "container":         {"padding": "0!important", "background-color": _theme()["panel"],
                                       "border-radius": "10px", "margin-bottom": "0.5rem"},
                 "icon":              {"font-size": "18px"},
                 "nav-link":          {"font-size": "15px", "text-align": "center",
-                                      "margin": "0px", "color": "#6b6357",
-                                      "--hover-color": "#d8d0c0", "padding": "10px 20px"},
-                "nav-link-selected": {"background-color": "#27509e", "color": "#ffffff",
+                                      "margin": "0px", "color": _theme()["muted"],
+                                      "--hover-color": _theme()["line"], "padding": "10px 20px"},
+                "nav-link-selected": {"background-color": _theme()["navy"], "color": "#ffffff",
                                       "border-radius": "8px", "font-weight": "700"},
             },
         )
@@ -10409,8 +10463,25 @@ def run_app():
     active_market = "US" if "US" in selected_market_label else "BIST"
     st.session_state["selected_market"] = active_market
 
-    # SIDEBAR — Dil + Sayfa Navigasyonu (market'e göre)
+    # SIDEBAR — Tema + Dil + Sayfa Navigasyonu (market'e göre)
     with st.sidebar:
+        _tema_mevcut = st.session_state.get("tema_sec") or st.query_params.get("tema", "gunduz")
+        tema_sec = st.selectbox(
+            "Baskı / Edition",
+            options=["gunduz", "gece"],
+            index=0 if _tema_mevcut != "gece" else 1,
+            format_func=lambda x: THEMES[x]["ad"],
+            key="tema_sec_widget",
+        )
+        if tema_sec != _tema_mevcut:
+            st.session_state["tema_sec"] = tema_sec
+            try:
+                st.query_params["tema"] = tema_sec  # yenilemede kaybolmasın
+            except Exception:
+                pass
+            st.rerun()
+        st.session_state["tema_sec"] = tema_sec
+
         ui_lang = st.selectbox(
             "Dil / Language",
             options=["TR", "EN"], index=0,
@@ -10468,12 +10539,12 @@ def run_app():
                 default_index=default_idx,
                 key=f"nav_option_menu_{active_market}{_nav_key_suffix}",
                 styles={
-                    "container":             {"padding": "0!important", "background-color": "#efe9db"},
-                    "icon":                  {"color": "#27509e", "font-size": "16px"},
+                    "container":             {"padding": "0!important", "background-color": _theme()["panel"]},
+                    "icon":                  {"color": _theme()["navy"], "font-size": "16px"},
                     "nav-link":              {"font-size": "14px", "text-align": "left",
-                                              "margin": "0px", "color": "#1a1712",
-                                              "--hover-color": "#d8d0c0"},
-                    "nav-link-selected":     {"background-color": "#27509e", "color": "#ffffff"},
+                                              "margin": "0px", "color": _theme()["ink"],
+                                              "--hover-color": _theme()["line"]},
+                    "nav-link-selected":     {"background-color": _theme()["navy"], "color": "#ffffff"},
                 },
             )
             st.session_state["nav_radio"] = page
