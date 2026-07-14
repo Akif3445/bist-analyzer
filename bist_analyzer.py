@@ -2860,6 +2860,102 @@ def compute_market_regime() -> dict:
     return out
 
 
+# Portföy kimlikleri — karakterli isim + ikon + strateji açıklaması
+PORTFOLIO_META = {
+    ("kisa", "Temkinli"): {"ad": "Nöbetçi", "ikon": "🛡️",
+        "desc": "Kısa vadede yalnızca düşük oynaklıklı, trendi net hisselere girer; az işlem, sıkı stop. "
+                "Sermaye korumayı önceleyen, ekrana az bakan yatırımcıya uygun."},
+    ("kisa", "Dengeli"): {"ad": "Sörfçü", "ikon": "🏄",
+        "desc": "Momentum dalgasını yakalayıp 1-3 haftada kâr almayı hedefler. Orta risk; "
+                "piyasayı haftada birkaç kez kontrol edebilene uygun."},
+    ("kisa", "Agresif"): {"ad": "Şimşek", "ikon": "⚡",
+        "desc": "Yüksek momentum, hızlı al-sat, geniş evren. Sert dalgalanmaya dayanıklı, "
+                "aktif takip yapabilen deneyimli yatırımcı için."},
+    ("orta", "Temkinli"): {"ad": "Kaptan", "ikon": "⚓",
+        "desc": "1-3 aylık ufukta düşük oynaklıklı, uzun vadeli trendi sağlam hisselerle sakin seyir. "
+                "'Az ama öz' diyen yatırımcıya uygun."},
+    ("orta", "Dengeli"): {"ad": "Pusula", "ikon": "🧭",
+        "desc": "Sistemin ana stratejisi: SMA200 üstü + pozitif momentum + sektör çeşitlemesi, 1-3 ay pozisyon. "
+                "Çoğu yatırımcı için dengeli başlangıç noktası."},
+    ("orta", "Agresif"): {"ad": "Rüzgar", "ikon": "🌪️",
+        "desc": "Güçlü 3 aylık momentumun peşinde geniş evrende avlanır. Getiri potansiyeli de "
+                "dalgalanması da yüksek."},
+    ("uzun", "Temkinli"): {"ad": "Çınar", "ikon": "🌳",
+        "desc": "6-12 ay ufkunda golden cross + düşük oynaklık: yavaş ama istikrarlı büyüme. "
+                "Enflasyona karşı sabırlı birikim yapana uygun."},
+    ("uzun", "Dengeli"): {"ad": "Maraton", "ikon": "🏃",
+        "desc": "Uzun soluklu trend takibi: 52 hafta gücü + hacim onayı. Pozisyonu aylarca "
+                "taşıyabilen yatırımcı için."},
+    ("uzun", "Agresif"): {"ad": "Zirve Avcısı", "ikon": "🏔️",
+        "desc": "Yıllık zirvesine yakın seyreden liderleri tutar — kalibrasyonun en güçlü sinyali. "
+                "Momentum kırılırsa sert düşüş riskini kabul edene göre."},
+    ("sektor", "*"): {"ad": "Sektör Odak", "ikon": "🎯",
+        "desc": "Tek sektöre konsantre portföy — sektör rotasyonunda güçlenen tarafa oynar. "
+                "Çeşitlendirme azdır, sektör görüşü olan yatırımcıya uygun."},
+    ("trend", "*"): {"ad": "Trend Avcısı", "ikon": "🚀",
+        "desc": "Rotasyon haritasının 'Lider' çeyreğindeki sektörlerden en güçlü hisseleri toplar — "
+                "paranın şu an aktığı yere biner. Rejim dönüşlerinde hızlı çıkış gerekir."},
+}
+
+
+def _pm_meta(horizon: str, profile: str) -> dict:
+    key = (horizon.split(":")[0], profile)
+    m = PORTFOLIO_META.get(key) or PORTFOLIO_META.get((key[0], "*"))
+    return m or {"ad": f"{horizon}/{profile}", "ikon": "📁", "desc": ""}
+
+
+# Hisse logoları — bilinen şirketlerde gerçek favicon, kalanında renkli monogram rozet
+BIST_LOGO_DOMAINS = {
+    "THYAO": "turkishairlines.com",  "GARAN": "garantibbva.com.tr", "AKBNK": "akbank.com",
+    "ISCTR": "isbank.com.tr",        "YKBNK": "yapikredi.com.tr",   "VAKBN": "vakifbank.com.tr",
+    "HALKB": "halkbank.com.tr",      "QNBFB": "qnb.com.tr",         "SKBNK": "sekerbank.com.tr",
+    "ALBRK": "albaraka.com.tr",      "SISE": "sisecam.com.tr",      "KCHOL": "koc.com.tr",
+    "SAHOL": "sabanci.com",          "TCELL": "turkcell.com.tr",    "TTKOM": "turktelekom.com.tr",
+    "BIMAS": "bim.com.tr",           "MGROS": "migros.com.tr",      "SOKM": "sokmarket.com.tr",
+    "ASELS": "aselsan.com",          "FROTO": "fordotosan.com.tr",  "TOASO": "tofas.com.tr",
+    "ARCLK": "arcelik.com.tr",       "VESTL": "vestel.com.tr",      "VESBE": "vestel.com.tr",
+    "TUPRS": "tupras.com.tr",        "PETKM": "petkim.com.tr",      "EREGL": "erdemir.com.tr",
+    "KRDMD": "kardemir.com",         "PGSUS": "flypgs.com",         "TAVHL": "tav.aero",
+    "ENKAI": "enka.com",             "EKGYO": "emlakkonut.com.tr",  "SASA": "sasa.com.tr",
+    "GUBRF": "gubretas.com.tr",      "AKSEN": "aksa.com.tr",        "ENJSA": "enerjisa.com.tr",
+    "ULKER": "ulker.com.tr",         "LOGO": "logo.com.tr",         "OTKAR": "otokar.com.tr",
+    "TTRAK": "turktraktor.com.tr",   "CLEBI": "celebiaviation.com", "DOHOL": "doganholding.com.tr",
+    "TKFEN": "tekfen.com.tr",        "KOZAL": "kozaaltin.com.tr",   "ODAS": "odasenerji.com.tr",
+    "ZOREN": "zorluenerji.com.tr",   "AYGAZ": "aygaz.com.tr",       "MAVI": "mavi.com",
+    "LCWGR": "lcw.com",              "NETAS": "netas.com.tr",       "INDES": "indeks.com.tr",
+    "KAREL": "karel.com.tr",         "CEMTS": "cemtas.com.tr",      "BIMAS2": "bim.com.tr",
+    "TURSG": "turkiyesigorta.com.tr","THY": "turkishairlines.com",
+}
+
+
+def _logo_url(ticker: str) -> str:
+    """Hisse logosu: bilinen domain'de Google favicon servisi, yoksa monogram SVG rozet."""
+    t = ticker.upper().replace(".IS", "")
+    dom = BIST_LOGO_DOMAINS.get(t)
+    if dom:
+        return f"https://www.google.com/s2/favicons?domain={dom}&sz=64"
+    # Deterministik renkli monogram (harici servis yok, her zaman çalışır)
+    hue = sum(ord(c) * 37 for c in t) % 360
+    from urllib.parse import quote as _q
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
+           f"<rect width='64' height='64' rx='14' fill='hsl({hue},55%,40%)'/>"
+           f"<text x='32' y='41' font-size='21' font-family='Arial' font-weight='bold' "
+           f"fill='white' text-anchor='middle'>{t[:3]}</text></svg>")
+    return "data:image/svg+xml;utf8," + _q(svg)
+
+
+def _with_logo_col(df: pd.DataFrame, ticker_col: str = "Hisse") -> pd.DataFrame:
+    """DataFrame'in başına Logo kolonu ekler (st.column_config.ImageColumn ile kullan)."""
+    if df.empty or ticker_col not in df.columns:
+        return df
+    df = df.copy()
+    df.insert(0, "Logo", df[ticker_col].map(_logo_url))
+    return df
+
+
+_LOGO_COL_CFG = {"Logo": st.column_config.ImageColumn("", width="small")}
+
+
 class PortfolioManager:
     """Vade × yatırımcı profili matrisinden portföy önerir, kaydeder, izler.
 
@@ -2976,6 +3072,78 @@ class PortfolioManager:
         for p in picks:
             p["agirlik"] = round(100.0 / n, 1) if n else 0
         return picks, warning
+
+    @staticmethod
+    def _format_picks(pool: list, keyf, max_pos: int, sector_cap: int,
+                      stop_mult: float, target_mult: float) -> list:
+        """Havuzdan sıralı seçim + stop/hedef/ağırlık formatı (ortak yardımcı)."""
+        pool = sorted(pool, key=keyf, reverse=True)
+        picks, sector_count = [], {}
+        for r in pool:
+            sec = _sector_of(r.ticker)
+            if sector_cap > 0 and sector_count.get(sec, 0) >= sector_cap:
+                continue
+            atr_abs = r.current_price * r.atr_pct / 100.0
+            picks.append({
+                "ticker": r.ticker, "sektor": sec,
+                "fiyat": round(r.current_price, 2),
+                "skor": round(r.score, 1),
+                "atr_pct": round(r.atr_pct, 2),
+                "stop": round(r.current_price - stop_mult * atr_abs, 2),
+                "hedef": round(r.current_price + target_mult * atr_abs, 2),
+                "gerekce": f"Skor {r.score:.0f} | ADX {r.adx:.0f} | 3A %{r.momentum_3m:+.0f} | 52H %{r.week52_pos*100:.0f}",
+            })
+            sector_count[sec] = sector_count.get(sec, 0) + 1
+            if len(picks) >= max_pos:
+                break
+        n = len(picks)
+        for p in picks:
+            p["agirlik"] = round(100.0 / n, 1) if n else 0
+        return picks
+
+    @staticmethod
+    def propose_sector(scan_results: list, sector: str, profile_name: str) -> tuple:
+        """Tek sektöre odaklı portföy — sektör görüşü olan yatırımcı için."""
+        prof = PortfolioManager.PROFILES[profile_name]
+        pool = [r for r in scan_results
+                if not r.error and r.data_rows >= 200 and r.current_price > 0
+                and r.volume_ok and _sector_of(r.ticker) == sector
+                and r.score >= 50 and r.price_above_sma200
+                and r.atr_pct <= prof["max_atr"] + 1.0]  # tek sektörde biraz tolerans
+        picks = PortfolioManager._format_picks(
+            pool, lambda r: r.score + r.momentum_3m * 0.3,
+            max_pos=prof["max_pos"], sector_cap=0,  # sektör limiti yok — zaten tek sektör
+            stop_mult=2.5, target_mult=4.0)
+        warn = ("Tek sektör portföyü: çeşitlendirme düşük, sektör haberlerine duyarlılık yüksek. "
+                "Toplam varlığın küçük bir bölümüyle sınırlamak sağlıklıdır.")
+        return picks, warn
+
+    @staticmethod
+    def propose_trend(scan_results: list, profile_name: str) -> tuple:
+        """Güncel trend portföyü: rotasyonda 'Lider' çeyrekteki sektörlerin en güçlüleri."""
+        prof = PortfolioManager.PROFILES[profile_name]
+        valid = [r for r in scan_results
+                 if not r.error and r.data_rows >= 200 and r.current_price > 0 and r.volume_ok]
+        # Sektör momentumları
+        sec_groups = {}
+        for r in valid:
+            sec_groups.setdefault(_sector_of(r.ticker), []).append(r)
+        leaders = [sec for sec, rs in sec_groups.items()
+                   if len(rs) >= 2
+                   and np.mean([x.momentum_1m for x in rs]) > 0
+                   and np.mean([x.momentum_3m for x in rs]) > 0]
+        if not leaders:
+            return [], ("Şu an rotasyonda 'Lider' çeyrekte sektör yok — trend portföyü için "
+                        "uygun zaman değil. Sektörler toparlanınca tekrar deneyin.")
+        pool = [r for r in valid
+                if _sector_of(r.ticker) in leaders
+                and r.week52_pos >= 0.55 and r.momentum_3m > 0 and r.score >= 55]
+        picks = PortfolioManager._format_picks(
+            pool, lambda r: r.score + r.momentum_1m * 0.5 + r.week52_pos * 15,
+            max_pos=prof["max_pos"], sector_cap=max(prof["sector_cap"], 2),
+            stop_mult=2.0, target_mult=3.5)
+        warn = f"Lider sektörler: {', '.join(leaders)}. Trend döndüğünde hızlı çıkış gerekir — stoplara uy."
+        return picks, warn
 
     # KAYIT & NAV TAKİBİ
 
@@ -8550,7 +8718,11 @@ def render_bist_list_page(ui_lang):
                 c1, c2, c3, c4 = st.columns([2, 2, 2, 3])
 
                 with c1:
-                    st.markdown(f"**{tk}**")
+                    st.markdown(
+                        f"<img src='{_logo_url(tk)}' width='20' "
+                        f"style='vertical-align:middle;border-radius:5px;margin-right:6px'>"
+                        f"<b>{tk}</b>",
+                        unsafe_allow_html=True)
 
                 with c2:
                     if info:
@@ -9259,15 +9431,41 @@ def render_portfolio_manager_page(ui_lang):
 
     # 2) YENİ PORTFÖY
     with tab_new:
-        c1, c2 = st.columns(2)
-        with c1:
-            horizon_label = st.selectbox("Vade" if ui_lang == "TR" else "Horizon",
-                                         list(PortfolioManager.HORIZONS.keys()))
-        with c2:
-            profile = st.selectbox("Yatırımcı Profili" if ui_lang == "TR" else "Investor Profile",
-                                   list(PortfolioManager.PROFILES.keys()), index=1)
-        st.caption(PortfolioManager.PROFILES[profile]["aciklama"])
-        horizon = PortfolioManager.HORIZONS[horizon_label]
+        ptype = st.radio("Portföy Tipi" if ui_lang == "TR" else "Portfolio Type",
+                         ["Vade × Profil", "Sektörel 🎯", "Trend 🚀"],
+                         horizontal=True, key="pm_ptype")
+
+        _sector_opts = [c for c in BIST_STOCKS.keys() if c != "BIST 30"]
+        sel_sector = None
+        if ptype == "Vade × Profil":
+            c1, c2 = st.columns(2)
+            with c1:
+                horizon_label = st.selectbox("Vade" if ui_lang == "TR" else "Horizon",
+                                             list(PortfolioManager.HORIZONS.keys()))
+            with c2:
+                profile = st.selectbox("Yatırımcı Profili" if ui_lang == "TR" else "Investor Profile",
+                                       list(PortfolioManager.PROFILES.keys()), index=1)
+            horizon = PortfolioManager.HORIZONS[horizon_label]
+            _meta = _pm_meta(horizon, profile)
+        elif ptype.startswith("Sektörel"):
+            c1, c2 = st.columns(2)
+            with c1:
+                sel_sector = st.selectbox("Sektör", _sector_opts)
+            with c2:
+                profile = st.selectbox("Yatırımcı Profili", list(PortfolioManager.PROFILES.keys()), index=1)
+            horizon = f"sektor:{sel_sector}"
+            _meta = _pm_meta("sektor", profile)
+        else:  # Trend
+            profile = st.selectbox("Yatırımcı Profili", list(PortfolioManager.PROFILES.keys()), index=1)
+            horizon = "trend"
+            _meta = _pm_meta("trend", profile)
+
+        st.markdown(
+            f"<div style='background:#1e293b;border-radius:8px;padding:10px 14px;margin:6px 0'>"
+            f"<b>{_meta['ikon']} {_meta['ad']}</b> — "
+            f"<span style='color:#94a3b8;font-size:13px'>{_meta['desc']}</span><br>"
+            f"<span style='color:#64748b;font-size:12px'>Profil: {PortfolioManager.PROFILES[profile]['aciklama']}</span></div>",
+            unsafe_allow_html=True)
 
         if st.button("Tara ve Portföy Öner" if ui_lang == "TR" else "Scan & Propose",
                      type="primary", use_container_width=True):
@@ -9275,7 +9473,12 @@ def render_portfolio_manager_page(ui_lang):
             def _cb(t, i, n): prog.progress(min(i / max(n, 1), 1.0), text=f"{t} ({i}/{n})")
             scan = PortfolioScanner.scan_all(progress_cb=_cb)
             prog.empty()
-            picks, warning = PortfolioManager.propose(scan, horizon, profile, regime)
+            if horizon == "trend":
+                picks, warning = PortfolioManager.propose_trend(scan, profile)
+            elif horizon.startswith("sektor:"):
+                picks, warning = PortfolioManager.propose_sector(scan, sel_sector, profile)
+            else:
+                picks, warning = PortfolioManager.propose(scan, horizon, profile, regime)
             st.session_state["pm_last_proposal"] = (picks, warning, horizon, profile)
 
         if "pm_last_proposal" in st.session_state:
@@ -9291,11 +9494,14 @@ def render_portfolio_manager_page(ui_lang):
                                            "skor", "stop", "hedef", "gerekce"]]
                 dfp.columns = ["Hisse", "Sektör", "Fiyat", "Ağırlık %",
                                "Skor", "Stop", "Hedef", "Gerekçe"]
-                st.dataframe(dfp, use_container_width=True, hide_index=True)
+                dfp = _with_logo_col(dfp)
+                st.dataframe(dfp, use_container_width=True, hide_index=True,
+                             column_config=_LOGO_COL_CFG)
                 st.caption("Stop = giriş − ATR×katsayı (vadeye göre 1.5-3.5×). "
                            "Stop kesilirse çıkmak, 'gereksiz para kaybetmeme' kuralının ta kendisidir.")
+                _m2 = _pm_meta(h_saved, p_saved)
                 pname = st.text_input("Portföy adı" if ui_lang == "TR" else "Portfolio name",
-                                      value=f"{p_saved} {h_saved} {datetime.now().strftime('%d.%m')}")
+                                      value=f"{_m2['ad']} {datetime.now().strftime('%d.%m')}")
                 if st.button("Portföyü Kaydet ve İzlemeye Al" if ui_lang == "TR" else "Save & Track",
                              use_container_width=True):
                     pid = PortfolioManager.save_portfolio(pname, h_saved, p_saved, picks, regime["regime"])
@@ -9308,14 +9514,77 @@ def render_portfolio_manager_page(ui_lang):
         _all_active = PortfolioManager.active_portfolios()
         ports    = [p for p in _all_active if p.get("kind") != "golge"]
         shadows  = [p for p in _all_active if p.get("kind") == "golge"]
+
+        # KARŞILAŞTIRMA GRAFİĞİ — tüm portföyler tek grafikte
+        st.markdown("### 📈 " + ("Portföy Karşılaştırma" if ui_lang == "TR" else "Portfolio Comparison"))
+        gc1, gc2 = st.columns([3, 2])
+        with gc1:
+            range_label = st.radio("Aralık" if ui_lang == "TR" else "Range",
+                                   ["1 Hafta", "1 Ay", "3 Ay", "1 Yıl", "Tümü"],
+                                   index=4, horizontal=True, key="pm_cmp_range")
+        with gc2:
+            inc_shadow = st.checkbox("Gölge portföyler dahil" if ui_lang == "TR" else "Include shadows",
+                                     value=True, key="pm_cmp_shadow")
+        _range_days = {"1 Hafta": 7, "1 Ay": 30, "3 Ay": 90, "1 Yıl": 365, "Tümü": 9999}[range_label]
+        _cutoff = (datetime.now() - timedelta(days=_range_days)).strftime("%Y-%m-%d")
+
+        _chart_ports = _all_active if inc_shadow else ports
+        fig_cmp = go.Figure()
+        xu_series = {}   # tarih -> xu100 (benchmark için tüm portföylerden topla)
+        _total_pts = 0
+        for p in _chart_ports:
+            nav = PortfolioManager.nav_history(p["id"])
+            nav = nav[nav["date"] >= _cutoff]
+            if nav.empty:
+                continue
+            base = float(nav["nav"].iloc[0])
+            if base <= 0:
+                continue
+            rebased = nav["nav"] / base * 100.0
+            _m = _pm_meta(p["horizon"], p["profile"])
+            is_shadow = p.get("kind") == "golge"
+            label = f"{_m['ikon']} {p['name']}"
+            fig_cmp.add_trace(go.Scatter(
+                x=nav["date"], y=rebased.round(2), mode="lines+markers",
+                name=label, opacity=0.55 if is_shadow else 1.0,
+                line=dict(width=1.5 if is_shadow else 3,
+                          dash="dot" if is_shadow else "solid"),
+            ))
+            _total_pts += len(nav)
+            for d, x in zip(nav["date"], nav["xu100_close"]):
+                if x and x > 0:
+                    xu_series[d] = x
+        if xu_series:
+            xs = sorted(xu_series.items())
+            xu_base = xs[0][1]
+            fig_cmp.add_trace(go.Scatter(
+                x=[d for d, _ in xs], y=[round(v / xu_base * 100, 2) for _, v in xs],
+                mode="lines", name="XU100 (endeks)",
+                line=dict(width=2, color="#94a3b8", dash="dash")))
+        fig_cmp.update_layout(
+            template="plotly_dark", height=430,
+            paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+            yaxis_title="Değer (başlangıç = 100)",
+            margin=dict(l=40, r=20, t=20, b=30),
+            legend=dict(font=dict(size=10), orientation="h", y=-0.15),
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig_cmp, use_container_width=True)
+        if _total_pts <= len(_chart_ports):
+            st.caption("ℹ️ Grafik her gün bir nokta biriktirir — birkaç gün içinde eğriler belirginleşecek. "
+                       "Düz çizgiler: gölge portföyler, kesikli gri: XU100 endeksi.")
+
+        st.markdown("---")
         if not ports:
             st.info("Henüz kayıtlı portföy yok. 'Yeni Portföy Öner' sekmesinden oluşturun. "
                     "(Sistemin otomatik kayıtları aşağıdaki Gölge Portföyler bölümünde.)")
         for p in ports:
             perf = PortfolioManager.performance(p)
-            with st.expander(f"📁 {p['name']}  ({p['horizon']} / {p['profile']} / "
+            _m = _pm_meta(p["horizon"], p["profile"])
+            with st.expander(f"{_m['ikon']} {p['name']}  ({p['horizon']} / {p['profile']} / "
                              f"{p['created_at'][:10]} / başlangıç rejimi: {p.get('regime_at_start','?')})",
                              expanded=True):
+                st.caption(f"**{_m['ad']}** — {_m['desc']}")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Nominal", f"%{perf['nominal']:+.1f}")
                 m2.metric("ENAG-Reel", f"%{perf['reel']:+.1f}",
@@ -9333,7 +9602,9 @@ def render_portfolio_manager_page(ui_lang):
                 if not pos_df.empty:
                     pos_df = pos_df[["ticker", "entry_price", "weight", "stop_price", "target_price"]]
                     pos_df.columns = ["Hisse", "Giriş", "Ağırlık %", "Stop", "Hedef"]
-                    st.dataframe(pos_df, use_container_width=True, hide_index=True)
+                    pos_df = _with_logo_col(pos_df)
+                    st.dataframe(pos_df, use_container_width=True, hide_index=True,
+                                 column_config=_LOGO_COL_CFG)
 
                 rc1, rc2 = st.columns(2)
                 with rc1:
@@ -9346,7 +9617,11 @@ def render_portfolio_manager_page(ui_lang):
                             st.success("Değişiklik önerisi yok — portföy sağlıklı görünüyor.")
                         for s in sugg:
                             icon = {"ÇIKAR": "🔴", "KÂR AL": "🟡"}.get(s["tip"], "🟢")
-                            st.markdown(f"{icon} **{s['tip']} — {s['ticker']}**: {s['neden']}")
+                            st.markdown(
+                                f"{icon} <img src='{_logo_url(s['ticker'])}' width='18' "
+                                f"style='vertical-align:middle;border-radius:4px'> "
+                                f"**{s['tip']} — {s['ticker']}**: {s['neden']}",
+                                unsafe_allow_html=True)
                 with rc2:
                     if st.button("📦 Arşivle (izlemeyi durdur)", key=f"pm_arc_{p['id']}",
                                  use_container_width=True):
@@ -9372,8 +9647,10 @@ def render_portfolio_manager_page(ui_lang):
             srows = []
             for p in shadows:
                 perf = PortfolioManager.performance(p)
+                _m = _pm_meta(p["horizon"], p["profile"])
                 srows.append({
-                    "Portföy": p["name"],
+                    "Portföy": f"{_m['ikon']} {_m['ad']} — {p['name'].split(' ')[-1]}",
+                    "Strateji": f"{p['horizon']}/{p['profile']}",
                     "Gün": perf["gun"],
                     "Nominal %": perf["nominal"],
                     "ENAG-Reel %": perf["reel"],
