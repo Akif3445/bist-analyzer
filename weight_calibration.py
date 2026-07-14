@@ -269,6 +269,103 @@ def analyze():
             print("  Her iki IC de <= 0 — bu horizonda öngörü gücü tespit edilemedi.")
 
 
+def analyze_stops():
+    """ATR stop × hedef katsayı ızgara simülasyonu.
+
+    Giriş olayları: panel tarihlerinde momentum skorunun kesitsel en üst
+    %20'sine giren hisseler (sistemin gerçek seçim mantığına en yakın vekil).
+    Her olay için k×ATR stop / m×ATR hedef / H gün maksimum tutma kuralıyla
+    ileriye yürütülür: önce stop mu kesilir, hedef mi vurulur, süre mi dolar?
+    Not: aynı gün ikisi de gerçekleşirse STOP sayılır (muhafazakâr varsayım).
+    """
+    tech = pd.read_csv(TECH_CSV)
+    score_col = "tech_score_momentum" if "tech_score_momentum" in tech.columns else "tech_score"
+
+    # Giriş olayları: tarih bazında üst %20
+    tech["q80"] = tech.groupby("date")[score_col].transform(lambda s: s.quantile(0.80))
+    events = tech[tech[score_col] >= tech["q80"]][["ticker", "date"]]
+    print(f"Giriş olayı: {len(events)} (üst %20 momentum, {events['ticker'].nunique()} hisse)")
+
+    # OHLC + ATR hazırlığı (hisse başına bir kez)
+    data = {}
+    for n, tk in enumerate(sorted(events["ticker"].unique()), 1):
+        try:
+            df = yf.download(f"{tk}.IS", period="6y", interval="1d",
+                             auto_adjust=True, progress=False)
+            df = _flatten_columns(df)
+            if df is None or len(df) < 300:
+                continue
+            close, high, low = df["Close"], df["High"], df["Low"]
+            prev_c = close.shift(1)
+            tr = pd.concat([high - low, (high - prev_c).abs(), (low - prev_c).abs()], axis=1).max(axis=1)
+            atr = tr.rolling(14, min_periods=14).mean()
+            data[tk] = {
+                "dates": df.index.strftime("%Y-%m-%d").tolist(),
+                "close": close.to_numpy(float), "high": high.to_numpy(float),
+                "low": low.to_numpy(float), "atr": atr.to_numpy(float),
+                "ix": {d: i for i, d in enumerate(df.index.strftime("%Y-%m-%d"))},
+            }
+        except Exception:
+            continue
+        if n % 20 == 0:
+            print(f"  fiyat verisi {n} hisse...")
+
+    HORIZON_HOLD = {"kisa": 15, "orta": 60, "uzun": 180}
+    K_GRID = [1.5, 2.0, 2.5, 3.0, 3.5, 99.0]   # 99 = stopsuz
+    M_GRID = [2.5, 4.0, 6.0, 99.0]             # 99 = hedefsiz
+
+    for hz, H in HORIZON_HOLD.items():
+        results = []
+        for k in K_GRID:
+            for m in M_GRID:
+                rets, days_held, wins = [], [], 0
+                for tk, d in events.itertuples(index=False):
+                    dd = data.get(tk)
+                    if dd is None:
+                        continue
+                    i = dd["ix"].get(d)
+                    if i is None or i + 2 >= len(dd["close"]) or np.isnan(dd["atr"][i]):
+                        continue
+                    entry = dd["close"][i]
+                    if entry <= 0:
+                        continue
+                    stop   = entry - k * dd["atr"][i]
+                    target = entry + m * dd["atr"][i]
+                    end    = min(i + H, len(dd["close"]) - 1)
+                    lows, highs = dd["low"][i+1:end+1], dd["high"][i+1:end+1]
+                    hit_s = np.argmax(lows <= stop)   if (lows <= stop).any()   else 10**6
+                    hit_t = np.argmax(highs >= target) if (highs >= target).any() else 10**6
+                    if hit_s <= hit_t and hit_s < 10**6:      # stop önce (eşitlikte stop)
+                        ret, held = (stop / entry - 1) * 100, hit_s + 1
+                    elif hit_t < hit_s:                        # hedef önce
+                        ret, held = (target / entry - 1) * 100, hit_t + 1
+                    else:                                      # süre doldu
+                        ret, held = (dd["close"][end] / entry - 1) * 100, end - i
+                    rets.append(ret)
+                    days_held.append(held)
+                    wins += ret > 0
+                if len(rets) < 100:
+                    continue
+                results.append({
+                    "stop_k": k, "hedef_m": m, "n": len(rets),
+                    "ort_getiri": round(float(np.mean(rets)), 2),
+                    "medyan": round(float(np.median(rets)), 2),
+                    "kazanma_%": round(wins / len(rets) * 100, 1),
+                    "ort_gun": round(float(np.mean(days_held)), 1),
+                    # Günlük verimlilik: sermaye kilitli kaldığı süreye göre getiri
+                    "getiri_per_gun": round(float(np.mean(rets)) / max(float(np.mean(days_held)), 1), 3),
+                })
+        rdf = pd.DataFrame(results).sort_values("ort_getiri", ascending=False)
+        cur_k = {"kisa": 1.5, "orta": 2.5, "uzun": 3.5}[hz]
+        cur_m = {"kisa": 2.5, "orta": 4.0, "uzun": 6.0}[hz]
+        print(f"\n{'='*70}\n{hz.upper()} vade (max {H} işlem günü) — mevcut: stop {cur_k}×ATR / hedef {cur_m}×ATR\n{'='*70}")
+        print(rdf.head(8).to_string(index=False))
+        cur = rdf[(rdf['stop_k'] == cur_k) & (rdf['hedef_m'] == cur_m)]
+        if not cur.empty:
+            print(f"--- mevcut ayarın sırası: {rdf.index.get_loc(cur.index[0]) + 1}/{len(rdf)} "
+                  f"(ort %{cur['ort_getiri'].iloc[0]})")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "build-tech":
@@ -277,5 +374,7 @@ if __name__ == "__main__":
         build_sentiment()
     elif cmd == "analyze":
         analyze()
+    elif cmd == "analyze-stops":
+        analyze_stops()
     else:
         print(__doc__)

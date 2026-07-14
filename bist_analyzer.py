@@ -3085,8 +3085,15 @@ class PortfolioManager:
                     and r.week52_pos >= 0.45]
             keyf = lambda r: r.score + r.week52_pos * 20 + (5 if r.obv_trend == "yukari" else 0) - r.atr_pct * 2
 
-        stop_mult   = {"kisa": 1.5, "orta": 2.5, "uzun": 3.5}[horizon]
-        target_mult = {"kisa": 2.5, "orta": 4.0, "uzun": 6.0}[horizon]
+        # Katsayılar 2026-07 kalibrasyonuyla güncellendi (weight_calibration.py
+        # analyze-stops, 2730 giriş olayı): dar stoplar gürültüye takılıyordu
+        # (eski kısa 1.5×ATR tüm kombinasyonlar içinde SONUNCUydu), hedefte
+        # otomatik satış momentum kazananlarını erken kesiyordu. Geniş stop =
+        # felaket sigortası kalır; hedef artık bilgi seviyesidir (alarm önerir,
+        # otomatik çıkış yok). Ayı piyasası deneyimi henüz veri setinde yok —
+        # rejim kapısı + portföy freni bu açığı kapatan diğer katmanlar.
+        stop_mult   = {"kisa": 2.5, "orta": 3.5, "uzun": 3.5}[horizon]
+        target_mult = {"kisa": 3.5, "orta": 6.0, "uzun": 9.0}[horizon]
         picks = PortfolioManager._format_picks(pool, keyf, prof["max_pos"],
                                                prof["sector_cap"], stop_mult, target_mult)
         return picks, warning
@@ -3204,7 +3211,7 @@ class PortfolioManager:
         picks = PortfolioManager._format_picks(
             pool, lambda r: r.score + r.momentum_3m * 0.3,
             max_pos=prof["max_pos"], sector_cap=0,  # sektör limiti yok — zaten tek sektör
-            stop_mult=2.5, target_mult=4.0)
+            stop_mult=3.5, target_mult=6.0)  # kalibrasyon 2026-07: orta vade ayarları
         warn = ("Tek sektör portföyü: çeşitlendirme düşük, sektör haberlerine duyarlılık yüksek. "
                 "Toplam varlığın küçük bir bölümüyle sınırlamak sağlıklıdır.")
         return picks, warn
@@ -3232,7 +3239,7 @@ class PortfolioManager:
         picks = PortfolioManager._format_picks(
             pool, lambda r: r.score + r.momentum_1m * 0.5 + r.week52_pos * 15,
             max_pos=prof["max_pos"], sector_cap=max(prof["sector_cap"], 2),
-            stop_mult=2.0, target_mult=3.5)
+            stop_mult=2.5, target_mult=4.5)  # kalibrasyon 2026-07: trend döner, kısa-orta arası
         warn = f"Lider sektörler: {', '.join(leaders)}. Trend döndüğünde hızlı çıkış gerekir — stoplara uy."
         return picks, warn
 
@@ -9744,8 +9751,10 @@ def render_portfolio_manager_page(ui_lang):
                 dfp = _with_logo_col(dfp)
                 st.dataframe(dfp, use_container_width=True, hide_index=True,
                              column_config=_LOGO_COL_CFG)
-                st.caption("Stop = giriş − ATR×katsayı (vadeye göre 1.5-3.5×). "
-                           "Stop kesilirse çıkmak, 'gereksiz para kaybetmeme' kuralının ta kendisidir.")
+                st.caption("Stop = giriş − ATR×katsayı (vadeye göre 2.5-3.5×; 2026-07 kalibrasyonuyla "
+                           "genişletildi — dar stoplar gürültüye takılıyordu). Stop kesilirse çıkmak esastır. "
+                           "Hedef ise otomatik satış değil, 'kâr almayı düşün' seviyesidir — momentum sürüyorsa "
+                           "kazananı erken kesme.")
                 _m2 = _pm_meta(h_saved, p_saved)
                 pname = st.text_input("Portföy adı" if ui_lang == "TR" else "Portfolio name",
                                       value=f"{_m2['ad']} {datetime.now().strftime('%d.%m')}")
