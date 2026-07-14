@@ -2591,6 +2591,105 @@ ENAG_MOM_DEFAULTS = {
 }
 
 
+class _PMDB:
+    """Portföy Yöneticisi tabloları (pm_*, enag_monthly) için depolama katmanı.
+
+    TURSO_DATABASE_URL + TURSO_AUTH_TOKEN tanımlıysa Turso HTTP API kullanılır
+    (Streamlit Cloud'da /tmp silinse bile veri kalıcı olur). Tanımlı değilse
+    veya Turso'ya ulaşılamazsa lokal SQLite'a düşer — mevcut davranış korunur.
+    Saf HTTP (requests) — libsql paketi gerekmez, her platformda çalışır.
+    """
+    _cfg_checked = False
+    _url = None
+    _token = None
+
+    @staticmethod
+    def _cfg():
+        if not _PMDB._cfg_checked:
+            url = _get_secret("TURSO_DATABASE_URL")
+            tok = _get_secret("TURSO_AUTH_TOKEN")
+            if url and tok:
+                if url.startswith("libsql://"):
+                    url = "https://" + url[len("libsql://"):]
+                _PMDB._url = url.rstrip("/") + "/v2/pipeline"
+                _PMDB._token = tok
+            _PMDB._cfg_checked = True
+        return _PMDB._url, _PMDB._token
+
+    @staticmethod
+    def is_cloud() -> bool:
+        url, tok = _PMDB._cfg()
+        return bool(url and tok)
+
+    @staticmethod
+    def _arg(v):
+        if v is None:
+            return {"type": "null", "value": None}
+        if isinstance(v, bool):
+            return {"type": "integer", "value": str(int(v))}
+        if isinstance(v, (int, np.integer)):
+            return {"type": "integer", "value": str(int(v))}
+        if isinstance(v, (float, np.floating)):
+            return {"type": "float", "value": float(v)}
+        return {"type": "text", "value": str(v)}
+
+    @staticmethod
+    def _parse_rows(rr: dict) -> list:
+        cols = [c["name"] for c in rr.get("cols", [])]
+        rows = []
+        for raw in rr.get("rows", []):
+            d = {}
+            for c, cell in zip(cols, raw):
+                v, t = cell.get("value"), cell.get("type")
+                if v is not None and t == "integer":
+                    v = int(v)
+                elif v is not None and t == "float":
+                    v = float(v)
+                d[c] = v
+            rows.append(d)
+        return rows
+
+    @staticmethod
+    def execute_batch(stmts: list) -> list:
+        """[(sql, args), ...] — hepsi tek istekte/transaction'da.
+        Dönüş: her stmt için {"rows": [...], "lastrowid": int|None} listesi."""
+        url, tok = _PMDB._cfg()
+        if url:
+            try:
+                reqs = [{"type": "execute",
+                         "stmt": {"sql": s, "args": [_PMDB._arg(a) for a in args]}}
+                        for s, args in stmts]
+                reqs.append({"type": "close"})
+                r = requests.post(url, json={"requests": reqs},
+                                  headers={"Authorization": f"Bearer {tok}"}, timeout=20)
+                r.raise_for_status()
+                out = []
+                for res in r.json()["results"][:len(stmts)]:
+                    if res.get("type") == "error":
+                        raise RuntimeError(res.get("error", {}).get("message", "turso error"))
+                    rr = res["response"]["result"]
+                    lid = rr.get("last_insert_rowid")
+                    out.append({"rows": _PMDB._parse_rows(rr),
+                                "lastrowid": int(lid) if lid else None})
+                return out
+            except Exception as exc:
+                log.warning("Turso erişim hatası — lokal SQLite'a düşülüyor: %s", exc)
+        # Lokal SQLite yolu
+        out = []
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            for s, args in stmts:
+                cur = conn.execute(s, tuple(args))
+                out.append({"rows": [dict(r) for r in cur.fetchall()],
+                            "lastrowid": cur.lastrowid})
+            conn.commit()
+        return out
+
+    @staticmethod
+    def execute(sql: str, args: tuple = ()) -> dict:
+        return _PMDB.execute_batch([(sql, tuple(args))])[0]
+
+
 class InflationEngine:
     """ENAG bazlı reel getiri hesaplayıcı.
 
@@ -2599,38 +2698,38 @@ class InflationEngine:
     Eksik aylar için son 12 bilinen ayın ortalaması kullanılır (yaklaşık).
     """
 
+    _initialized = False
+
     @staticmethod
     def _init_table():
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS enag_monthly (
-                    ym TEXT PRIMARY KEY,   -- "2026-01"
-                    mom_pct REAL,
-                    kaynak TEXT DEFAULT 'resmi'
-                )
-            """)
-            for ym, (pct, src) in ENAG_MOM_DEFAULTS.items():
-                conn.execute("INSERT OR IGNORE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?,?)",
-                             (ym, pct, src))
-            conn.commit()
+        if InflationEngine._initialized:
+            return
+        stmts = [("""
+            CREATE TABLE IF NOT EXISTS enag_monthly (
+                ym TEXT PRIMARY KEY,
+                mom_pct REAL,
+                kaynak TEXT DEFAULT 'resmi'
+            )
+        """, ())]
+        stmts += [("INSERT OR IGNORE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?,?)",
+                   (ym, pct, src)) for ym, (pct, src) in ENAG_MOM_DEFAULTS.items()]
+        _PMDB.execute_batch(stmts)
+        InflationEngine._initialized = True
 
     @staticmethod
     def rates() -> dict:
         InflationEngine._init_table()
         try:
-            with sqlite3.connect(DB_PATH) as conn:
-                rows = conn.execute("SELECT ym, mom_pct, kaynak FROM enag_monthly ORDER BY ym").fetchall()
-            return {r[0]: (r[1], r[2]) for r in rows}
+            rows = _PMDB.execute("SELECT ym, mom_pct, kaynak FROM enag_monthly ORDER BY ym")["rows"]
+            return {r["ym"]: (r["mom_pct"], r["kaynak"]) for r in rows}
         except Exception:
             return {k: v for k, v in ENAG_MOM_DEFAULTS.items()}
 
     @staticmethod
     def set_rate(ym: str, pct: float):
         InflationEngine._init_table()
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("INSERT OR REPLACE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?, 'resmi')",
-                         (ym, pct))
-            conn.commit()
+        _PMDB.execute("INSERT OR REPLACE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?, 'resmi')",
+                      (ym, pct))
 
     @staticmethod
     def _monthly_rate(ym: str, table: dict) -> float:
@@ -2776,31 +2875,36 @@ class PortfolioManager:
         "Uzun (6-12 ay)":    "uzun",
     }
 
+    _initialized = False
+
     @staticmethod
     def _init_tables():
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("""
+        if PortfolioManager._initialized:
+            return
+        _PMDB.execute_batch([
+            ("""
                 CREATE TABLE IF NOT EXISTS pm_portfolios (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT, horizon TEXT, profile TEXT,
                     created_at TEXT, status TEXT DEFAULT 'aktif',
                     regime_at_start TEXT
                 )
-            """)
-            conn.execute("""
+            """, ()),
+            ("""
                 CREATE TABLE IF NOT EXISTS pm_positions (
                     pid INTEGER, ticker TEXT, entry_price REAL, weight REAL,
                     stop_price REAL, target_price REAL,
                     PRIMARY KEY (pid, ticker)
                 )
-            """)
-            conn.execute("""
+            """, ()),
+            ("""
                 CREATE TABLE IF NOT EXISTS pm_nav (
                     pid INTEGER, date TEXT, nav REAL, xu100_close REAL,
                     PRIMARY KEY (pid, date)
                 )
-            """)
-            conn.commit()
+            """, ()),
+        ])
+        PortfolioManager._initialized = True
 
     # PORTFÖY ÖNERİSİ
 
@@ -2867,22 +2971,20 @@ class PortfolioManager:
     def save_portfolio(name: str, horizon: str, profile: str, picks: list, regime: str) -> int:
         PortfolioManager._init_tables()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        with sqlite3.connect(DB_PATH) as conn:
-            cur = conn.execute("""
-                INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start)
-                VALUES (?,?,?,?,?)
-            """, (name, horizon, profile, now, regime))
-            pid = cur.lastrowid
-            for p in picks:
-                conn.execute("""
-                    INSERT OR REPLACE INTO pm_positions (pid, ticker, entry_price, weight, stop_price, target_price)
-                    VALUES (?,?,?,?,?,?)
-                """, (pid, p["ticker"], p["fiyat"], p["agirlik"], p["stop"], p["hedef"]))
-            # Gün-0 NAV kaydı
-            conn.execute("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
-                         (pid, datetime.now().strftime("%Y-%m-%d"), 100.0,
-                          PortfolioManager._xu100_close()))
-            conn.commit()
+        res = _PMDB.execute("""
+            INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start)
+            VALUES (?,?,?,?,?)
+        """, (name, horizon, profile, now, regime))
+        pid = res["lastrowid"]
+        stmts = [("""
+            INSERT OR REPLACE INTO pm_positions (pid, ticker, entry_price, weight, stop_price, target_price)
+            VALUES (?,?,?,?,?,?)
+        """, (pid, p["ticker"], p["fiyat"], p["agirlik"], p["stop"], p["hedef"])) for p in picks]
+        # Gün-0 NAV kaydı
+        stmts.append(("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
+                      (pid, datetime.now().strftime("%Y-%m-%d"), 100.0,
+                       PortfolioManager._xu100_close())))
+        _PMDB.execute_batch(stmts)
         return pid
 
     @staticmethod
@@ -2899,18 +3001,17 @@ class PortfolioManager:
     @staticmethod
     def active_portfolios() -> list:
         PortfolioManager._init_tables()
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM pm_portfolios WHERE status='aktif' ORDER BY created_at DESC").fetchall()
-        return [dict(r) for r in rows]
+        return _PMDB.execute(
+            "SELECT * FROM pm_portfolios WHERE status='aktif' ORDER BY created_at DESC")["rows"]
+
+    @staticmethod
+    def all_portfolios() -> list:
+        PortfolioManager._init_tables()
+        return _PMDB.execute("SELECT * FROM pm_portfolios ORDER BY created_at DESC")["rows"]
 
     @staticmethod
     def positions(pid: int) -> list:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM pm_positions WHERE pid=?", (pid,)).fetchall()
-        return [dict(r) for r in rows]
+        return _PMDB.execute("SELECT * FROM pm_positions WHERE pid=?", (pid,))["rows"]
 
     @staticmethod
     def update_navs():
@@ -2942,28 +3043,28 @@ class PortfolioManager:
                 except Exception:
                     continue
             xu = PortfolioManager._xu100_close()
-            with sqlite3.connect(DB_PATH) as conn:
-                for p in ports:
-                    pos = pos_map[p["id"]]
-                    nav, w_used = 0.0, 0.0
-                    for x in pos:
-                        if x["ticker"] in price and x["entry_price"] > 0:
-                            nav += x["weight"] * (price[x["ticker"]] / x["entry_price"])
-                            w_used += x["weight"]
-                    if w_used > 0:
-                        nav = nav / w_used * 100.0
-                        conn.execute("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
-                                     (p["id"], today, round(nav, 2), xu))
-                conn.commit()
+            stmts = []
+            for p in ports:
+                pos = pos_map[p["id"]]
+                nav, w_used = 0.0, 0.0
+                for x in pos:
+                    if x["ticker"] in price and x["entry_price"] > 0:
+                        nav += x["weight"] * (price[x["ticker"]] / x["entry_price"])
+                        w_used += x["weight"]
+                if w_used > 0:
+                    nav = nav / w_used * 100.0
+                    stmts.append(("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
+                                  (p["id"], today, round(nav, 2), xu)))
+            if stmts:
+                _PMDB.execute_batch(stmts)
         except Exception as exc:
             log.warning("PortfolioManager.update_navs hatası: %s", exc)
 
     @staticmethod
     def nav_history(pid: int) -> pd.DataFrame:
-        with sqlite3.connect(DB_PATH) as conn:
-            df = pd.read_sql_query(
-                "SELECT date, nav, xu100_close FROM pm_nav WHERE pid=? ORDER BY date", conn, params=(pid,))
-        return df
+        rows = _PMDB.execute(
+            "SELECT date, nav, xu100_close FROM pm_nav WHERE pid=? ORDER BY date", (pid,))["rows"]
+        return pd.DataFrame(rows, columns=["date", "nav", "xu100_close"])
 
     @staticmethod
     def performance(p: dict) -> dict:
@@ -2986,9 +3087,7 @@ class PortfolioManager:
 
     @staticmethod
     def archive(pid: int):
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("UPDATE pm_portfolios SET status='arsiv' WHERE id=?", (pid,))
-            conn.commit()
+        _PMDB.execute("UPDATE pm_portfolios SET status='arsiv' WHERE id=?", (pid,))
 
     # AKTİF REBALANS
 
@@ -9031,6 +9130,17 @@ def render_portfolio_manager_page(ui_lang):
         unsafe_allow_html=True,
     )
 
+    st.caption(
+        ("🟢 Depolama: **Turso bulut** — portföyler kalıcı, tüm cihazlardan aynı veri."
+         if _PMDB.is_cloud() else
+         "🟡 Depolama: **lokal SQLite** — Streamlit Cloud'da veriler uygulama uykusunda silinebilir. "
+         "Kalıcılık için Turso bağlayın (TURSO_DATABASE_URL + TURSO_AUTH_TOKEN secrets).")
+        if ui_lang == "TR" else
+        ("🟢 Storage: **Turso cloud** — portfolios persist across devices."
+         if _PMDB.is_cloud() else
+         "🟡 Storage: **local SQLite** — on Streamlit Cloud data may reset on sleep.")
+    )
+
     tab_new, tab_perf, tab_sector, tab_report, tab_enag = st.tabs([
         "Yeni Portföy Öner" if ui_lang == "TR" else "Propose New",
         "Portföylerim & Performans" if ui_lang == "TR" else "My Portfolios & Performance",
@@ -9230,10 +9340,7 @@ def render_portfolio_manager_page(ui_lang):
             lines.append("")
 
             # Portföyler (aktif + arşiv, o ay NAV'ı olanlar)
-            PortfolioManager._init_tables()
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.row_factory = sqlite3.Row
-                ports_all = [dict(r) for r in conn.execute("SELECT * FROM pm_portfolios").fetchall()]
+            ports_all = PortfolioManager.all_portfolios()
 
             lines.append("## Portföy Performansları")
             lines.append("")
