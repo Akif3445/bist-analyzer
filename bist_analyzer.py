@@ -1635,6 +1635,39 @@ class ValuationResult:
     prim_score: float             = 50.0
     deger_score: float            = 50.0
 
+@st.cache_data(ttl=14400, show_spinner=False)
+def fetch_tv_analyst_targets() -> dict:
+    """TradingView screener'dan tüm BIST analist hedef fiyatları — TEK sorgu, 4 saat cache.
+
+    Dönüş: {ticker: {"target", "count", "high", "low"}}
+    En az 3 analist şartı: tek analistli hedefler gürültülü/güvenilmez.
+    Paket borsapy ile birlikte geliyor (tradingview-screener).
+    """
+    try:
+        from tradingview_screener import Query
+        _n, df = (Query().set_markets("turkey")
+                  .select("name", "price_target_average", "price_target_high",
+                          "price_target_low", "recommendation_total")
+                  .limit(700).get_scanner_data())
+        out = {}
+        for _, r in df.iterrows():
+            t   = str(r.get("name") or "")
+            tgt = r.get("price_target_average")
+            cnt = r.get("recommendation_total")
+            if t and pd.notna(tgt) and pd.notna(cnt) and float(cnt) >= 3:
+                out[t] = {
+                    "target": float(tgt),
+                    "count":  int(cnt),
+                    "high":   float(r["price_target_high"]) if pd.notna(r.get("price_target_high")) else None,
+                    "low":    float(r["price_target_low"])  if pd.notna(r.get("price_target_low"))  else None,
+                }
+        log.info("TradingView hedef fiyat: %d hisse için konsensüs alındı", len(out))
+        return out
+    except Exception as exc:
+        log.warning("TradingView hedef fiyat çekilemedi (prim bileşeni ağırlık dağıtır): %s", exc)
+        return {}
+
+
 class ValuationEngine:
     @staticmethod
     def compute(stock: StockData, analyst_target: Optional[float] = None) -> ValuationResult:
@@ -1818,6 +1851,13 @@ def compute_bist_score(
 
     # Valuation & Premium
     _auto_target = analyst_target
+    # TradingView analist konsensüsü — elle hedef girilmediyse otomatik kaynak
+    # (tek toplu sorgu 4 saat cache'lenir; min 3 analist şartı fetch içinde)
+    if _auto_target is None and market == "BIST":
+        _tv = fetch_tv_analyst_targets().get(ticker.upper().replace(".IS", ""))
+        if _tv:
+            _auto_target = _tv["target"]
+            result._tv_target = _tv  # UI'da "N analist" göstermek için
     if FAZ2_AVAILABLE and _auto_target is None:
         _cache    = DataCache()
         fetcher   = TargetPriceFetcher(_cache)
