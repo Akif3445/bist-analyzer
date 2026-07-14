@@ -12,6 +12,7 @@ beautifulsoup4>=4.12.0
 lxml>=4.9.0
 feedparser>=6.0.0
 borsapy>=0.10.0   # KAP bildirimleri (news_engine._src_kap) — import'u lazy, RAM'e dokunmuyor
+python-dotenv>=1.0.0   # lokal .env okuma (ANTHROPIC_API_KEY, TURSO_*) — yoksa sessizce atlanır
 
 # Note: transformers + torch are NOT included here.
 # Streamlit Cloud free tier has ~1GB RAM — torch alone is 2GB+.
