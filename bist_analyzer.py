@@ -9626,8 +9626,8 @@ def render_kokpit_page(ui_lang):
     _rejim_renk = {"Boğa": t["up"], "Nötr": t["warn"], "Ayı": t["down"]}.get(regime["regime"], t["muted"])
     st.markdown(
         f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
-        f"border-bottom:3px double {t['ink']};padding-bottom:10px;margin-bottom:4px'>"
-        f"<span style=\"font-family:'Playfair Display',Georgia,serif;font-size:34px;"
+        f"border-bottom:{t['rule']};padding-bottom:10px;margin-bottom:4px'>"
+        f"<span style=\"font-family:{t['font_head']};font-size:34px;"
         f"font-weight:800;color:{t['ink']}\">Piyasa Defteri</span>"
         f"<span style='font-family:\"Source Serif 4\",serif;font-style:italic;"
         f"color:{t['muted']};font-size:13px'>{tarih}</span>"
@@ -10295,22 +10295,30 @@ def display_sidebar_alerts(ui_lang):
 # "gunduz": fildişi kâğıt (varsayılan) · "gece": gece matbaası (sıcak kömür)
 THEMES = {
     "gunduz": {
-        "ad": "🌞 Gündüz Baskısı",
+        "ad": "🌞 Gazete (Aydınlık)",
         "bg": "#f7f3ea", "bg2": "#fdfbf5", "panel": "#efe9db",
         "line": "#d8d0c0", "line2": "#e4dccb",
         "ink": "#1a1712", "muted": "#6b6357",
         "up": "#1d6f4e", "down": "#9e2b25", "warn": "#a2701d",
         "accent": "#9e2b25", "navy": "#27509e", "gold": "#8a6d1d",
         "plotly": "plotly_white",
+        "font_head": "'Playfair Display', Georgia, serif",
+        "font_body": "'Source Serif 4', Georgia, serif",
+        "rule": "3px double #1a1712",   # manşet altı çift çizgi
     },
+    # Obsidyen — saf grafit, tek nane-yeşili vurgu, İsviçre minimalizmi.
+    # Gazete'nin gece kopyası DEĞİL, kendi kimliği olan ayrı bir tema.
     "gece": {
-        "ad": "🌙 Gece Baskısı",
-        "bg": "#16130d", "bg2": "#1c1810", "panel": "#211d15",
-        "line": "#3a3426", "line2": "#2c271c",
-        "ink": "#e8e0cd", "muted": "#a39a85",
-        "up": "#4caf82", "down": "#e06055", "warn": "#d9a94b",
-        "accent": "#d4574e", "navy": "#7d9fd4", "gold": "#d9b45b",
+        "ad": "🖤 Obsidyen (Koyu)",
+        "bg": "#0e0f12", "bg2": "#15171c", "panel": "#15171c",
+        "line": "#23262e", "line2": "#1c1f25",
+        "ink": "#f2f3f5", "muted": "#8b93a1",
+        "up": "#7ce0c3", "down": "#f2788d", "warn": "#e3c77b",
+        "accent": "#7ce0c3", "navy": "#343b49", "gold": "#e3c77b",
         "plotly": "plotly_dark",
+        "font_head": "Inter, sans-serif",
+        "font_body": "Inter, sans-serif",
+        "rule": "1px solid #23262e",    # minimal ince çizgi
     },
 }
 
@@ -10336,19 +10344,19 @@ def _inject_gazete_css():
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600;700&display=swap');
 
     html, body, .stApp, [data-testid="stAppViewContainer"] {{
-        font-family: 'Source Serif 4', Georgia, serif;
+        font-family: {t['font_body']};
         background: {t['bg']}; color: {t['ink']};
     }}
     [data-testid="stHeader"] {{ background: {t['bg']}; }}
     /* Manşet: çift çizgili gazete başlığı */
     h1 {{
-        font-family: 'Playfair Display', Georgia, serif !important;
-        border-bottom: 3px double {t['ink']};
+        font-family: {t['font_head']} !important;
+        border-bottom: {t['rule']};
         padding-bottom: .35rem;
         letter-spacing: -0.01em;
         color: {t['ink']} !important;
     }}
-    h2, h3, h4 {{ font-family: 'Playfair Display', Georgia, serif !important; color: {t['ink']} !important; }}
+    h2, h3, h4 {{ font-family: {t['font_head']} !important; color: {t['ink']} !important; }}
     p, li, span, label, .stMarkdown {{ color: {t['ink']}; }}
 
     /* Metrikler: tabular rakamlar, gazete etiketi */
