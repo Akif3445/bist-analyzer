@@ -625,13 +625,19 @@ class AnalysisHistoryDB:
                         pending_tickers.append(r["ticker"])
                         
             if not pending_tickers: return
-            
+
+            # BUG FIX: BIST hisseleri .IS uzantısı olmadan indirilemiyordu —
+            # sinyaller sessizce "Bekliyor"da kalıyordu. US hisseleri ham kalır.
+            sym_map = {t: _yf_symbol(t, "US" if t in US_POPULAR_TICKERS else "BIST")
+                       for t in pending_tickers}
+            symbols = list(sym_map.values())
             try:
-                df = yf.download(pending_tickers, period="5d", group_by="ticker", progress=False)
+                df = yf.download(symbols, period="5d", group_by="ticker", progress=False)
                 for r in valid_rows:
                     t = r["ticker"]
+                    sym = sym_map.get(t, t)
                     try:
-                        d = df[t] if len(pending_tickers) > 1 else df
+                        d = df[sym] if len(symbols) > 1 else df
                     except (KeyError, TypeError):
                         continue
                     d = d.dropna()
@@ -2887,7 +2893,8 @@ class PortfolioManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT, horizon TEXT, profile TEXT,
                     created_at TEXT, status TEXT DEFAULT 'aktif',
-                    regime_at_start TEXT
+                    regime_at_start TEXT,
+                    kind TEXT DEFAULT 'kullanici'
                 )
             """, ()),
             ("""
@@ -2904,6 +2911,11 @@ class PortfolioManager:
                 )
             """, ()),
         ])
+        # Eski tabloya kind kolonu ekle (varsa hata verir, yut)
+        try:
+            _PMDB.execute("ALTER TABLE pm_portfolios ADD COLUMN kind TEXT DEFAULT 'kullanici'")
+        except Exception:
+            pass
         PortfolioManager._initialized = True
 
     # PORTFÖY ÖNERİSİ
@@ -2968,13 +2980,14 @@ class PortfolioManager:
     # KAYIT & NAV TAKİBİ
 
     @staticmethod
-    def save_portfolio(name: str, horizon: str, profile: str, picks: list, regime: str) -> int:
+    def save_portfolio(name: str, horizon: str, profile: str, picks: list, regime: str,
+                       kind: str = "kullanici") -> int:
         PortfolioManager._init_tables()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         res = _PMDB.execute("""
-            INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start)
-            VALUES (?,?,?,?,?)
-        """, (name, horizon, profile, now, regime))
+            INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start, kind)
+            VALUES (?,?,?,?,?,?)
+        """, (name, horizon, profile, now, regime, kind))
         pid = res["lastrowid"]
         stmts = [("""
             INSERT OR REPLACE INTO pm_positions (pid, ticker, entry_price, weight, stop_price, target_price)
@@ -3088,6 +3101,81 @@ class PortfolioManager:
     @staticmethod
     def archive(pid: int):
         _PMDB.execute("UPDATE pm_portfolios SET status='arsiv' WHERE id=?", (pid,))
+
+    # GÖLGE PORTFÖYLER — "Ne olurdu?" panosu
+    # Sistem her hafta 9 kombinasyonun (3 vade × 3 profil) önerisini otomatik
+    # kaydeder; kullanıcı hiç kaydetmese bile "sistemin önerileri gerçekte ne
+    # kazandırdı?" sorusu tarafsız veriyle cevaplanır.
+
+    SHADOW_LIMITS = {"kisa": 21, "orta": 90, "uzun": 365}  # gün — vade dolunca arşiv
+
+    @staticmethod
+    def ensure_shadow_batch(regime: dict, scan_results: list) -> int:
+        """Bu haftanın gölge seti yoksa oluşturur. Dönüş: yeni kayıt sayısı."""
+        PortfolioManager._init_tables()
+        week = datetime.now().strftime("%G-W%V")
+        rows = _PMDB.execute(
+            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND name LIKE ?",
+            (f"%{week}%",))["rows"]
+        if rows and rows[0].get("c", 0) > 0:
+            return 0
+        created = 0
+        for horizon in ("kisa", "orta", "uzun"):
+            for profile in ("Temkinli", "Dengeli", "Agresif"):
+                try:
+                    picks, _warn = PortfolioManager.propose(scan_results, horizon, profile, regime)
+                    if not picks:
+                        continue  # rejim engeli / kriter dışı — o kombinasyon bu hafta boş
+                    PortfolioManager.save_portfolio(
+                        f"Gölge {horizon}/{profile} {week}",
+                        horizon, profile, picks, regime.get("regime", "?"), kind="golge")
+                    created += 1
+                except Exception as exc:
+                    log.warning("Gölge portföy oluşturma hatası (%s/%s): %s", horizon, profile, exc)
+        return created
+
+    @staticmethod
+    def auto_archive_shadows() -> int:
+        """Vadesi dolan gölge portföyleri arşivler — aktif liste şişmesin."""
+        archived = 0
+        now = datetime.now()
+        for p in PortfolioManager.active_portfolios():
+            if p.get("kind") != "golge":
+                continue
+            try:
+                age = (now - datetime.strptime(p["created_at"][:10], "%Y-%m-%d")).days
+                if age > PortfolioManager.SHADOW_LIMITS.get(p["horizon"], 90):
+                    PortfolioManager.archive(p["id"])
+                    archived += 1
+            except Exception:
+                continue
+        return archived
+
+    @staticmethod
+    def shadow_scoreboard() -> pd.DataFrame:
+        """Kombinasyon karnesi: tüm gölge portföylerin (aktif+arşiv) ortalama
+        nominal/reel/XU100-göreli getirisi, vade×profil bazında."""
+        rows = []
+        for p in PortfolioManager.all_portfolios():
+            if p.get("kind") != "golge":
+                continue
+            perf = PortfolioManager.performance(p)
+            if perf["gun"] < 1:
+                continue
+            rows.append({"Vade": p["horizon"], "Profil": p["profile"],
+                         "nominal": perf["nominal"], "reel": perf["reel"],
+                         "xu": perf["xu100_rel"], "gun": perf["gun"]})
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        agg = (df.groupby(["Vade", "Profil"])
+                 .agg(Portfoy=("nominal", "size"),
+                      Ort_Nominal=("nominal", "mean"),
+                      Ort_Reel=("reel", "mean"),
+                      Ort_XU100_Rel=("xu", "mean"),
+                      Ort_Gun=("gun", "mean"))
+                 .round(2).reset_index())
+        return agg.sort_values("Ort_Reel", ascending=False)
 
     # AKTİF REBALANS
 
@@ -9130,6 +9218,26 @@ def render_portfolio_manager_page(ui_lang):
         unsafe_allow_html=True,
     )
 
+    # HAFTALIK GÖLGE PORTFÖY SETİ — sistem kendi önerilerini otomatik kaydeder
+    _week = datetime.now().strftime("%G-W%V")
+    if st.session_state.get("pm_shadow_week") != _week:
+        try:
+            PortfolioManager._init_tables()
+            _cnt = _PMDB.execute(
+                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND name LIKE ?",
+                (f"%{_week}%",))["rows"]
+            if not _cnt or _cnt[0].get("c", 0) == 0:
+                with st.spinner("Haftalık gölge portföyler oluşturuluyor (tarama gerekir, ~1-2 dk)..."
+                                if ui_lang == "TR" else "Creating weekly shadow portfolios..."):
+                    _scan = PortfolioScanner.scan_all()
+                    _n = PortfolioManager.ensure_shadow_batch(regime, _scan)
+                if _n:
+                    st.toast(f"👻 {_n} gölge portföy kaydedildi ({_week})")
+            PortfolioManager.auto_archive_shadows()
+        except Exception as exc:
+            log.warning("Gölge portföy haftalık kontrol hatası: %s", exc)
+        st.session_state["pm_shadow_week"] = _week
+
     st.caption(
         ("🟢 Depolama: **Turso bulut** — portföyler kalıcı, tüm cihazlardan aynı veri."
          if _PMDB.is_cloud() else
@@ -9197,9 +9305,12 @@ def render_portfolio_manager_page(ui_lang):
 
     # 3) PERFORMANS DEFTERİ
     with tab_perf:
-        ports = PortfolioManager.active_portfolios()
+        _all_active = PortfolioManager.active_portfolios()
+        ports    = [p for p in _all_active if p.get("kind") != "golge"]
+        shadows  = [p for p in _all_active if p.get("kind") == "golge"]
         if not ports:
-            st.info("Henüz kayıtlı portföy yok. 'Yeni Portföy Öner' sekmesinden oluşturun.")
+            st.info("Henüz kayıtlı portföy yok. 'Yeni Portföy Öner' sekmesinden oluşturun. "
+                    "(Sistemin otomatik kayıtları aşağıdaki Gölge Portföyler bölümünde.)")
         for p in ports:
             perf = PortfolioManager.performance(p)
             with st.expander(f"📁 {p['name']}  ({p['horizon']} / {p['profile']} / "
@@ -9241,6 +9352,47 @@ def render_portfolio_manager_page(ui_lang):
                                  use_container_width=True):
                         PortfolioManager.archive(p["id"])
                         st.rerun()
+
+        # GÖLGE PORTFÖYLER — sistemin otomatik "ne olurdu?" kayıtları
+        st.markdown("---")
+        st.markdown("### 👻 " + ("Gölge Portföyler — sistemin otomatik kayıtları"
+                                 if ui_lang == "TR" else "Shadow Portfolios — auto-tracked"))
+        st.caption(
+            "Sistem her hafta 9 kombinasyonun (3 vade × 3 profil) önerisini kendiliğinden "
+            "kaydeder ve izler — sen hiçbir şey yapmasan bile. Amaç: 'sistemin önerileri "
+            "gerçekte ne kazandırdı?' sorusuna tarafsız, ölçülmüş cevap."
+            if ui_lang == "TR" else
+            "Every week the system auto-saves its own 9 proposals (3 horizons × 3 profiles) "
+            "and tracks them — unbiased proof of what the recommendations actually earned."
+        )
+        if not shadows:
+            st.info("İlk gölge seti bu haftanın taramasıyla oluşacak." if ui_lang == "TR"
+                    else "First shadow batch will be created with this week's scan.")
+        else:
+            srows = []
+            for p in shadows:
+                perf = PortfolioManager.performance(p)
+                srows.append({
+                    "Portföy": p["name"],
+                    "Gün": perf["gun"],
+                    "Nominal %": perf["nominal"],
+                    "ENAG-Reel %": perf["reel"],
+                    "XU100'e Göre %": perf["xu100_rel"],
+                })
+            sdf_shadow = pd.DataFrame(srows).sort_values("ENAG-Reel %", ascending=False)
+            st.dataframe(sdf_shadow, use_container_width=True, hide_index=True)
+
+        score_df = PortfolioManager.shadow_scoreboard()
+        if not score_df.empty:
+            st.markdown("#### 🏆 " + ("Kombinasyon Karnesi (tüm gölge geçmişi)"
+                                      if ui_lang == "TR" else "Combination Scoreboard"))
+            score_df = score_df.rename(columns={
+                "Portfoy": "Portföy Sayısı", "Ort_Nominal": "Ort. Nominal %",
+                "Ort_Reel": "Ort. ENAG-Reel %", "Ort_XU100_Rel": "Ort. XU100-Göreli %",
+                "Ort_Gun": "Ort. Gün"})
+            st.dataframe(score_df, use_container_width=True, hide_index=True)
+            st.caption("Veri biriktikçe hangi vade×profil kombinasyonunun gerçekten "
+                       "kazandırdığı burada netleşecek — reel getiriye göre sıralı.")
 
     # 4) SEKTÖR ROTASYONU
     with tab_sector:
