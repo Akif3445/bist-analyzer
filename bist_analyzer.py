@@ -1723,7 +1723,7 @@ class BISTScore:
     ticker: str
     total_score: float  = 0.0
     signal: str         = "NOTR"
-    signal_color: str   = "#888888"
+    signal_color: str   = "#6b6357"
 
     teknik_score: float    = 0.0
     sentiment_score: float = 0.0
@@ -1919,11 +1919,11 @@ def _score_to_signal(score: float) -> tuple:
     Skor → Sinyal eşikleri
     Dağılım genelde 30-80 arasında → eşikler buna göre ayarlandı.
     """
-    if   score >= 72: return "GUCLU AL",  "#22c55e"   # Güçlü Al  ≥ 72
-    elif score >= 57: return "AL",         "#86efac"   # Al        57–71
-    elif score >= 43: return "NOTR",       "#9ca3af"   # Nötr      43–56
-    elif score >= 30: return "SAT",        "#f97316"   # Sat       30–42
-    else:             return "GUCLU SAT",  "#ef4444"   # Güçlü Sat < 30
+    if   score >= 72: return "GUCLU AL",  "#1d6f4e"   # Güçlü Al  ≥ 72
+    elif score >= 57: return "AL",         "#3e8e6c"   # Al        57–71
+    elif score >= 43: return "NOTR",       "#6b6357"   # Nötr      43–56
+    elif score >= 30: return "SAT",        "#b45309"   # Sat       30–42
+    else:             return "GUCLU SAT",  "#9e2b25"   # Güçlü Sat < 30
 
 
 # 6. RISK ENGINE
@@ -2832,7 +2832,7 @@ def compute_market_regime() -> dict:
 
     Amaç 'gereksiz para kaybetmemek': Ayı rejiminde kısa vadeli alımlar frenlenir.
     """
-    out = {"score": 0, "regime": "Belirsiz", "detay": [], "color": "#9ca3af"}
+    out = {"score": 0, "regime": "Belirsiz", "detay": [], "color": "#6b6357"}
     pts = 0
     try:
         xu = yf.download("XU100.IS", period="1y", interval="1d",
@@ -2894,9 +2894,9 @@ def compute_market_regime() -> dict:
         pass
 
     out["score"] = pts
-    if pts >= 5:   out["regime"], out["color"] = "Boğa",  "#22c55e"
-    elif pts >= 3: out["regime"], out["color"] = "Nötr",  "#eab308"
-    else:          out["regime"], out["color"] = "Ayı",   "#ef4444"
+    if pts >= 5:   out["regime"], out["color"] = "Boğa",  "#1d6f4e"
+    elif pts >= 3: out["regime"], out["color"] = "Nötr",  "#a2701d"
+    else:          out["regime"], out["color"] = "Ayı",   "#9e2b25"
     return out
 
 
@@ -3793,32 +3793,32 @@ class TimeMachineEngine:
         "aggressive": {
             "label": "🚀 Agresif",
             "desc": "Yüksek momentum, güçlü trend, aktif piyasa — yüksek risk/ödül",
-            "color": "#f97316",
+            "color": "#b45309",
         },
         "defensive": {
             "label": "🛡️ Defansif",
             "desc": "Düşük volatilite, stabil trend, SMA200 üstü — düşük risk",
-            "color": "#3b82f6",
+            "color": "#27509e",
         },
         "momentum": {
             "label": "⚡ Momentum",
             "desc": "Son 1-3 ay en çok yükselenler, hacim artışı, RSI 50-70",
-            "color": "#a855f7",
+            "color": "#6d3f8e",
         },
         "value": {
             "label": "💎 Değer (Value)",
             "desc": "Düşük RSI, 52 haftalık dibin yakınında, SMA200 üstü — dipten dönüş",
-            "color": "#14b8a6",
+            "color": "#0e7a6e",
         },
         "stable": {
             "label": "🏦 Stabil/Temettü",
             "desc": "En düşük ATR, en stabil fiyat, uzun vadeli yukarı trend",
-            "color": "#eab308",
+            "color": "#a2701d",
         },
         "custom": {
             "label": "🎯 Özel Portföy",
             "desc": "Kullanıcının kendi seçtiği hisseler ile test",
-            "color": "#ec4899",
+            "color": "#a43d63",
         },
     }
 
@@ -5262,35 +5262,35 @@ class BacktestEngine:
 # 8. STREAMLIT DASHBOARD (Dark Mode)
 
 def create_gauge_chart(score: float, title: str = "BIST Buy Score") -> go.Figure:
-    if score >= 75:   bar_color = "#22c55e"
-    elif score >= 55: bar_color = "#86efac"
-    elif score >= 40: bar_color = "#9ca3af"
-    elif score >= 20: bar_color = "#f97316"
-    else:             bar_color = "#ef4444"
+    if score >= 75:   bar_color = "#1d6f4e"
+    elif score >= 55: bar_color = "#3e8e6c"
+    elif score >= 40: bar_color = "#6b6357"
+    elif score >= 20: bar_color = "#b45309"
+    else:             bar_color = "#9e2b25"
 
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=score,
-        title={"text": title, "font": {"size": 16, "color": "#e2e8f0"}},
-        number={"font": {"size": 36, "color": "#e2e8f0"}},
+        title={"text": title, "font": {"size": 16, "color": "#1a1712"}},
+        number={"font": {"size": 36, "color": "#1a1712"}},
         gauge={
-            "axis": {"range": [0, 100], "tickcolor": "#475569",
-                     "tickfont": {"color": "#94a3b8"}},
+            "axis": {"range": [0, 100], "tickcolor": "#b8ae9a",
+                     "tickfont": {"color": "#6b6357"}},
             "bar": {"color": bar_color},
-            "bgcolor": "#1e293b",
+            "bgcolor": "#efe9db",
             "steps": [
-                {"range": [0, 20],   "color": "#7f1d1d"},
-                {"range": [20, 40],  "color": "#7c2d12"},
-                {"range": [40, 55],  "color": "#1e293b"},
-                {"range": [55, 75],  "color": "#14532d"},
-                {"range": [75, 100], "color": "#052e16"},
+                {"range": [0, 20],   "color": "#e7c9c5"},
+                {"range": [20, 40],  "color": "#ecd9c4"},
+                {"range": [40, 55],  "color": "#efe9db"},
+                {"range": [55, 75],  "color": "#cfe0d4"},
+                {"range": [75, 100], "color": "#b9d4c2"},
             ],
-            "threshold": {"line": {"color": "#f8fafc", "width": 3},
+            "threshold": {"line": {"color": "#1a1712", "width": 3},
                           "thickness": 0.75, "value": score},
         },
     ))
     fig.update_layout(
-        paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+        paper_bgcolor="#f7f3ea", plot_bgcolor="#f7f3ea",
         height=280, margin=dict(l=30, r=30, t=40, b=20),
     )
     return fig
@@ -5304,19 +5304,19 @@ def create_candlestick_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["Open"], high=df["High"],
         low=df["Low"], close=df["Close"], name=ticker,
-        increasing_line_color="#22c55e", decreasing_line_color="#ef4444",
+        increasing_line_color="#1d6f4e", decreasing_line_color="#9e2b25",
     ), row=1, col=1)
     
     sma50 = df["Close"].rolling(50).mean()
     fig.add_trace(go.Scatter(x=df.index, y=sma50, name="SMA 50",
-                             line=dict(color="#f59e0b", width=1.5)), row=1, col=1)
+                             line=dict(color="#a2701d", width=1.5)), row=1, col=1)
     if len(df) >= 200:
         sma200 = df["Close"].rolling(200).mean()
         fig.add_trace(go.Scatter(x=df.index, y=sma200, name="SMA 200",
-                                 line=dict(color="#60a5fa", width=1.5)), row=1, col=1)
+                                 line=dict(color="#27509e", width=1.5)), row=1, col=1)
                                  
     if "Volume" in df.columns:
-        colors = ["#22c55e" if row["Close"] >= row["Open"] else "#ef4444" 
+        colors = ["#1d6f4e" if row["Close"] >= row["Open"] else "#9e2b25" 
                   for _, row in df.iterrows()]
         fig.add_trace(go.Bar(
             x=df.index, y=df["Volume"], name="Hacim",
@@ -5325,14 +5325,14 @@ def create_candlestick_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
         
     fig.update_layout(
         title=f"{ticker} — Price, MAs & Volume",
-        paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-        font=dict(color="#e2e8f0"),
+        paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+        font=dict(color="#1a1712"),
         xaxis_rangeslider_visible=False,
-        legend=dict(bgcolor="#1e293b"), height=500,
+        legend=dict(bgcolor="#efe9db"), height=500,
         margin=dict(l=30, r=30, t=40, b=20)
     )
-    fig.update_yaxes(gridcolor="#334155")
-    fig.update_xaxes(gridcolor="#334155")
+    fig.update_yaxes(gridcolor="#d8d0c0")
+    fig.update_xaxes(gridcolor="#d8d0c0")
     return fig
 
 
@@ -5421,7 +5421,7 @@ def render_dashboard_page(ui_lang):
 
                 if _al:
                     _al_items = " &nbsp;|&nbsp; ".join(
-                        f"<span style='color:#22c55e;font-weight:600'>{s['ticker']}</span> "
+                        f"<span style='color:#1d6f4e;font-weight:600'>{s['ticker']}</span> "
                         f"<small>({s['signal']} {s['score']:.0f})</small>"
                         for s in sorted(_al, key=lambda x: -x["score"])
                     )
@@ -5431,7 +5431,7 @@ def render_dashboard_page(ui_lang):
                     )
                 if _sat:
                     _sat_items = " &nbsp;|&nbsp; ".join(
-                        f"<span style='color:#ef4444;font-weight:600'>{s['ticker']}</span> "
+                        f"<span style='color:#9e2b25;font-weight:600'>{s['ticker']}</span> "
                         f"<small>({s['signal']} {s['score']:.0f})</small>"
                         for s in sorted(_sat, key=lambda x: x["score"])
                     )
@@ -5566,8 +5566,8 @@ def render_dashboard_page(ui_lang):
         if news_items:
             for item in news_items:
                 st.markdown(
-                    f"<div style='background:#1e293b; padding:10px; border-radius:8px; margin-bottom:8px; border-left:4px solid #3b82f6;'>"
-                    f"<a href='{item['link']}' target='_blank' style='text-decoration:none; color:#e2e8f0; font-size:14px;'>{item['title']}</a>"
+                    f"<div style='background:#efe9db; padding:10px; border-radius:8px; margin-bottom:8px; border-left:4px solid #27509e;'>"
+                    f"<a href='{item['link']}' target='_blank' style='text-decoration:none; color:#1a1712; font-size:14px;'>{item['title']}</a>"
                     f"</div>",
                     unsafe_allow_html=True
                 )
@@ -5692,10 +5692,10 @@ def render_smart_portfolio_page(ui_lang: str):
 
     def _render_portfolio_table(stocks: list, title: str, color: str):
         st.markdown(
-            f"<div style='background:#1e293b;border:2px solid {color};"
+            f"<div style='background:#efe9db;border:2px solid {color};"
             f"border-radius:10px;padding:12px 16px;margin-bottom:12px'>"
             f"<h4 style='color:{color};margin:0'>{title}</h4>"
-            f"<span style='color:#94a3b8;font-size:12px'>{len(stocks)} hisse seçildi</span>"
+            f"<span style='color:#6b6357;font-size:12px'>{len(stocks)} hisse seçildi</span>"
             f"</div>", unsafe_allow_html=True
         )
         if not stocks:
@@ -5705,30 +5705,30 @@ def render_smart_portfolio_page(ui_lang: str):
             gc_badge = "🟡 GC" if s["golden_cross"] else ""
             obv_badge = "📈 OBV↑" if s["obv_trend"] == "yukari" else ""
             st.markdown(
-                f"<div style='background:#0f172a;border:1px solid #334155;"
+                f"<div style='background:#f7f3ea;border:1px solid #d8d0c0;"
                 f"border-radius:8px;padding:10px 14px;margin-bottom:6px'>"
                 f"<div style='display:flex;justify-content:space-between;align-items:center'>"
                 f"<span style='font-size:16px;font-weight:700;color:{color}'>{s['ticker']}</span>"
-                f"<span style='font-size:13px;color:#e2e8f0'>{s['price']:.2f} ₺</span>"
+                f"<span style='font-size:13px;color:#1a1712'>{s['price']:.2f} ₺</span>"
                 f"</div>"
-                f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>"
-                f"Skor: <b style='color:#e2e8f0'>{s['score']}</b> · "
+                f"<div style='font-size:12px;color:#6b6357;margin-top:4px'>"
+                f"Skor: <b style='color:#1a1712'>{s['score']}</b> · "
                 f"ADX: <b>{s.get('adx', '-')}</b> · "
                 f"RSI: <b>{s['rsi']}</b> · "
                 f"ATR%: <b>{s['atr_pct']}</b> · "
                 f"52H: <b>%{s['week52_pos']}</b> · "
-                f"1A: <b style='color:{'#22c55e' if s.get('momentum_1m',0)>=0 else '#ef4444'}'>{s.get('momentum_1m',0):+.1f}%</b>"
+                f"1A: <b style='color:{'#1d6f4e' if s.get('momentum_1m',0)>=0 else '#9e2b25'}'>{s.get('momentum_1m',0):+.1f}%</b>"
                 f"{gc_badge} {obv_badge}"
                 f"</div>"
-                f"<div style='font-size:11px;color:#64748b;margin-top:3px'>{s['reason']}</div>"
+                f"<div style='font-size:11px;color:#8a8172;margin-top:3px'>{s['reason']}</div>"
                 f"</div>", unsafe_allow_html=True
             )
 
     with col_agg:
-        _render_portfolio_table(aggressive, "🚀 Agresif Portföy", "#f97316")
+        _render_portfolio_table(aggressive, "🚀 Agresif Portföy", "#b45309")
 
     with col_def:
-        _render_portfolio_table(defensive, "🛡️ Defansif Portföy", "#3b82f6")
+        _render_portfolio_table(defensive, "🛡️ Defansif Portföy", "#27509e")
 
     # Tüm Tarama Sonuçları Tablosu
     st.markdown("---")
@@ -5772,8 +5772,8 @@ def render_smart_portfolio_page(ui_lang: str):
         bt_results_agg = {}   # port_name → {ticker: {trades, summary}}
 
         for port_name, port_stocks, port_color in [
-            ("Agresif",  aggressive, "#f97316"),
-            ("Defansif", defensive,  "#3b82f6"),
+            ("Agresif",  aggressive, "#b45309"),
+            ("Defansif", defensive,  "#27509e"),
         ]:
             if not port_stocks:
                 continue
@@ -5842,19 +5842,19 @@ def render_smart_portfolio_page(ui_lang: str):
                     # Bar chart
                     bt_labels  = list(valid_bt.keys())
                     bt_returns = [valid_bt[t]["summary"]["total_return_pct"] for t in bt_labels]
-                    port_color = "#f97316" if port_name == "Agresif" else "#3b82f6"
+                    port_color = "#b45309" if port_name == "Agresif" else "#27509e"
                     fig_bt = go.Figure(go.Bar(
                         x=bt_labels, y=bt_returns,
-                        marker_color=[port_color if v >= 0 else "#ef4444" for v in bt_returns],
+                        marker_color=[port_color if v >= 0 else "#9e2b25" for v in bt_returns],
                         text=[f"{v:+.1f}%" for v in bt_returns],
                         textposition="outside",
                     ))
                     fig_bt.update_layout(
                         title=f"{port_name} Portföy — Hisse Bazında Getiri",
-                        paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                        font=dict(color="#e2e8f0"),
-                        yaxis=dict(gridcolor="#334155", ticksuffix="%"),
-                        xaxis=dict(gridcolor="#334155"),
+                        paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                        font=dict(color="#1a1712"),
+                        yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
+                        xaxis=dict(gridcolor="#d8d0c0"),
                         showlegend=False,
                         height=300, margin=dict(l=10, r=10, t=50, b=10),
                     )
@@ -5902,35 +5902,35 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
         fig.add_trace(go.Scatter(
             x=raw.index, y=raw["Close"],
             mode="lines", name="Kapanış",
-            line=dict(color="#64748b", width=1.5),
+            line=dict(color="#8a8172", width=1.5),
             hovertemplate="%{x|%Y-%m-%d}<br><b>%{y:.2f} ₺</b><extra></extra>",
         ))
 
         if not trades:
             fig.update_layout(
                 title=f"{ticker} — Fiyat Grafiği (İşlem Yok)",
-                paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                font=dict(color="#e2e8f0"),
-                yaxis=dict(gridcolor="#334155", title="Fiyat (₺)"),
-                xaxis=dict(gridcolor="#334155"),
+                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                font=dict(color="#1a1712"),
+                yaxis=dict(gridcolor="#d8d0c0", title="Fiyat (₺)"),
+                xaxis=dict(gridcolor="#d8d0c0"),
                 height=height, margin=dict(l=10, r=10, t=50, b=10),
             )
             st.plotly_chart(fig, use_container_width=True)
             return
 
         EXIT_STYLE = {
-            "TAKE_PROFIT":    ("#22c55e", "🟢 Hedef Fiyat"),
-            "STOP_LOSS":      ("#ef4444", "🔴 Stop-Loss"),
-            "SAT_SINYAL":     ("#f97316", "🟠 SAT Sinyali"),
-            "MAX_SURE":       ("#a78bfa", "⏰ Max Süre"),
-            "HALA_ACIK":      ("#60a5fa", "🔵 Açık Pozisyon"),
-            "SMA200_KIRILIM": ("#f43f5e", "📉 SMA200 Kırılım"),
+            "TAKE_PROFIT":    ("#1d6f4e", "🟢 Hedef Fiyat"),
+            "STOP_LOSS":      ("#9e2b25", "🔴 Stop-Loss"),
+            "SAT_SINYAL":     ("#b45309", "🟠 SAT Sinyali"),
+            "MAX_SURE":       ("#6d3f8e", "⏰ Max Süre"),
+            "HALA_ACIK":      ("#27509e", "🔵 Açık Pozisyon"),
+            "SMA200_KIRILIM": ("#9e2b25", "📉 SMA200 Kırılım"),
         }
 
         # Pozisyon şeritleri
         for t in trades:
             ret_val = t.get("return_pct", 0)
-            color   = "#22c55e" if ret_val >= 0 else "#ef4444"
+            color   = "#1d6f4e" if ret_val >= 0 else "#9e2b25"
             try:
                 fig.add_vrect(
                     x0=t["entry_date"], x1=t["exit_date"],
@@ -5953,7 +5953,7 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
             x=entry_x, y=entry_y,
             mode="markers", name="AL ▲",
             marker=dict(symbol="triangle-up", size=14,
-                        color="#22c55e", line=dict(color="#ffffff", width=1)),
+                        color="#1d6f4e", line=dict(color="#ffffff", width=1)),
             text=entry_txt, hoverinfo="text",
         ))
 
@@ -5961,7 +5961,7 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
         seen_reasons = set()
         for t in trades:
             reason = t.get("exit_reason", "MAX_SURE")
-            ecolor, ename = EXIT_STYLE.get(reason, ("#94a3b8", reason))
+            ecolor, ename = EXIT_STYLE.get(reason, ("#6b6357", reason))
             ret_val = t.get("return_pct", 0)
             show_legend = reason not in seen_reasons
             seen_reasons.add(reason)
@@ -5981,10 +5981,10 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
 
         fig.update_layout(
             title=f"{ticker} — Fiyat & AL/SAT Noktaları",
-            paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-            font=dict(color="#e2e8f0"),
-            yaxis=dict(gridcolor="#334155", title="Fiyat (₺)"),
-            xaxis=dict(gridcolor="#334155", rangeslider=dict(visible=False)),
+            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+            font=dict(color="#1a1712"),
+            yaxis=dict(gridcolor="#d8d0c0", title="Fiyat (₺)"),
+            xaxis=dict(gridcolor="#d8d0c0", rangeslider=dict(visible=False)),
             height=height, margin=dict(l=10, r=10, t=50, b=10),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
             hovermode="closest",
@@ -6270,21 +6270,21 @@ def render_validation_page(ui_lang: str):
 
         sig_counts = df_all["signal"].value_counts()
         colors_map = {
-            "GUCLU AL": "#22c55e", "AL": "#86efac",
-            "SAT": "#f97316", "GUCLU SAT": "#ef4444",
+            "GUCLU AL": "#1d6f4e", "AL": "#3e8e6c",
+            "SAT": "#b45309", "GUCLU SAT": "#9e2b25",
         }
         fig_pie = go.Figure(data=[go.Pie(
             labels=sig_counts.index.tolist(),
             values=sig_counts.values.tolist(),
-            marker=dict(colors=[colors_map.get(s, "#9ca3af") for s in sig_counts.index]),
+            marker=dict(colors=[colors_map.get(s, "#6b6357") for s in sig_counts.index]),
             textinfo="label+percent+value",
             hole=0.4,
         )])
         fig_pie.update_layout(
-            paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-            font=dict(color="#e2e8f0"), height=350,
+            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+            font=dict(color="#1a1712"), height=350,
             margin=dict(l=20, r=20, t=30, b=20),
-            legend=dict(bgcolor="#1e293b"),
+            legend=dict(bgcolor="#efe9db"),
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
@@ -6655,18 +6655,18 @@ def render_time_machine_page(ui_lang: str):
         with st.expander(f"📜 Önceki Çalışmalar ({len(prev_runs)} kayıt)", expanded=False):
             for run in prev_runs[:10]:
                 _g = run.get("back_test_grade", 0)
-                gc = "#22c55e" if _g >= 65 else "#f97316" if _g >= 40 else "#ef4444"
+                gc = "#1d6f4e" if _g >= 65 else "#b45309" if _g >= 40 else "#9e2b25"
                 st.markdown(
-                    f"<div style='background:#1e293b;border:1px solid #334155;"
+                    f"<div style='background:#efe9db;border:1px solid #d8d0c0;"
                     f"border-radius:8px;padding:10px 14px;margin-bottom:6px'>"
                     f"<div style='display:flex;justify-content:space-between;align-items:center'>"
-                    f"<span style='font-weight:700;color:#e2e8f0'>"
+                    f"<span style='font-weight:700;color:#1a1712'>"
                     f"{run.get('pit_date','')} → Bugün "
                     f"({run.get('portfolio','').title()})</span>"
                     f"<span style='color:{gc};font-weight:700;font-size:18px'>"
                     f"{_g:.0f}/100</span>"
                     f"</div>"
-                    f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>"
+                    f"<div style='font-size:12px;color:#6b6357;margin-top:4px'>"
                     f"Portföy: %{run.get('portfolio_return_pct',0):+.1f} · "
                     f"Endeks: %{run.get('benchmark_return_pct',0):+.1f} · "
                     f"Alfa: %{run.get('alpha_pct',0):+.1f} · "
@@ -6781,7 +6781,7 @@ def _tm_render_report(result: dict):
     picks = result.get("picks", [])
     report = TimeMachineEngine.generate_report(result)
     style_info = TimeMachineEngine.PORTFOLIO_STYLES.get(result.get("style", "aggressive"), {})
-    style_color = style_info.get("color", "#3b82f6")
+    style_color = style_info.get("color", "#27509e")
 
     st.markdown("---")
     st.markdown(f"## 📋 Strateji Raporu — {result['pit_date']}'den Bugüne")
@@ -6789,7 +6789,7 @@ def _tm_render_report(result: dict):
     # Metrik Kartları
     m1, m2, m3, m4, m5 = st.columns(5)
     grade = result["grade"]
-    grade_color = "#22c55e" if grade >= 65 else "#f97316" if grade >= 40 else "#ef4444"
+    grade_color = "#1d6f4e" if grade >= 65 else "#b45309" if grade >= 40 else "#9e2b25"
     m1.markdown(
         f"<div class='metric-card'>"
         f"<div class='metric-value' style='color:{grade_color}'>{grade:.0f}</div>"
@@ -6850,16 +6850,16 @@ def _tm_render_report(result: dict):
                 bt_returns = [valid_bt[t]["summary"]["total_return_pct"] for t in bt_labels]
                 fig_bt_bar = go.Figure(go.Bar(
                     x=bt_labels, y=bt_returns,
-                    marker_color=[style_color if v >= 0 else "#ef4444" for v in bt_returns],
+                    marker_color=[style_color if v >= 0 else "#9e2b25" for v in bt_returns],
                     text=[f"{v:+.1f}%" for v in bt_returns],
                     textposition="outside",
                 ))
                 fig_bt_bar.update_layout(
                     title="Backtest — Hisse Bazlı Getiri",
-                    paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                    font=dict(color="#e2e8f0"),
-                    yaxis=dict(gridcolor="#334155", ticksuffix="%"),
-                    xaxis=dict(gridcolor="#334155"),
+                    paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                    font=dict(color="#1a1712"),
+                    yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
+                    xaxis=dict(gridcolor="#d8d0c0"),
                     showlegend=False,
                     height=320, margin=dict(l=10, r=10, t=50, b=10),
                 )
@@ -6941,7 +6941,7 @@ def _tm_render_report(result: dict):
             # Bar chart — PIT getiri + benchmark
             labels = [p["ticker"] for p in picks]
             returns = [p.get("return_pct", 0) for p in picks]
-            colors = ["#22c55e" if r >= 0 else "#ef4444" for r in returns]
+            colors = ["#1d6f4e" if r >= 0 else "#9e2b25" for r in returns]
 
             fig_bar = go.Figure(go.Bar(
                 x=labels, y=returns,
@@ -6951,19 +6951,19 @@ def _tm_render_report(result: dict):
             ))
             fig_bar.update_layout(
                 title=f"PIT Portföy — Hisse Bazlı Getiri ({result['pit_date']} → Bugün)",
-                paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                font=dict(color="#e2e8f0"),
-                yaxis=dict(gridcolor="#334155", ticksuffix="%"),
-                xaxis=dict(gridcolor="#334155"),
+                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                font=dict(color="#1a1712"),
+                yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
+                xaxis=dict(gridcolor="#d8d0c0"),
                 showlegend=False,
                 height=350, margin=dict(l=10, r=10, t=50, b=10),
             )
             fig_bar.add_hline(
                 y=result["bench_return"],
-                line_dash="dash", line_color="#60a5fa",
+                line_dash="dash", line_color="#27509e",
                 annotation_text=f"Endeks: %{result['bench_return']:+.1f}",
                 annotation_position="top right",
-                annotation=dict(font=dict(color="#60a5fa", size=12)),
+                annotation=dict(font=dict(color="#27509e", size=12)),
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -7004,15 +7004,15 @@ def _tm_render_report(result: dict):
         if risky:
             for r in risky:
                 ret = r.get("return_pct", 0)
-                color = "#ef4444" if ret < -5 else "#f97316" if ret < 5 else "#94a3b8"
+                color = "#9e2b25" if ret < -5 else "#b45309" if ret < 5 else "#6b6357"
                 st.markdown(
-                    f"<div style='background:#1e293b;border:1px solid {color};"
+                    f"<div style='background:#efe9db;border:1px solid {color};"
                     f"border-radius:8px;padding:10px 14px;margin-bottom:6px'>"
                     f"<div style='display:flex;justify-content:space-between;align-items:center'>"
                     f"<span style='font-size:16px;font-weight:700;color:{color}'>{r['ticker']}</span>"
                     f"<span style='color:{color};font-size:14px'>%{ret:+.1f}</span>"
                     f"</div>"
-                    f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>"
+                    f"<div style='font-size:12px;color:#6b6357;margin-top:4px'>"
                     f"Risk: {r['reason']}"
                     f"</div></div>",
                     unsafe_allow_html=True
@@ -7108,14 +7108,14 @@ def _tm_render_equity_curve(bt_results: dict, run_id: str, color: str):
             ))
 
         # 100 referans çizgisi
-        fig.add_hline(y=100, line_dash="dot", line_color="#64748b", opacity=0.5)
+        fig.add_hline(y=100, line_dash="dot", line_color="#8a8172", opacity=0.5)
 
         fig.update_layout(
             title="Portföy Equity Curve (100 Bazlı)",
-            paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-            font=dict(color="#e2e8f0"),
-            yaxis=dict(gridcolor="#334155", title="Endeksli Değer"),
-            xaxis=dict(gridcolor="#334155"),
+            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+            font=dict(color="#1a1712"),
+            yaxis=dict(gridcolor="#d8d0c0", title="Endeksli Değer"),
+            xaxis=dict(gridcolor="#d8d0c0"),
             height=400, margin=dict(l=10, r=10, t=50, b=10),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
             hovermode="x unified",
@@ -7215,37 +7215,37 @@ def _tm_render_technical_chart(ticker: str, period: str, run_id: str,
 
         # Fiyat + SMA
         fig.add_trace(go.Scatter(x=raw.index, y=close, name="Fiyat",
-                                 line=dict(color="#e2e8f0", width=1.5)), row=1, col=1)
+                                 line=dict(color="#1a1712", width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=raw.index, y=sma50, name="SMA50",
-                                 line=dict(color="#f59e0b", width=1, dash="dot")), row=1, col=1)
+                                 line=dict(color="#a2701d", width=1, dash="dot")), row=1, col=1)
         fig.add_trace(go.Scatter(x=raw.index, y=sma200, name="SMA200",
-                                 line=dict(color="#3b82f6", width=1, dash="dot")), row=1, col=1)
+                                 line=dict(color="#27509e", width=1, dash="dot")), row=1, col=1)
 
         # RSI
         fig.add_trace(go.Scatter(x=raw.index, y=rsi, name="RSI",
-                                 line=dict(color="#a855f7", width=1.5)), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dash", line_color="#ef4444", opacity=0.4, row=2, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="#22c55e", opacity=0.4, row=2, col=1)
+                                 line=dict(color="#6d3f8e", width=1.5)), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color="#9e2b25", opacity=0.4, row=2, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="#1d6f4e", opacity=0.4, row=2, col=1)
 
         # MACD
-        colors = ["#22c55e" if v >= 0 else "#ef4444" for v in macd_hist.fillna(0)]
+        colors = ["#1d6f4e" if v >= 0 else "#9e2b25" for v in macd_hist.fillna(0)]
         fig.add_trace(go.Bar(x=raw.index, y=macd_hist, name="MACD Hist",
                              marker_color=colors, opacity=0.7), row=3, col=1)
         fig.add_trace(go.Scatter(x=raw.index, y=macd_line, name="MACD",
-                                 line=dict(color="#60a5fa", width=1)), row=3, col=1)
+                                 line=dict(color="#27509e", width=1)), row=3, col=1)
         fig.add_trace(go.Scatter(x=raw.index, y=signal_line, name="Signal",
-                                 line=dict(color="#f97316", width=1, dash="dot")), row=3, col=1)
+                                 line=dict(color="#b45309", width=1, dash="dot")), row=3, col=1)
 
         fig.update_layout(
-            paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-            font=dict(color="#e2e8f0", size=11),
+            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+            font=dict(color="#1a1712", size=11),
             height=600, margin=dict(l=10, r=10, t=40, b=10),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
             hovermode="x unified",
         )
         for i in range(1, 4):
-            fig.update_yaxes(gridcolor="#334155", row=i, col=1)
-            fig.update_xaxes(gridcolor="#334155", row=i, col=1)
+            fig.update_yaxes(gridcolor="#d8d0c0", row=i, col=1)
+            fig.update_xaxes(gridcolor="#d8d0c0", row=i, col=1)
 
         st.plotly_chart(fig, use_container_width=True)
 
@@ -7379,15 +7379,15 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
 
         # Signal
         if last_score >= 60:
-            signal, sig_color = "STRONG BUY", "#22c55e"
+            signal, sig_color = "STRONG BUY", "#1d6f4e"
         elif last_score >= 48:
-            signal, sig_color = "BUY", "#86efac"
+            signal, sig_color = "BUY", "#3e8e6c"
         elif last_score >= 35:
-            signal, sig_color = "NEUTRAL", "#9ca3af"
+            signal, sig_color = "NEUTRAL", "#6b6357"
         elif last_score >= 22:
-            signal, sig_color = "SELL", "#f97316"
+            signal, sig_color = "SELL", "#b45309"
         else:
-            signal, sig_color = "STRONG SELL", "#ef4444"
+            signal, sig_color = "STRONG SELL", "#9e2b25"
 
         # Sinyali doğrulama sistemine kaydet
         _signal_map = {"STRONG BUY": "GUCLU AL", "BUY": "AL",
@@ -7450,39 +7450,39 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
         fig.add_trace(go.Candlestick(
             x=raw.index, open=raw["Open"], high=raw["High"],
             low=raw["Low"], close=raw["Close"],
-            increasing_line_color="#22c55e", decreasing_line_color="#ef4444",
+            increasing_line_color="#1d6f4e", decreasing_line_color="#9e2b25",
             name="Price",
         ), row=1, col=1)
 
         sma50  = raw["Close"].rolling(50, min_periods=20).mean()
         sma200 = raw["Close"].rolling(200, min_periods=50).mean()
         fig.add_trace(go.Scatter(x=raw.index, y=sma50, name="SMA50",
-                                 line=dict(color="#f59e0b", width=1)), row=1, col=1)
+                                 line=dict(color="#a2701d", width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=raw.index, y=sma200, name="SMA200",
-                                 line=dict(color="#8b5cf6", width=1)), row=1, col=1)
+                                 line=dict(color="#6d3f8e", width=1)), row=1, col=1)
 
-        vol_colors = ["#22c55e" if raw["Close"].iloc[j] >= raw["Open"].iloc[j]
-                       else "#ef4444" for j in range(len(raw))]
+        vol_colors = ["#1d6f4e" if raw["Close"].iloc[j] >= raw["Open"].iloc[j]
+                       else "#9e2b25" for j in range(len(raw))]
         fig.add_trace(go.Bar(x=raw.index, y=raw["Volume"], name="Volume",
                              marker_color=vol_colors, opacity=0.7), row=2, col=1)
 
         fig.add_trace(go.Scatter(x=raw.index, y=rsi_s, name="RSI",
-                                 line=dict(color="#3b82f6", width=1.5)), row=3, col=1)
-        fig.add_hline(y=70, line_dash="dash", line_color="#ef4444", row=3, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="#22c55e", row=3, col=1)
+                                 line=dict(color="#27509e", width=1.5)), row=3, col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color="#9e2b25", row=3, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="#1d6f4e", row=3, col=1)
 
         fig.update_layout(
-            paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-            font=dict(color="#e2e8f0"),
+            paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+            font=dict(color="#1a1712"),
             height=650, margin=dict(l=10, r=10, t=40, b=10),
             xaxis_rangeslider_visible=False,
             showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         )
         for ax in ["yaxis", "yaxis2", "yaxis3"]:
-            fig.update_layout(**{ax: dict(gridcolor="#334155")})
+            fig.update_layout(**{ax: dict(gridcolor="#d8d0c0")})
         for ax in ["xaxis", "xaxis2", "xaxis3"]:
-            fig.update_layout(**{ax: dict(gridcolor="#334155")})
+            fig.update_layout(**{ax: dict(gridcolor="#d8d0c0")})
 
         st.plotly_chart(fig, use_container_width=True)
 
@@ -7502,17 +7502,17 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
             fig_score.add_trace(go.Scatter(
                 x=raw.index, y=scores,
                 mode="lines", name="Technical Score",
-                line=dict(color="#3b82f6", width=1.5),
+                line=dict(color="#27509e", width=1.5),
             ))
-            fig_score.add_hline(y=48, line_dash="dash", line_color="#22c55e",
+            fig_score.add_hline(y=48, line_dash="dash", line_color="#1d6f4e",
                                 annotation_text="BUY")
-            fig_score.add_hline(y=22, line_dash="dash", line_color="#ef4444",
+            fig_score.add_hline(y=22, line_dash="dash", line_color="#9e2b25",
                                 annotation_text="SELL")
             fig_score.update_layout(
-                paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                font=dict(color="#e2e8f0"),
-                yaxis=dict(gridcolor="#334155", title="Score", range=[-5, 105]),
-                xaxis=dict(gridcolor="#334155"),
+                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                font=dict(color="#1a1712"),
+                yaxis=dict(gridcolor="#d8d0c0", title="Score", range=[-5, 105]),
+                xaxis=dict(gridcolor="#d8d0c0"),
                 height=300, margin=dict(l=10, r=10, t=30, b=10),
             )
             st.plotly_chart(fig_score, use_container_width=True)
@@ -7641,17 +7641,17 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                 fig_bar = go.Figure(go.Bar(
                     x=[r["ticker"] for r in sorted_valid],
                     y=[r["total_return_pct"] for r in sorted_valid],
-                    marker_color=["#22c55e" if r["total_return_pct"] >= 0 else "#ef4444"
+                    marker_color=["#1d6f4e" if r["total_return_pct"] >= 0 else "#9e2b25"
                                   for r in sorted_valid],
                     text=[f"{r['total_return_pct']:+.1f}%" for r in sorted_valid],
                     textposition="outside",
                 ))
                 fig_bar.update_layout(
                     title="Cumulative Return by Stock",
-                    paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                    font=dict(color="#e2e8f0"),
-                    yaxis=dict(gridcolor="#334155", ticksuffix="%"),
-                    xaxis=dict(gridcolor="#334155"),
+                    paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                    font=dict(color="#1a1712"),
+                    yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
+                    xaxis=dict(gridcolor="#d8d0c0"),
                     showlegend=False,
                     height=360, margin=dict(l=10, r=10, t=50, b=10),
                 )
@@ -7691,7 +7691,7 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                         labels.append(t2.get("exit_date", ""))
 
                     fig_eq = go.Figure()
-                    eq_color = "#22c55e" if equity[-1] >= 100 else "#ef4444"
+                    eq_color = "#1d6f4e" if equity[-1] >= 100 else "#9e2b25"
                     eq_fill  = "rgba(34,197,94,0.08)" if equity[-1] >= 100 else "rgba(239,68,68,0.08)"
                     fig_eq.add_trace(go.Scatter(
                         x=labels, y=equity,
@@ -7701,14 +7701,14 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
                         name="Capital",
                         hovertemplate="%{x}<br>Capital: %{y:.1f}<extra></extra>",
                     ))
-                    fig_eq.add_hline(y=100, line_dash="dash", line_color="#64748b",
+                    fig_eq.add_hline(y=100, line_dash="dash", line_color="#8a8172",
                                      annotation_text="Start (100)")
                     fig_eq.update_layout(
                         title=f"{sel_ticker} — Cumulative Equity Curve",
-                        paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                        font=dict(color="#e2e8f0"),
-                        yaxis=dict(gridcolor="#334155", title="Capital (100=start)"),
-                        xaxis=dict(gridcolor="#334155"),
+                        paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                        font=dict(color="#1a1712"),
+                        yaxis=dict(gridcolor="#d8d0c0", title="Capital (100=start)"),
+                        xaxis=dict(gridcolor="#d8d0c0"),
                         height=340, margin=dict(l=10, r=10, t=50, b=10),
                     )
                     st.plotly_chart(fig_eq, use_container_width=True)
@@ -7802,7 +7802,7 @@ def render_us_stock_list_page(ui_lang: str):
                     data = daily_data.get(ticker, {})
                     price = data.get("price", 0)
                     pct   = data.get("pct", 0)
-                    color = "#22c55e" if pct >= 0 else "#ef4444"
+                    color = "#1d6f4e" if pct >= 0 else "#9e2b25"
                     arrow = "+" if pct >= 0 else ""
 
                     if st.button(
@@ -7968,11 +7968,11 @@ def render_us_system_portfolios_page(ui_lang: str):
 
     # Portföy stilleri (TimeMachineEngine filtreleri ile uyumlu)
     STYLE_INFO = {
-        "aggressive": ("🚀 Aggressive", "#22c55e"),
-        "defensive":  ("🛡️ Defensive", "#3b82f6"),
-        "momentum":   ("⚡ Momentum", "#a855f7"),
-        "value":      ("💎 Value", "#14b8a6"),
-        "stable":     ("🏦 Stable", "#eab308"),
+        "aggressive": ("🚀 Aggressive", "#1d6f4e"),
+        "defensive":  ("🛡️ Defensive", "#27509e"),
+        "momentum":   ("⚡ Momentum", "#6d3f8e"),
+        "value":      ("💎 Value", "#0e7a6e"),
+        "stable":     ("🏦 Stable", "#a2701d"),
     }
 
     def _filter_us_portfolio(stocks, style):
@@ -8014,15 +8014,15 @@ def render_us_system_portfolios_page(ui_lang: str):
             return
         for r in stocks:
             sector = US_SECTOR_MAP.get(r.ticker, "Other")
-            mom_color = "#22c55e" if r.momentum_1m > 0 else "#ef4444"
+            mom_color = "#1d6f4e" if r.momentum_1m > 0 else "#9e2b25"
             st.markdown(
-                f"<div style='background:#1e293b;border:1px solid {color};border-radius:8px;"
+                f"<div style='background:#efe9db;border:1px solid {color};border-radius:8px;"
                 f"padding:10px;margin:4px 0'>"
                 f"<div style='display:flex;justify-content:space-between;align-items:center'>"
                 f"<span style='font-weight:700;color:{color};font-size:16px'>{r.ticker}</span>"
-                f"<span style='color:#e2e8f0;font-weight:600'>${r.current_price:.2f}</span>"
+                f"<span style='color:#1a1712;font-weight:600'>${r.current_price:.2f}</span>"
                 f"</div>"
-                f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>"
+                f"<div style='font-size:12px;color:#6b6357;margin-top:4px'>"
                 f"{sector} | Score: {r.score:.0f} | RSI: {r.rsi:.0f} | ADX: {r.adx:.0f} | "
                 f"ATR: {r.atr_pct:.1f}% | "
                 f"<span style='color:{mom_color}'>1M: {r.momentum_1m:+.1f}%</span>"
@@ -8038,7 +8038,7 @@ def render_us_system_portfolios_page(ui_lang: str):
             idx = i + j
             if idx < len(style_list):
                 style = style_list[idx]
-                label, color = STYLE_INFO.get(style, (style.title(), "#94a3b8"))
+                label, color = STYLE_INFO.get(style, (style.title(), "#6b6357"))
                 with col:
                     _render_portfolio_card(label, portfolios[style], color)
 
@@ -8350,18 +8350,18 @@ def render_backtest_page(ui_lang: str):
                 with st.expander(f"Onceki Calismalar ({len(prev_runs)} kayit)", expanded=False):
                     for run in prev_runs[:10]:
                         _g = run.get("back_test_grade", 0)
-                        gc = "#22c55e" if _g >= 65 else "#f97316" if _g >= 40 else "#ef4444"
+                        gc = "#1d6f4e" if _g >= 65 else "#b45309" if _g >= 40 else "#9e2b25"
                         st.markdown(
-                            f"<div style='background:#1e293b;border:1px solid #334155;"
+                            f"<div style='background:#efe9db;border:1px solid #d8d0c0;"
                             f"border-radius:8px;padding:10px 14px;margin-bottom:6px'>"
                             f"<div style='display:flex;justify-content:space-between;align-items:center'>"
-                            f"<span style='font-weight:700;color:#e2e8f0'>"
+                            f"<span style='font-weight:700;color:#1a1712'>"
                             f"{run.get('pit_date','')} -> Bugun "
                             f"({run.get('portfolio','').title()})</span>"
                             f"<span style='color:{gc};font-weight:700;font-size:18px'>"
                             f"{_g:.0f}/100</span>"
                             f"</div>"
-                            f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>"
+                            f"<div style='font-size:12px;color:#6b6357;margin-top:4px'>"
                             f"Portfoy: %{run.get('portfolio_return_pct',0):+.1f} | "
                             f"Endeks: %{run.get('benchmark_return_pct',0):+.1f} | "
                             f"Alfa: %{run.get('alpha_pct',0):+.1f} | "
@@ -8433,7 +8433,7 @@ def _render_backtest_results(ui_lang: str):
 
         def _color_cell(val, good_high=True):
             if isinstance(val, (int, float)):
-                return "color: #22c55e" if (val > 0) == good_high else "color: #ef4444"
+                return "color: #1d6f4e" if (val > 0) == good_high else "color: #9e2b25"
             return ""
 
         summary_rows = []
@@ -8475,17 +8475,17 @@ def _render_backtest_results(ui_lang: str):
             fig_bar = go.Figure(go.Bar(
                 x=[r["ticker"] for r in sorted_valid],
                 y=[r["total_return_pct"] for r in sorted_valid],
-                marker_color=["#22c55e" if r["total_return_pct"] >= 0 else "#ef4444"
+                marker_color=["#1d6f4e" if r["total_return_pct"] >= 0 else "#9e2b25"
                               for r in sorted_valid],
                 text=[f"{r['total_return_pct']:+.1f}%" for r in sorted_valid],
                 textposition="outside",
             ))
             fig_bar.update_layout(
                 title="Hisse Bazinda Kumulatif Backtest Getirisi",
-                paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                font=dict(color="#e2e8f0"),
-                yaxis=dict(gridcolor="#334155", ticksuffix="%"),
-                xaxis=dict(gridcolor="#334155"),
+                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                font=dict(color="#1a1712"),
+                yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
+                xaxis=dict(gridcolor="#d8d0c0"),
                 showlegend=False,
                 height=360, margin=dict(l=10, r=10, t=50, b=10),
             )
@@ -8522,7 +8522,7 @@ def _render_backtest_results(ui_lang: str):
                     labels.append(t2.get("exit_date", ""))
 
                 fig_eq = go.Figure()
-                eq_color = "#22c55e" if equity[-1] >= 100 else "#ef4444"
+                eq_color = "#1d6f4e" if equity[-1] >= 100 else "#9e2b25"
                 eq_fill  = "rgba(34,197,94,0.08)" if equity[-1] >= 100 else "rgba(239,68,68,0.08)"
                 fig_eq.add_trace(go.Scatter(
                     x=labels, y=equity,
@@ -8532,14 +8532,14 @@ def _render_backtest_results(ui_lang: str):
                     name="Sermaye",
                     hovertemplate="%{x}<br>Sermaye: %{y:.1f}<extra></extra>",
                 ))
-                fig_eq.add_hline(y=100, line_dash="dash", line_color="#64748b",
+                fig_eq.add_hline(y=100, line_dash="dash", line_color="#8a8172",
                                  annotation_text="Baslangic (100)")
                 fig_eq.update_layout(
                     title=f"{sel_ticker} — Kumulatif Sermaye Egrisi",
-                    paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                    font=dict(color="#e2e8f0"),
-                    yaxis=dict(gridcolor="#334155", title="Sermaye"),
-                    xaxis=dict(gridcolor="#334155", tickangle=-30),
+                    paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                    font=dict(color="#1a1712"),
+                    yaxis=dict(gridcolor="#d8d0c0", title="Sermaye"),
+                    xaxis=dict(gridcolor="#d8d0c0", tickangle=-30),
                     height=280, margin=dict(l=10, r=10, t=45, b=50),
                     showlegend=False,
                 )
@@ -8569,7 +8569,7 @@ def _render_backtest_results(ui_lang: str):
 
                     def _rc(v):
                         if isinstance(v, (int, float)):
-                            return "color:#22c55e;font-weight:600" if v > 0 else "color:#ef4444;font-weight:600"
+                            return "color:#1d6f4e;font-weight:600" if v > 0 else "color:#9e2b25;font-weight:600"
                         return ""
 
                     st.dataframe(
@@ -8593,7 +8593,7 @@ def _render_backtest_results(ui_lang: str):
                     ))
                     fig_pie.update_layout(
                         title="Cikis Sebepleri",
-                        paper_bgcolor="#0f172a", font=dict(color="#e2e8f0"),
+                        paper_bgcolor="#f7f3ea", font=dict(color="#1a1712"),
                         showlegend=False, height=280,
                         margin=dict(l=10, r=10, t=45, b=10),
                     )
@@ -8614,7 +8614,7 @@ def _render_backtest_results(ui_lang: str):
                         st.markdown("**Aylik Ozet**")
                         def _rc2(v):
                             if isinstance(v, float):
-                                return "color:#22c55e" if v > 0 else "color:#ef4444"
+                                return "color:#1d6f4e" if v > 0 else "color:#9e2b25"
                             return ""
                         st.dataframe(
                             monthly.style.map(_rc2, subset=["Ort%","Top%"])
@@ -8735,7 +8735,7 @@ def render_portfolio_page(ui_lang):
         is_us = tick.endswith(":US")
         display_tick = tick.replace(":US", "") if is_us else tick
         currency = "$" if is_us else "TL"
-        market_badge = " <span style='color:#60a5fa;font-size:10px'>US</span>" if is_us else ""
+        market_badge = " <span style='color:#27509e;font-size:10px'>US</span>" if is_us else ""
 
         # Gerçek zamanlı fiyat, yoksa cache'deki analiz fiyatı
         guncel_fiyat = realtime_prices.get(tick, 0.0)
@@ -8760,8 +8760,8 @@ def render_portfolio_page(ui_lang):
         chart_kz_pct.append(round(kar_pct, 2))
         chart_alloc.append(item_cost)
 
-        c_color  = "#22c55e" if sinyal in ["AL", "GUCLU AL"] else "#ef4444" if sinyal in ["SAT", "GUCLU SAT"] else "#9ca3af"
-        kz_color = "#22c55e" if kar_zarar >= 0 else "#ef4444"
+        c_color  = "#1d6f4e" if sinyal in ["AL", "GUCLU AL"] else "#9e2b25" if sinyal in ["SAT", "GUCLU SAT"] else "#6b6357"
+        kz_color = "#1d6f4e" if kar_zarar >= 0 else "#9e2b25"
 
         with st.container():
             st.markdown(f"""
@@ -8774,11 +8774,11 @@ def render_portfolio_page(ui_lang):
     st.markdown("---")
     genel_kz  = total_val - total_cost
     genel_pct = (genel_kz / total_cost * 100) if total_cost > 0 else 0
-    gk_color  = "#22c55e" if genel_kz >= 0 else "#ef4444"
+    gk_color  = "#1d6f4e" if genel_kz >= 0 else "#9e2b25"
     st.markdown(
-        f"<div style='background:#0f172a; padding:20px; border-radius:12px; border:2px solid {gk_color}; text-align:center;'>"
+        f"<div style='background:#f7f3ea; padding:20px; border-radius:12px; border:2px solid {gk_color}; text-align:center;'>"
         f"<h3 style='margin:0;'>Genel Durum</h3>"
-        f"<p style='font-size:18px; color:#cbd5e1; margin:10px 0;'>Toplam Maliyet: <b>{total_cost:,.2f} TL</b> &nbsp;|&nbsp; Güncel Değer: <b>{total_val:,.2f} TL</b></p>"
+        f"<p style='font-size:18px; color:#4d463c; margin:10px 0;'>Toplam Maliyet: <b>{total_cost:,.2f} TL</b> &nbsp;|&nbsp; Güncel Değer: <b>{total_val:,.2f} TL</b></p>"
         f"<h2 style='color:{gk_color}; margin:0;'>Kâr/Zarar: {genel_kz:+,.2f} TL (%{genel_pct:+.2f})</h2>"
         f"</div>",
         unsafe_allow_html=True,
@@ -8792,7 +8792,7 @@ def render_portfolio_page(ui_lang):
 
         with g1:
             # K/Z bar chart
-            bar_colors = ["#22c55e" if v >= 0 else "#ef4444" for v in chart_kz_pct]
+            bar_colors = ["#1d6f4e" if v >= 0 else "#9e2b25" for v in chart_kz_pct]
             fig_bar = go.Figure(go.Bar(
                 x=chart_labels, y=chart_kz_pct,
                 marker_color=bar_colors,
@@ -8801,10 +8801,10 @@ def render_portfolio_page(ui_lang):
             ))
             fig_bar.update_layout(
                 title="Hisse Bazında K/Z (%)" if ui_lang == "TR" else "P&L per Stock (%)",
-                paper_bgcolor="#0f172a", plot_bgcolor="#1e293b",
-                font=dict(color="#e2e8f0"),
-                yaxis=dict(gridcolor="#334155", ticksuffix="%"),
-                xaxis=dict(gridcolor="#334155"),
+                paper_bgcolor="#f7f3ea", plot_bgcolor="#efe9db",
+                font=dict(color="#1a1712"),
+                yaxis=dict(gridcolor="#d8d0c0", ticksuffix="%"),
+                xaxis=dict(gridcolor="#d8d0c0"),
                 showlegend=False,
                 height=360, margin=dict(l=20, r=20, t=50, b=20),
             )
@@ -8817,12 +8817,12 @@ def render_portfolio_page(ui_lang):
                 values=chart_alloc,
                 hole=0.45,
                 textinfo="label+percent",
-                marker=dict(line=dict(color="#0f172a", width=2)),
+                marker=dict(line=dict(color="#f7f3ea", width=2)),
             ))
             fig_pie.update_layout(
                 title="Portföy Dağılımı (Maliyet)" if ui_lang == "TR" else "Portfolio Allocation (Cost)",
-                paper_bgcolor="#0f172a",
-                font=dict(color="#e2e8f0"),
+                paper_bgcolor="#f7f3ea",
+                font=dict(color="#1a1712"),
                 height=360, margin=dict(l=20, r=20, t=50, b=20),
             )
             st.plotly_chart(fig_pie, use_container_width=True)
@@ -8949,7 +8949,7 @@ def render_bist_list_page(ui_lang):
             header_cols[1].markdown("**Fiyat (₺)**")
             header_cols[2].markdown("**Günlük Değ.**")
             header_cols[3].markdown("**İşlem**")
-            st.markdown("<hr style='margin:4px 0 8px 0;border-color:#334155'>", unsafe_allow_html=True)
+            st.markdown("<hr style='margin:4px 0 8px 0;border-color:#d8d0c0'>", unsafe_allow_html=True)
 
             for tk in tickers_in_cat:
                 info = prices.get(tk)
@@ -8970,7 +8970,7 @@ def render_bist_list_page(ui_lang):
 
                 with c3:
                     if info:
-                        p_color = "#22c55e" if info["up"] else "#ef4444"
+                        p_color = "#1d6f4e" if info["up"] else "#9e2b25"
                         arrow   = "▲" if info["up"] else "▼"
                         st.markdown(
                             f"<span style='color:{p_color};font-weight:600'>"
@@ -8978,7 +8978,7 @@ def render_bist_list_page(ui_lang):
                             unsafe_allow_html=True,
                         )
                     else:
-                        st.markdown("<span style='color:#9ca3af'>—</span>", unsafe_allow_html=True)
+                        st.markdown("<span style='color:#6b6357'>—</span>", unsafe_allow_html=True)
 
                 with c4:
                     if st.button(
@@ -9055,10 +9055,10 @@ def render_analysis_page(ui_lang):
             for row in history:
                 sig   = row["signal"]
                 color = {
-                    "GUCLU AL": "#22c55e", "AL": "#86efac",
-                    "NOTR": "#9ca3af",
-                    "SAT": "#f97316",   "GUCLU SAT": "#ef4444",
-                }.get(sig, "#9ca3af")
+                    "GUCLU AL": "#1d6f4e", "AL": "#3e8e6c",
+                    "NOTR": "#6b6357",
+                    "SAT": "#b45309",   "GUCLU SAT": "#9e2b25",
+                }.get(sig, "#6b6357")
                 count = row.get("analysis_count", 1)
                 price = row.get("current_price") or 0
                 cnt_label = f" · ×{count}" if count > 1 else ""
@@ -9076,7 +9076,7 @@ def render_analysis_page(ui_lang):
                         st.session_state["auto_analyze"]    = True
                         st.rerun()
                     st.markdown(
-                        f"<div style='font-size:10px;color:#64748b;margin-top:-8px'>"
+                        f"<div style='font-size:10px;color:#8a8172;margin-top:-8px'>"
                         f"<span style='color:{color}'>{sig} {row['total_score']:.0f}{cnt_label}</span>"
                         f" · {price:.2f} ₺ · {row['last_analyzed'][:10]}</div>",
                         unsafe_allow_html=True,
@@ -9316,13 +9316,13 @@ def render_analysis_page(ui_lang):
     # R/R renk kodu
     rr = risk.risk_reward_ratio
     if rr >= 2.0:
-        rr_color, rr_label = "#22c55e", "Mükemmel"
+        rr_color, rr_label = "#1d6f4e", "Mükemmel"
     elif rr >= 1.5:
-        rr_color, rr_label = "#86efac", "Kabul Edilebilir"
+        rr_color, rr_label = "#3e8e6c", "Kabul Edilebilir"
     elif rr >= 1.0:
-        rr_color, rr_label = "#f59e0b", "Zayıf"
+        rr_color, rr_label = "#a2701d", "Zayıf"
     else:
-        rr_color, rr_label = "#ef4444", "Yetersiz"
+        rr_color, rr_label = "#9e2b25", "Yetersiz"
 
     # Tight stop mesafesi %
     tight_pct  = (score.stock.current_price - risk.stop_loss_tight)  / score.stock.current_price * 100
@@ -9340,10 +9340,10 @@ def render_analysis_page(ui_lang):
         tp2_source = "ATR Bazlı"
 
     st.markdown(
-        f"<div style='background:#1e293b;border:1px solid #334155;border-radius:8px;"
-        f"padding:10px 14px;margin-bottom:12px;font-size:13px;color:#94a3b8'>"
-        f"📐 <b>ATR (14g):</b> <span style='color:#e2e8f0'>{atr_used:.2f} TL</span> &nbsp;|&nbsp; "
-        f"<b>Oynaklık:</b> <span style='color:#e2e8f0'>%{t_risk.atr_pct:.2f}</span> &nbsp;|&nbsp; "
+        f"<div style='background:#efe9db;border:1px solid #d8d0c0;border-radius:8px;"
+        f"padding:10px 14px;margin-bottom:12px;font-size:13px;color:#6b6357'>"
+        f"📐 <b>ATR (14g):</b> <span style='color:#1a1712'>{atr_used:.2f} TL</span> &nbsp;|&nbsp; "
+        f"<b>Oynaklık:</b> <span style='color:#1a1712'>%{t_risk.atr_pct:.2f}</span> &nbsp;|&nbsp; "
         f"<b>Stop-loss</b> ATR çarpanına göre hesaplandı (1.5×, 2.5×, SMA200)</div>",
         unsafe_allow_html=True,
     )
@@ -9364,7 +9364,7 @@ def render_analysis_page(ui_lang):
     st.markdown("### Teknik Gösterge Detayları" if ui_lang == "TR" else "### Technical Indicator Details")
 
     def _signal_badge(cond: bool, true_label: str, false_label: str,
-                      true_color: str = "#22c55e", false_color: str = "#ef4444") -> str:
+                      true_color: str = "#1d6f4e", false_color: str = "#9e2b25") -> str:
         color, label = (true_color, true_label) if cond else (false_color, false_label)
         return (f"<span style='background:{color};color:#fff;padding:2px 8px;"
                 f"border-radius:4px;font-size:12px;font-weight:600'>{label}</span>")
@@ -9377,14 +9377,14 @@ def render_analysis_page(ui_lang):
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("**SMA Seviyeleri**")
-            gc_color  = "#22c55e" if t.golden_cross else "#ef4444"
+            gc_color  = "#1d6f4e" if t.golden_cross else "#9e2b25"
             gc_label  = "Golden Cross" if t.golden_cross else "Death Cross"
             gap_label = f"Gap: {t.sma_gap_pct:+.1f}%"
             st.markdown(
                 f"SMA 50: **{t.sma50:.2f} TL**  \n"
                 f"SMA 200: **{t.sma200:.2f} TL**  \n"
                 f"{_signal_badge(t.golden_cross, gc_label, gc_label, gc_color, gc_color)} "
-                f"<span style='color:#94a3b8;font-size:12px'>{gap_label}</span>",
+                f"<span style='color:#6b6357;font-size:12px'>{gap_label}</span>",
                 unsafe_allow_html=True,
             )
         with c2:
@@ -9396,11 +9396,11 @@ def render_analysis_page(ui_lang):
             )
         with c3:
             st.markdown("**ADX — Trend Gücü**")
-            adx_color = "#22c55e" if t.adx > 25 else "#f59e0b" if t.adx > 20 else "#ef4444"
+            adx_color = "#1d6f4e" if t.adx > 25 else "#a2701d" if t.adx > 20 else "#9e2b25"
             adx_label = "Güçlü Trend" if t.adx > 25 else ("Zayıf Trend" if t.adx > 20 else "Yatay Piyasa")
             st.markdown(
                 f"ADX: <b style='color:{adx_color}'>{t.adx:.1f}</b> — {adx_label}  \n"
-                f"<span style='color:#94a3b8;font-size:12px'>"
+                f"<span style='color:#6b6357;font-size:12px'>"
                 f"ADX &gt; 25: trend sinyalleri güvenilir  \n"
                 f"ADX &lt; 20: yatay piyasa, sinyaller filtreli</span>",
                 unsafe_allow_html=True,
@@ -9412,15 +9412,15 @@ def render_analysis_page(ui_lang):
             st.markdown("**RSI (14)**")
             rsi = t.rsi
             if rsi < 30:
-                rsi_label, rsi_color = "Aşırı Satım — Alım Fırsatı", "#22c55e"
+                rsi_label, rsi_color = "Aşırı Satım — Alım Fırsatı", "#1d6f4e"
             elif rsi < 40:
-                rsi_label, rsi_color = "Ucuz Bölge", "#86efac"
+                rsi_label, rsi_color = "Ucuz Bölge", "#3e8e6c"
             elif rsi < 60:
-                rsi_label, rsi_color = "Normal Bölge", "#9ca3af"
+                rsi_label, rsi_color = "Normal Bölge", "#6b6357"
             elif rsi < 70:
-                rsi_label, rsi_color = "Hafif Pahalı", "#f59e0b"
+                rsi_label, rsi_color = "Hafif Pahalı", "#a2701d"
             else:
-                rsi_label, rsi_color = "Aşırı Alım — Dikkat!", "#ef4444"
+                rsi_label, rsi_color = "Aşırı Alım — Dikkat!", "#9e2b25"
             st.markdown(
                 f"RSI: <b style='color:{rsi_color}'>{rsi:.1f}</b> — {rsi_label}",
                 unsafe_allow_html=True,
@@ -9431,13 +9431,13 @@ def render_analysis_page(ui_lang):
             st.markdown("**Stochastic (%K / %D)**")
             sk, sd = t.stoch_k, t.stoch_d
             if sk < 20:
-                st_label, st_color = "Aşırı Satım", "#22c55e"
+                st_label, st_color = "Aşırı Satım", "#1d6f4e"
             elif sk > 80:
-                st_label, st_color = "Aşırı Alım", "#ef4444"
+                st_label, st_color = "Aşırı Alım", "#9e2b25"
             elif sk > sd:
-                st_label, st_color = "Yukarı Kesişim", "#86efac"
+                st_label, st_color = "Yukarı Kesişim", "#3e8e6c"
             else:
-                st_label, st_color = "Aşağı Kesişim", "#f97316"
+                st_label, st_color = "Aşağı Kesişim", "#b45309"
             st.markdown(
                 f"%K: <b style='color:{st_color}'>{sk:.1f}</b> &nbsp; %D: **{sd:.1f}** — {st_label}",
                 unsafe_allow_html=True,
@@ -9446,7 +9446,7 @@ def render_analysis_page(ui_lang):
 
         st.markdown("**MACD**")
         hist = t.macd_histogram
-        hist_color = "#22c55e" if hist > 0 else "#ef4444"
+        hist_color = "#1d6f4e" if hist > 0 else "#9e2b25"
         macd_strength = "Güçlü" if abs(hist) / max(t.current_price, 1) * 100 >= 0.5 else "Zayıf"
         st.markdown(
             f"MACD: **{t.macd:.4f}** &nbsp;|&nbsp; Sinyal: **{t.macd_signal:.4f}** &nbsp;|&nbsp; "
@@ -9458,13 +9458,13 @@ def render_analysis_page(ui_lang):
         st.markdown("**Bollinger Bantları (20, 2σ)**")
         bb_pos_pct = round(t.bb_position * 100)
         if t.bb_position <= 0.20:
-            bb_label, bb_color = "Alt Banda Yakın — Alım Bölgesi", "#22c55e"
+            bb_label, bb_color = "Alt Banda Yakın — Alım Bölgesi", "#1d6f4e"
         elif t.bb_position <= 0.50:
-            bb_label, bb_color = "Alt Yarı — Normal", "#86efac"
+            bb_label, bb_color = "Alt Yarı — Normal", "#3e8e6c"
         elif t.bb_position <= 0.80:
-            bb_label, bb_color = "Üst Yarı — Dikkat", "#f59e0b"
+            bb_label, bb_color = "Üst Yarı — Dikkat", "#a2701d"
         else:
-            bb_label, bb_color = "Üst Banda Yakın — Pahalı", "#ef4444"
+            bb_label, bb_color = "Üst Banda Yakın — Pahalı", "#9e2b25"
         squeeze_txt = " 🔥 <b>Bant Daralması!</b> (Volatilite patlama sinyali)" if t.bb_squeeze else ""
         st.markdown(
             f"Alt: **{t.bb_lower:.2f}** &nbsp;|&nbsp; Orta: **{t.bb_middle:.2f}** "
@@ -9479,14 +9479,14 @@ def render_analysis_page(ui_lang):
             st.markdown("**Hacim Analizi**")
             st.markdown(
                 _signal_badge(t.volume_breakout, "Hacimli Kırılım!", "Normal Hacim",
-                              "#22c55e", "#9ca3af"),
+                              "#1d6f4e", "#6b6357"),
                 unsafe_allow_html=True,
             )
         with c2:
             st.markdown("**OBV (On-Balance Volume)**")
-            obv_colors = {"yukari": "#22c55e", "asagi": "#ef4444", "notr": "#9ca3af"}
+            obv_colors = {"yukari": "#1d6f4e", "asagi": "#9e2b25", "notr": "#6b6357"}
             obv_labels = {"yukari": "Yükselen — Birikim", "asagi": "Düşen — Dağıtım", "notr": "Yatay"}
-            obv_c = obv_colors.get(t.obv_trend, "#9ca3af")
+            obv_c = obv_colors.get(t.obv_trend, "#6b6357")
             obv_l = obv_labels.get(t.obv_trend, "Yatay")
             st.markdown(
                 f"OBV Trendi: <b style='color:{obv_c}'>{obv_l}</b>",
@@ -9500,24 +9500,24 @@ def render_analysis_page(ui_lang):
         with c1:
             st.markdown("**ATR — Oynaklık (14 gün)**")
             atr_label = "Yüksek Volatilite" if t.atr_pct > 3 else ("Orta Volatilite" if t.atr_pct > 1.5 else "Düşük Volatilite")
-            atr_color = "#ef4444" if t.atr_pct > 3 else ("#f59e0b" if t.atr_pct > 1.5 else "#22c55e")
+            atr_color = "#9e2b25" if t.atr_pct > 3 else ("#a2701d" if t.atr_pct > 1.5 else "#1d6f4e")
             st.markdown(
                 f"ATR: **{t.atr:.2f} TL** &nbsp;|&nbsp; "
                 f"ATR%: <b style='color:{atr_color}'>{t.atr_pct:.2f}%</b> — {atr_label}  \n"
-                f"<span style='color:#94a3b8;font-size:12px'>Günlük beklenen hareket aralığı ±{t.atr:.2f} TL</span>",
+                f"<span style='color:#6b6357;font-size:12px'>Günlük beklenen hareket aralığı ±{t.atr:.2f} TL</span>",
                 unsafe_allow_html=True,
             )
         with c2:
             st.markdown("**52 Haftalık Pozisyon**")
             w52_pct = round(t.week52_position * 100)
             if t.week52_position <= 0.20:
-                w52_label, w52_color = "Yıllık Dibe Yakın — İdeal Alım Bölgesi", "#22c55e"
+                w52_label, w52_color = "Yıllık Dibe Yakın — İdeal Alım Bölgesi", "#1d6f4e"
             elif t.week52_position <= 0.50:
-                w52_label, w52_color = "Alt Yarı — Makul", "#86efac"
+                w52_label, w52_color = "Alt Yarı — Makul", "#3e8e6c"
             elif t.week52_position <= 0.80:
-                w52_label, w52_color = "Üst Yarı — Dikkatli Ol", "#f59e0b"
+                w52_label, w52_color = "Üst Yarı — Dikkatli Ol", "#a2701d"
             else:
-                w52_label, w52_color = "Yıllık Zirveye Yakın — Yüksek Risk", "#ef4444"
+                w52_label, w52_color = "Yıllık Zirveye Yakın — Yüksek Risk", "#9e2b25"
             st.markdown(
                 f"52H Düşük: **{t.week52_low:.2f} TL** &nbsp;|&nbsp; 52H Yüksek: **{t.week52_high:.2f} TL**  \n"
                 f"Pozisyon: <b style='color:{w52_color}'>{w52_pct}%</b> — {w52_label}",
@@ -9553,8 +9553,8 @@ def render_analysis_page(ui_lang):
             for item in wl.get_all():
                 ca, cb, cc = st.columns([2, 2, 1])
                 with ca:
-                    c = "#22c55e" if item.last_score >= 55 else \
-                        "#ef4444" if item.last_score < 40 else "#9ca3af"
+                    c = "#1d6f4e" if item.last_score >= 55 else \
+                        "#9e2b25" if item.last_score < 40 else "#6b6357"
                     st.markdown(
                         f"**{item.ticker}** — "
                         f"<span style='color:{c}'>{item.last_score:.0f}/100</span>",
@@ -9606,6 +9606,141 @@ def render_analysis_page(ui_lang):
         st.info("No news data available for this ticker.")
 
 
+_TR_AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+             "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+_TR_GUNLER = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+
+
+def render_kokpit_page(ui_lang):
+    """Piyasa Defteri — gazete manşeti tarzı tek bakış kokpiti.
+
+    Tasarım ilkesi: 'bugün ne yapmalıyım?' sorusuna 10 saniyede cevap.
+    Ağır indirme yok — rejim cache'i, tarama cache'i ve DB'den okur.
+    """
+    now = datetime.now()
+    tarih = f"{now.day} {_TR_AYLAR[now.month-1]} {now.year}, {_TR_GUNLER[now.weekday()]}"
+
+    # ---- MANŞET ----
+    regime = compute_market_regime()
+    st.markdown(
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
+        f"border-bottom:3px double #1a1712;padding-bottom:10px;margin-bottom:4px'>"
+        f"<span style=\"font-family:'Playfair Display',Georgia,serif;font-size:34px;"
+        f"font-weight:800;color:#1a1712\">Piyasa Defteri</span>"
+        f"<span style='font-family:\"Source Serif 4\",serif;font-style:italic;"
+        f"color:#6b6357;font-size:13px'>{tarih}</span>"
+        f"<span style='font-family:Inter,sans-serif;font-size:12px;font-weight:600;"
+        f"letter-spacing:1px;text-transform:uppercase;color:{regime['color']}'>"
+        f"● {regime['regime']} Piyasası — {regime['score']}/7</span></div>",
+        unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='font-family:Inter,sans-serif;font-size:11.5px;color:#6b6357;"
+        f"margin-bottom:16px'>{' · '.join(regime['detay'])}</div>",
+        unsafe_allow_html=True)
+
+    # ---- ALARMLAR (varsa manşetin hemen altında) ----
+    try:
+        alerts = PortfolioManager.unread_alerts()
+        if alerts:
+            st.markdown("#### 🚨 Dikkat Gerektirenler")
+            for a in alerts[:5]:
+                st.warning(a["mesaj"])
+            st.caption("Tümü ve 'okundu' işaretleme: Portföy Yöneticisi sayfasında.")
+    except Exception:
+        alerts = []
+
+    # ---- KPI ŞERİDİ: kullanıcı portföylerinin toplamı ----
+    try:
+        ports = [p for p in PortfolioManager.active_portfolios() if p.get("kind") != "golge"]
+        noms, reels, xrels = [], [], []
+        for p in ports:
+            perf = PortfolioManager.performance(p)
+            if perf["gun"] >= 0:
+                noms.append(perf["nominal"]); reels.append(perf["reel"]); xrels.append(perf["xu100_rel"])
+        c1, c2, c3, c4 = st.columns(4)
+        if noms:
+            c1.metric("Portföyler (ort. nominal)", f"%{np.mean(noms):+.1f}")
+            c2.metric("ENAG-Reel", f"%{np.mean(reels):+.1f}",
+                      help="Enflasyondan arındırılmış gerçek getiri")
+            c3.metric("XU100'e Göre", f"%{np.mean(xrels):+.1f}")
+        else:
+            c1.metric("Portföyler", "—")
+            c2.metric("ENAG-Reel", "—")
+            c3.metric("XU100'e Göre", "—")
+        c4.metric("İzlenen Portföy", f"{len(ports)} + gölge")
+    except Exception as exc:
+        log.warning("Kokpit KPI hatası: %s", exc)
+
+    st.markdown("---")
+    col_sol, col_sag = st.columns([3, 2])
+
+    # ---- SOL: BUGÜNÜN SİNYALLERİ (tarama cache'inden) ----
+    with col_sol:
+        st.markdown("### Günün Sinyalleri")
+        try:
+            scan = PortfolioScanner._load_cache() or []
+            iyi = sorted([r for r in scan if not r.error and r.data_rows >= 100],
+                         key=lambda r: r.score, reverse=True)
+            if iyi:
+                for r in iyi[:4] + iyi[-2:]:
+                    sig, renk = _score_to_signal(r.score)
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                        f"padding:7px 2px;border-bottom:1px solid #e4dccb;font-size:14px'>"
+                        f"<span><img src='{_logo_url(r.ticker)}' width='18' "
+                        f"style='vertical-align:middle;border-radius:4px;margin-right:8px'>"
+                        f"<b>{r.ticker}</b> <span style='color:#6b6357;font-size:12px'>"
+                        f"{_sector_of(r.ticker)}</span></span>"
+                        f"<span style='font-family:Inter,sans-serif'>₺{r.current_price:,.2f}</span>"
+                        f"<span style='font-family:Inter,sans-serif;font-size:11.5px;font-weight:600;"
+                        f"color:{renk}'>{sig} · {r.score:.0f}</span></div>",
+                        unsafe_allow_html=True)
+                st.caption("En güçlü 4 + en zayıf 2. Tam liste: BIST Listesi · Derin analiz: Hisse Analizi.")
+            else:
+                st.info("Henüz tarama verisi yok — Portföy Yöneticisi'nde 'Tara ve Portföy Öner' çalıştırınca burası dolar.")
+        except Exception as exc:
+            log.warning("Kokpit sinyal hatası: %s", exc)
+
+    # ---- SAĞ: SİSTEM DURUMU + ENAG ----
+    with col_sag:
+        st.markdown("### Sistem Durumu")
+        try:
+            rh = _PMDB.execute(
+                "SELECT date, regime, score FROM pm_regime_history ORDER BY date DESC LIMIT 1")["rows"]
+            robot_txt = (f"✓ son tur {rh[0]['date']}" if rh else "henüz koşmadı")
+        except Exception:
+            robot_txt = "—"
+        try:
+            golge_n = _PMDB.execute(
+                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND status='aktif'")["rows"][0]["c"]
+        except Exception:
+            golge_n = "—"
+        rates = InflationEngine.rates()
+        son_ay = sorted(rates.keys())[-1] if rates else "—"
+        son_enag = rates.get(son_ay, ("—",))[0]
+        satirlar = [
+            ("Günlük robot", robot_txt),
+            ("Gölge portföy", f"{golge_n} aktif izlemede"),
+            ("Depolama", "Turso bulut ✓" if _PMDB.is_cloud() else "lokal"),
+            ("Son ENAG", f"{son_ay}: aylık %{son_enag}"),
+            ("Skor sistemi", f"{SCORING_VERSION} (momentum, kalibre)"),
+        ]
+        for k, v in satirlar:
+            st.markdown(
+                f"<div style='display:flex;justify-content:space-between;padding:6px 2px;"
+                f"border-bottom:1px solid #e4dccb;font-size:13.5px'>"
+                f"<span style='color:#6b6357'>{k}</span>"
+                f"<span style='font-family:Inter,sans-serif;font-size:12.5px'>{v}</span></div>",
+                unsafe_allow_html=True)
+
+        st.markdown("### Kısayollar")
+        k1, k2 = st.columns(2)
+        if k1.button("📊 Portföy Yöneticisi", use_container_width=True):
+            st.session_state["nav_page"] = "Portfoy Yoneticisi"; st.rerun()
+        if k2.button("🔍 Hisse Analizi", use_container_width=True):
+            st.session_state["nav_page"] = "Hisse Analizi"; st.rerun()
+
+
 def render_portfolio_manager_page(ui_lang):
     """Portföy Yöneticisi — rejim analizi, vade×profil portföy önerisi, ENAG-reel performans defteri."""
     st.markdown("# " + ("Portföy Yöneticisi" if ui_lang == "TR" else "Portfolio Manager"))
@@ -9620,11 +9755,11 @@ def render_portfolio_manager_page(ui_lang):
     # 1) PİYASA REJİMİ BANDI
     regime = compute_market_regime()
     st.markdown(
-        f"<div style='background:#1e293b;border-left:6px solid {regime['color']};"
+        f"<div style='background:#efe9db;border-left:6px solid {regime['color']};"
         f"border-radius:8px;padding:12px 16px;margin:8px 0'>"
         f"<b style='color:{regime['color']};font-size:18px'>Piyasa Rejimi: {regime['regime']}"
         f" ({regime['score']}/7)</b><br>"
-        f"<span style='color:#94a3b8;font-size:13px'>{' • '.join(regime['detay'])}</span></div>",
+        f"<span style='color:#6b6357;font-size:13px'>{' • '.join(regime['detay'])}</span></div>",
         unsafe_allow_html=True,
     )
 
@@ -9715,10 +9850,10 @@ def render_portfolio_manager_page(ui_lang):
             _meta = _pm_meta("trend", profile)
 
         st.markdown(
-            f"<div style='background:#1e293b;border-radius:8px;padding:10px 14px;margin:6px 0'>"
+            f"<div style='background:#efe9db;border-radius:8px;padding:10px 14px;margin:6px 0'>"
             f"<b>{_meta['ikon']} {_meta['ad']}</b> — "
-            f"<span style='color:#94a3b8;font-size:13px'>{_meta['desc']}</span><br>"
-            f"<span style='color:#64748b;font-size:12px'>Profil: {PortfolioManager.PROFILES[profile]['aciklama']}</span></div>",
+            f"<span style='color:#6b6357;font-size:13px'>{_meta['desc']}</span><br>"
+            f"<span style='color:#8a8172;font-size:12px'>Profil: {PortfolioManager.PROFILES[profile]['aciklama']}</span></div>",
             unsafe_allow_html=True)
 
         if st.button("Tara ve Portföy Öner" if ui_lang == "TR" else "Scan & Propose",
@@ -9816,10 +9951,10 @@ def render_portfolio_manager_page(ui_lang):
             fig_cmp.add_trace(go.Scatter(
                 x=[d for d, _ in xs], y=[round(v / xu_base * 100, 2) for _, v in xs],
                 mode="lines", name="XU100 (endeks)",
-                line=dict(width=2, color="#94a3b8", dash="dash")))
+                line=dict(width=2, color="#6b6357", dash="dash")))
         fig_cmp.update_layout(
-            template="plotly_dark", height=430,
-            paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+            template="plotly_white", height=430,
+            paper_bgcolor="#f7f3ea", plot_bgcolor="#f7f3ea",
             yaxis_title="Değer (başlangıç = 100)",
             margin=dict(l=40, r=20, t=20, b=30),
             legend=dict(font=dict(size=10), orientation="h", y=-0.15),
@@ -9965,25 +10100,25 @@ def render_portfolio_manager_page(ui_lang):
             fig = go.Figure()
             for s in sec_stats:
                 x, y = s["3A Mom %"], s["1A Mom %"]
-                if x >= 0 and y >= 0:   color, quad = "#22c55e", "Lider"
-                elif x < 0 and y >= 0:  color, quad = "#3b82f6", "Toparlanan"
-                elif x >= 0 and y < 0:  color, quad = "#eab308", "Zayıflayan"
-                else:                   color, quad = "#ef4444", "Geride"
+                if x >= 0 and y >= 0:   color, quad = "#1d6f4e", "Lider"
+                elif x < 0 and y >= 0:  color, quad = "#27509e", "Toparlanan"
+                elif x >= 0 and y < 0:  color, quad = "#a2701d", "Zayıflayan"
+                else:                   color, quad = "#9e2b25", "Geride"
                 fig.add_trace(go.Scatter(
                     x=[x], y=[y], mode="markers+text",
                     marker=dict(size=10 + s["Hisse"] * 2, color=color, opacity=0.85),
                     text=[s["Sektör"]], textposition="top center",
-                    textfont=dict(size=11, color="#e2e8f0"),
+                    textfont=dict(size=11, color="#1a1712"),
                     name=quad, showlegend=False,
                     hovertemplate=f"{s['Sektör']}<br>3A: %{{x}}<br>1A: %{{y}}<br>"
                                   f"Skor: {s['Ort. Skor']}<extra></extra>",
                 ))
-            fig.add_hline(y=0, line_color="#475569", line_width=1)
-            fig.add_vline(x=0, line_color="#475569", line_width=1)
+            fig.add_hline(y=0, line_color="#b8ae9a", line_width=1)
+            fig.add_vline(x=0, line_color="#b8ae9a", line_width=1)
             fig.update_layout(
-                template="plotly_dark", height=420,
+                template="plotly_white", height=420,
                 xaxis_title="3 Aylık Momentum %", yaxis_title="1 Aylık Momentum %",
-                paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+                paper_bgcolor="#f7f3ea", plot_bgcolor="#f7f3ea",
                 margin=dict(l=40, r=20, t=30, b=40),
                 title="Sektör Rotasyon Haritası — sağ üst köşe güçlü",
             )
@@ -10154,14 +10289,73 @@ def display_sidebar_alerts(ui_lang):
                 _history_db.mark_alerts_read([a["id"] for a in unread])
                 st.rerun()
 
+def _inject_gazete_css():
+    """'Gazete' tasarım kimliği — fildişi zemin, serif başlıklar, bordo vurgu.
+
+    Palet: zemin #f7f3ea · panel #efe9db · çizgi #d8d0c0 · mürekkep #1a1712
+           soluk #6b6357 · yeşil #1d6f4e · bordo #9e2b25 · lacivert #27509e
+    Başlıklar Playfair Display, gövde Source Serif 4, veri/etiket Inter.
+    """
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600;700&display=swap');
+
+    html, body, .stApp, [data-testid="stAppViewContainer"] {
+        font-family: 'Source Serif 4', Georgia, serif;
+    }
+    /* Manşet: çift çizgili gazete başlığı */
+    h1 {
+        font-family: 'Playfair Display', Georgia, serif !important;
+        border-bottom: 3px double #1a1712;
+        padding-bottom: .35rem;
+        letter-spacing: -0.01em;
+    }
+    h2, h3, h4 { font-family: 'Playfair Display', Georgia, serif !important; }
+
+    /* Metrikler: tabular rakamlar, gazete etiketi */
+    [data-testid="stMetricValue"] {
+        font-family: Inter, sans-serif; font-variant-numeric: tabular-nums;
+    }
+    [data-testid="stMetricLabel"] {
+        font-family: Inter, sans-serif; text-transform: uppercase;
+        letter-spacing: .08em; font-size: .72rem; color: #6b6357;
+    }
+
+    /* Kenar çubuğu ve paneller */
+    [data-testid="stSidebar"] { background: #efe9db; border-right: 1px solid #d8d0c0; }
+    div[data-testid="stExpander"] {
+        border: 1px solid #d8d0c0 !important; border-radius: 4px; background: #fdfbf5;
+    }
+    div[data-testid="stExpander"] summary { font-family: Inter, sans-serif; }
+
+    /* Tablolar ve butonlar: Inter, ince çerçeve */
+    div[data-testid="stDataFrame"] { border: 1px solid #d8d0c0; }
+    div[data-testid="stDataFrame"] * { font-family: Inter, sans-serif; }
+    .stButton>button, .stDownloadButton>button {
+        font-family: Inter, sans-serif; border: 1px solid #1a1712;
+        border-radius: 3px; background: #f7f3ea; color: #1a1712;
+    }
+    .stButton>button:hover { background: #1a1712; color: #f7f3ea; border-color: #1a1712; }
+    .stButton>button[kind="primary"], .stButton>button[data-testid="baseButton-primary"] {
+        background: #9e2b25; color: #fdfbf5; border-color: #9e2b25;
+    }
+    .stTabs [data-baseweb="tab"] { font-family: Inter, sans-serif; }
+    .stTabs [aria-selected="true"] { color: #9e2b25 !important; }
+    .stRadio label, .stSelectbox label, .stCheckbox label, .stTextInput label,
+    .stNumberInput label { font-family: Inter, sans-serif; }
+    hr { border-color: #d8d0c0 !important; }
+    [data-testid="stCaptionContainer"] { color: #6b6357; }
+    </style>
+    """, unsafe_allow_html=True)
+
+
 def run_app():
     st.set_page_config(
-        page_title="BIST Smart Investment Platform",
-        page_icon="B", layout="wide",
+        page_title="Piyasa Defteri — BIST Akıllı Yatırım",
+        page_icon="📰", layout="wide",
         initial_sidebar_state="expanded",
     )
-    st.markdown("""
-    """, unsafe_allow_html=True)
+    _inject_gazete_css()
 
     # Uygulama açılışında bekleyen sinyalleri otomatik kontrol et (1 kez)
     if "validation_checked" not in st.session_state:
@@ -10193,13 +10387,13 @@ def run_app():
             orientation="horizontal",
             key="market_selector",
             styles={
-                "container":         {"padding": "0!important", "background-color": "#1e293b",
+                "container":         {"padding": "0!important", "background-color": "#efe9db",
                                       "border-radius": "10px", "margin-bottom": "0.5rem"},
                 "icon":              {"font-size": "18px"},
                 "nav-link":          {"font-size": "15px", "text-align": "center",
-                                      "margin": "0px", "color": "#94a3b8",
-                                      "--hover-color": "#334155", "padding": "10px 20px"},
-                "nav-link-selected": {"background-color": "#3b82f6", "color": "#ffffff",
+                                      "margin": "0px", "color": "#6b6357",
+                                      "--hover-color": "#d8d0c0", "padding": "10px 20px"},
+                "nav-link-selected": {"background-color": "#27509e", "color": "#ffffff",
                                       "border-radius": "8px", "font-weight": "700"},
             },
         )
@@ -10227,16 +10421,16 @@ def run_app():
 
         if active_market == "BIST":
             pages = [
-                "Piyasa Ozeti", "Portfoy Yoneticisi", "BIST Listesi", "Hisse Analizi",
+                "Kokpit", "Piyasa Ozeti", "Portfoy Yoneticisi", "BIST Listesi", "Hisse Analizi",
                 "Portfolyum", "Backtest", "Sistem Portfolyleri",
                 "Sinyal Takip",
             ]
             page_icons = [
-                "speedometer2", "wallet2", "list-ul", "search",
+                "newspaper", "speedometer2", "wallet2", "list-ul", "search",
                 "briefcase", "clock-history", "robot",
                 "graph-up-arrow",
             ]
-            _default_page = "Hisse Analizi"
+            _default_page = "Kokpit"
         else:  # US
             pages = [
                 "US Analiz", "US Backtest",
@@ -10274,12 +10468,12 @@ def run_app():
                 default_index=default_idx,
                 key=f"nav_option_menu_{active_market}{_nav_key_suffix}",
                 styles={
-                    "container":             {"padding": "0!important", "background-color": "#1e293b"},
-                    "icon":                  {"color": "#60a5fa", "font-size": "16px"},
+                    "container":             {"padding": "0!important", "background-color": "#efe9db"},
+                    "icon":                  {"color": "#27509e", "font-size": "16px"},
                     "nav-link":              {"font-size": "14px", "text-align": "left",
-                                              "margin": "0px", "color": "#e2e8f0",
-                                              "--hover-color": "#334155"},
-                    "nav-link-selected":     {"background-color": "#3b82f6", "color": "#ffffff"},
+                                              "margin": "0px", "color": "#1a1712",
+                                              "--hover-color": "#d8d0c0"},
+                    "nav-link-selected":     {"background-color": "#27509e", "color": "#ffffff"},
                 },
             )
             st.session_state["nav_radio"] = page
@@ -10296,8 +10490,8 @@ def run_app():
         st.markdown("---")
         # Global Disclaimer
         st.markdown(
-            "<div style='background:#1a1a2e;border:1px solid #f97316;border-radius:8px;"
-            "padding:8px 12px;margin-top:8px;font-size:11px;color:#f97316;text-align:center'>"
+            "<div style='background:#1a1a2e;border:1px solid #b45309;border-radius:8px;"
+            "padding:8px 12px;margin-top:8px;font-size:11px;color:#b45309;text-align:center'>"
             + (
                 "⚠️ Bu uygulama <b>yatırım tavsiyesi</b> niteliğinde değildir. "
                 "Tüm kararlar kullanıcının sorumluluğundadır."
@@ -10327,7 +10521,9 @@ def run_app():
                 st.code(traceback.format_exc(), language="python")
 
     if active_market == "BIST":
-        if page == "Piyasa Ozeti":
+        if page == "Kokpit":
+            _safe_render(render_kokpit_page, ui_lang)
+        elif page == "Piyasa Ozeti":
             _safe_render(render_dashboard_page, ui_lang)
         elif page == "Portfoy Yoneticisi":
             _safe_render(render_portfolio_manager_page, ui_lang)

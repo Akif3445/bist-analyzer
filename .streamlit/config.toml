@@ -1,9 +1,11 @@
 [theme]
-primaryColor = "#3b82f6"
-backgroundColor = "#0f172a"
-secondaryBackgroundColor = "#1e293b"
-textColor = "#e2e8f0"
-font = "sans serif"
+# "Gazete" teması — fildişi zemin, bordo vurgu (2026-07 arayüz yenilemesi)
+base = "light"
+primaryColor = "#9e2b25"
+backgroundColor = "#f7f3ea"
+secondaryBackgroundColor = "#efe9db"
+textColor = "#1a1712"
+font = "serif"
 
 [server]
 headless = true
