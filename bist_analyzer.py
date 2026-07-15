@@ -3088,6 +3088,96 @@ def _with_logo_col(df: pd.DataFrame, ticker_col: str = "Hisse") -> pd.DataFrame:
 _LOGO_COL_CFG = {"Logo": st.column_config.ImageColumn("", width="small")}
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _price_snapshot(tickers: tuple) -> dict:
+    """Pozisyon tabloları için güncel fiyat + günlük/aylık değişim (5 dk cache).
+
+    Dönüş: {ticker: {"son": float, "gun_pct": float, "ay_pct": float}}
+    """
+    out = {}
+    if not tickers:
+        return out
+    try:
+        syms = [t + ".IS" for t in tickers]
+        bulk = yf.download(syms, period="2mo", interval="1d",
+                           auto_adjust=True, progress=False, group_by="ticker")
+        for t in tickers:
+            try:
+                s = t + ".IS"
+                cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
+                if len(cl) < 2:
+                    continue
+                son  = float(cl.iloc[-1])
+                gun  = (son / float(cl.iloc[-2]) - 1) * 100
+                ay_i = max(0, len(cl) - 22)
+                ay   = (son / float(cl.iloc[ay_i]) - 1) * 100
+                out[t] = {"son": round(son, 2), "gun_pct": round(gun, 2), "ay_pct": round(ay, 2)}
+            except Exception:
+                continue
+    except Exception as exc:
+        log.warning("Fiyat anlık görüntüsü hatası: %s", exc)
+    return out
+
+
+def _render_position_table(pos: list):
+    """Pozisyon tablosu: logo + güncel fiyat + günlük/aylık/girişten değişim (renkli)."""
+    if not pos:
+        st.info("Pozisyon kaydı yok.")
+        return
+    t = _theme()
+    snap = _price_snapshot(tuple(sorted({x["ticker"] for x in pos})))
+    rows = []
+    for x in pos:
+        s = snap.get(x["ticker"], {})
+        son = s.get("son")
+        giris = x["entry_price"]
+        rows.append({
+            "Logo": _logo_url(x["ticker"]),
+            "Hisse": x["ticker"],
+            "Sektör": _sector_of(x["ticker"]),
+            "Giriş": round(giris, 2),
+            "Güncel": son,
+            "Girişten %": round((son / giris - 1) * 100, 2) if son and giris else None,
+            "Günlük %": s.get("gun_pct"),
+            "Aylık %": s.get("ay_pct"),
+            "Ağırlık %": x["weight"],
+            "Stop": x["stop_price"],
+            "Hedef": x["target_price"],
+        })
+    df = pd.DataFrame(rows)
+
+    def _renk(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        return f"color: {t['up']}" if v > 0 else (f"color: {t['down']}" if v < 0 else "")
+
+    styled = df.style.map(_renk, subset=["Girişten %", "Günlük %", "Aylık %"]) \
+                     .format({c: "{:+.2f}" for c in ["Girişten %", "Günlük %", "Aylık %"]},
+                             na_rep="—") \
+                     .format({c: "{:.2f}" for c in ["Giriş", "Güncel", "Stop", "Hedef"]}, na_rep="—")
+    st.dataframe(styled, use_container_width=True, hide_index=True,
+                 column_config=_LOGO_COL_CFG)
+
+
+# Strateji rozetleri — emoji yerine hisse logolarıyla aynı dilde SVG rozet
+_HORIZON_HUE = {"kisa": "#b45309", "orta": "#27509e", "uzun": "#1d6f4e",
+                "sektor": "#6d3f8e", "trend": "#a2701d"}
+
+
+def _strategy_badge_uri(horizon: str, profile: str) -> str:
+    """Vade rengi + profil harfli yuvarlak köşeli SVG rozet (data URI)."""
+    h = horizon.split(":")[0]
+    renk = _HORIZON_HUE.get(h, "#6b6357")
+    kisaltma = {"kisa": "K", "orta": "O", "uzun": "U", "sektor": "S", "trend": "T"}.get(h, "?")
+    harf = (profile or "?")[0].upper()
+    from urllib.parse import quote as _q
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>"
+           f"<rect width='64' height='64' rx='16' fill='{renk}'/>"
+           f"<text x='32' y='42' font-size='24' font-family='Georgia,serif' font-weight='bold' "
+           f"fill='white' text-anchor='middle'>{kisaltma}{harf}</text></svg>")
+    return "data:image/svg+xml;utf8," + _q(svg)
+
+
 class PortfolioManager:
     """Vade × yatırımcı profili matrisinden portföy önerir, kaydeder, izler.
 
@@ -9889,9 +9979,9 @@ def render_kokpit_page(ui_lang):
 
         st.markdown("### Kısayollar")
         k1, k2 = st.columns(2)
-        if k1.button("📊 Portföy Yöneticisi", use_container_width=True):
+        if k1.button("Portföy Yöneticisi →", use_container_width=True):
             st.session_state["nav_page"] = "Portfoy Yoneticisi"; st.rerun()
-        if k2.button("🔍 Hisse Analizi", use_container_width=True):
+        if k2.button("Hisse Analizi →", use_container_width=True):
             st.session_state["nav_page"] = "Hisse Analizi"; st.rerun()
 
 
@@ -9946,7 +10036,7 @@ def render_portfolio_manager_page(ui_lang):
                     _scan = PortfolioScanner.scan_all()
                     _n = PortfolioManager.ensure_shadow_batch(regime, _scan)
                 if _n:
-                    st.toast(f"👻 {_n} gölge portföy kaydedildi ({_week})")
+                    st.toast(f"{_n} gölge portföy kaydedildi ({_week})")
             PortfolioManager.auto_archive_shadows()
             PortfolioManager.snapshot_tv_targets()  # haftalık analist hedef arşivi
         except Exception as exc:
@@ -10005,7 +10095,7 @@ def render_portfolio_manager_page(ui_lang):
 
         st.markdown(
             f"<div style='background:#efe9db;border-radius:8px;padding:10px 14px;margin:6px 0'>"
-            f"<b>{_meta['ikon']} {_meta['ad']}</b> — "
+            f"<img src='{_strategy_badge_uri(horizon, profile)}' width='26' style='vertical-align:middle;border-radius:7px;margin-right:8px'><b>{_meta['ad']}</b> — "
             f"<span style='color:#6b6357;font-size:13px'>{_meta['desc']}</span><br>"
             f"<span style='color:#8a8172;font-size:12px'>Profil: {PortfolioManager.PROFILES[profile]['aciklama']}</span></div>",
             unsafe_allow_html=True)
@@ -10067,7 +10157,7 @@ def render_portfolio_manager_page(ui_lang):
         _poss_all  = PortfolioManager.positions_all(_pids)
 
         # KARŞILAŞTIRMA GRAFİĞİ — tüm portföyler tek grafikte
-        st.markdown("### 📈 " + ("Portföy Karşılaştırma" if ui_lang == "TR" else "Portfolio Comparison"))
+        st.markdown("### " + ("Portföy Karşılaştırma" if ui_lang == "TR" else "Portfolio Comparison"))
         gc1, gc2 = st.columns([3, 2])
         with gc1:
             range_label = st.radio("Aralık" if ui_lang == "TR" else "Range",
@@ -10132,7 +10222,7 @@ def render_portfolio_manager_page(ui_lang):
         for p in ports:
             perf = _perfs_all[p["id"]]
             _m = _pm_meta(p["horizon"], p["profile"])
-            with st.expander(f"{_m['ikon']} {p['name']}  ({p['horizon']} / {p['profile']} / "
+            with st.expander(f"{_m['ad']} — {p['name']}  ({p['horizon']} / {p['profile']} / "
                              f"{p['created_at'][:10]} / başlangıç rejimi: {p.get('regime_at_start','?')})",
                              expanded=True):
                 st.caption(f"**{_m['ad']}** — {_m['desc']}")
@@ -10149,13 +10239,7 @@ def render_portfolio_manager_page(ui_lang):
                     chart = nav_df.set_index("date")[["nav"]].rename(columns={"nav": "Portföy (100 baz)"})
                     st.line_chart(chart, height=200)
 
-                pos_df = pd.DataFrame(_poss_all.get(p["id"], []))
-                if not pos_df.empty:
-                    pos_df = pos_df[["ticker", "entry_price", "weight", "stop_price", "target_price"]]
-                    pos_df.columns = ["Hisse", "Giriş", "Ağırlık %", "Stop", "Hedef"]
-                    pos_df = _with_logo_col(pos_df)
-                    st.dataframe(pos_df, use_container_width=True, hide_index=True,
-                                 column_config=_LOGO_COL_CFG)
+                _render_position_table(_poss_all.get(p["id"], []))
 
                 rc1, rc2 = st.columns(2)
                 with rc1:
@@ -10181,7 +10265,7 @@ def render_portfolio_manager_page(ui_lang):
 
         # GÖLGE PORTFÖYLER — sistemin otomatik "ne olurdu?" kayıtları
         st.markdown("---")
-        st.markdown("### 👻 " + ("Gölge Portföyler — sistemin otomatik kayıtları"
+        st.markdown("### " + ("Gölge Portföyler — sistemin otomatik kayıtları"
                                  if ui_lang == "TR" else "Shadow Portfolios — auto-tracked"))
         st.caption(
             "Sistem her hafta 9 kombinasyonun (3 vade × 3 profil) önerisini kendiliğinden "
@@ -10200,7 +10284,8 @@ def render_portfolio_manager_page(ui_lang):
                 perf = _perfs_all[p["id"]]
                 _m = _pm_meta(p["horizon"], p["profile"])
                 srows.append({
-                    "Portföy": f"{_m['ikon']} {_m['ad']} — {p['name'].split(' ')[-1]}",
+                    "Rozet": _strategy_badge_uri(p["horizon"], p["profile"]),
+                    "Portföy": f"{_m['ad']} — {p['name'].split(' ')[-1]}",
                     "Strateji": f"{p['horizon']}/{p['profile']}",
                     "Gün": perf["gun"],
                     "Nominal %": perf["nominal"],
@@ -10208,18 +10293,18 @@ def render_portfolio_manager_page(ui_lang):
                     "XU100'e Göre %": perf["xu100_rel"],
                 })
             sdf_shadow = pd.DataFrame(srows).sort_values("ENAG-Reel %", ascending=False)
-            st.dataframe(sdf_shadow, use_container_width=True, hide_index=True)
+            st.dataframe(sdf_shadow, use_container_width=True, hide_index=True, column_config={"Rozet": st.column_config.ImageColumn("", width="small")})
 
         # PORTFÖY İÇERİK GÖRÜNTÜLEYİCİ — gölge dahil her portföyün içine bak
         st.markdown("---")
-        st.markdown("### 🔎 " + ("Portföy İçeriği Görüntüle" if ui_lang == "TR" else "Inspect Portfolio Contents"))
+        st.markdown("### " + ("Portföy İçeriği Görüntüle" if ui_lang == "TR" else "Inspect Portfolio Contents"))
         _tum = PortfolioManager.all_portfolios()   # aktif + arşiv, kullanıcı + gölge
         if _tum:
             def _plabel(p):
                 _mi = _pm_meta(p["horizon"], p["profile"])
                 durum = "" if p.get("status") == "aktif" else " · arşiv"
-                tip = " 👻" if p.get("kind") == "golge" else ""
-                return f"{_mi['ikon']} {p['name']}{tip}{durum}"
+                tip = " (gölge)" if p.get("kind") == "golge" else ""
+                return f"{_mi['ad']} — {p['name']}{tip}{durum}"
             _sec = st.selectbox(
                 "Portföy seç" if ui_lang == "TR" else "Select portfolio",
                 options=list(range(len(_tum))),
@@ -10244,22 +10329,14 @@ def render_portfolio_manager_page(ui_lang):
             i3.metric("XU100'e Göre", f"%{_pf['xu100_rel']:+.1f}")
             i4.metric("Gün", _pf["gun"])
 
-            if _pos:
-                _pdf = pd.DataFrame(_pos)[["ticker", "entry_price", "weight", "stop_price", "target_price"]]
-                _pdf.columns = ["Hisse", "Giriş", "Ağırlık %", "Stop", "Hedef"]
-                _pdf.insert(2, "Sektör", _pdf["Hisse"].map(_sector_of))
-                _pdf = _with_logo_col(_pdf)
-                st.dataframe(_pdf, use_container_width=True, hide_index=True,
-                             column_config=_LOGO_COL_CFG)
-            else:
-                st.info("Bu portföyün pozisyon kaydı bulunamadı.")
+            _render_position_table(_pos)
             if _nav is not None and len(_nav) >= 2:
                 st.line_chart(_nav.set_index("date")[["nav"]]
                               .rename(columns={"nav": "Değer (100 baz)"}), height=180)
 
         score_df = PortfolioManager.shadow_scoreboard()
         if not score_df.empty:
-            st.markdown("#### 🏆 " + ("Kombinasyon Karnesi (tüm gölge geçmişi)"
+            st.markdown("#### " + ("Kombinasyon Karnesi (tüm gölge geçmişi)"
                                       if ui_lang == "TR" else "Combination Scoreboard"))
             score_df = score_df.rename(columns={
                 "Portfoy": "Portföy Sayısı", "Ort_Nominal": "Ort. Nominal %",
