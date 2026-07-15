@@ -2648,6 +2648,15 @@ class _PMDB:
     _cfg_checked = False
     _url = None
     _token = None
+    _http = None   # kalıcı bağlantı (TLS bir kez kurulur — sorgu başına ~600ms → ~100ms)
+
+    @staticmethod
+    def _session():
+        if _PMDB._http is None:
+            s = requests.Session()
+            s.headers.update({"Content-Type": "application/json"})
+            _PMDB._http = s
+        return _PMDB._http
 
     @staticmethod
     def _cfg():
@@ -2706,8 +2715,8 @@ class _PMDB:
                          "stmt": {"sql": s, "args": [_PMDB._arg(a) for a in args]}}
                         for s, args in stmts]
                 reqs.append({"type": "close"})
-                r = requests.post(url, json={"requests": reqs},
-                                  headers={"Authorization": f"Bearer {tok}"}, timeout=20)
+                r = _PMDB._session().post(url, json={"requests": reqs},
+                                          headers={"Authorization": f"Bearer {tok}"}, timeout=20)
                 r.raise_for_status()
                 out = []
                 for res in r.json()["results"][:len(stmts)]:
@@ -3300,12 +3309,8 @@ class PortfolioManager:
         if not ports:
             return
         today = datetime.now().strftime("%Y-%m-%d")
-        all_tickers = set()
-        pos_map = {}
-        for p in ports:
-            pos = PortfolioManager.positions(p["id"])
-            pos_map[p["id"]] = pos
-            all_tickers.update(x["ticker"] for x in pos)
+        pos_map = PortfolioManager.positions_all([p["id"] for p in ports])
+        all_tickers = {x["ticker"] for pos in pos_map.values() for x in pos}
         if not all_tickers:
             return
         try:
@@ -3344,6 +3349,65 @@ class PortfolioManager:
         rows = _PMDB.execute(
             "SELECT date, nav, xu100_close FROM pm_nav WHERE pid=? ORDER BY date", (pid,))["rows"]
         return pd.DataFrame(rows, columns=["date", "nav", "xu100_close"])
+
+    # TOPLU OKUMALAR — sayfa yüklemesinde portföy başına ayrı sorgu yerine
+    # tek yolculuk (Turso'da her sorgu bir HTTP turu: 14 tur ~25 sn sürüyordu).
+    # Veri yine her seferinde taze çekilir — önbellek yok, tazelik kaybı yok.
+
+    @staticmethod
+    def nav_histories(pids: list) -> dict:
+        """Tüm portföylerin NAV geçmişi TEK sorguda: {pid: DataFrame}."""
+        if not pids:
+            return {}
+        ph = ",".join("?" * len(pids))
+        rows = _PMDB.execute(
+            f"SELECT pid, date, nav, xu100_close FROM pm_nav WHERE pid IN ({ph}) ORDER BY pid, date",
+            tuple(pids))["rows"]
+        out = {pid: [] for pid in pids}
+        for r in rows:
+            out[r["pid"]].append(r)
+        return {pid: pd.DataFrame(rs, columns=["pid", "date", "nav", "xu100_close"])
+                     .drop(columns=["pid"]) if rs else
+                     pd.DataFrame(columns=["date", "nav", "xu100_close"])
+                for pid, rs in out.items()}
+
+    @staticmethod
+    def positions_all(pids: list) -> dict:
+        """Tüm portföylerin pozisyonları TEK sorguda: {pid: [pozisyon, ...]}."""
+        if not pids:
+            return {}
+        ph = ",".join("?" * len(pids))
+        rows = _PMDB.execute(
+            f"SELECT * FROM pm_positions WHERE pid IN ({ph})", tuple(pids))["rows"]
+        out = {pid: [] for pid in pids}
+        for r in rows:
+            out[r["pid"]].append(r)
+        return out
+
+    @staticmethod
+    def _perf_from_nav(p: dict, df: pd.DataFrame) -> dict:
+        """performance() ile aynı hesap — hazır NAV verisiyle (ek sorgu yok)."""
+        out = {"nominal": 0.0, "reel": 0.0, "xu100_rel": 0.0, "gun": 0}
+        if len(df) < 1:
+            return out
+        start = p["created_at"][:10]
+        end   = df["date"].iloc[-1]
+        nominal = float(df["nav"].iloc[-1]) - 100.0
+        out["nominal"] = round(nominal, 2)
+        out["reel"]    = InflationEngine.real_return(nominal, start, end)
+        out["gun"]     = (datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(start, "%Y-%m-%d")).days
+        xu0 = float(df["xu100_close"].iloc[0]) if len(df) and float(df["xu100_close"].iloc[0] or 0) > 0 else 0
+        xu1 = float(df["xu100_close"].iloc[-1] or 0)
+        if xu0 > 0 and xu1 > 0:
+            out["xu100_rel"] = round(nominal - (xu1 / xu0 - 1) * 100, 2)
+        return out
+
+    @staticmethod
+    def performances(ports: list) -> dict:
+        """Tüm portföylerin performansı tek NAV sorgusuyla: {pid: perf}."""
+        navs = PortfolioManager.nav_histories([p["id"] for p in ports])
+        return {p["id"]: PortfolioManager._perf_from_nav(p, navs.get(p["id"], pd.DataFrame()))
+                for p in ports}
 
     @staticmethod
     def performance(p: dict) -> dict:
@@ -3399,11 +3463,15 @@ class PortfolioManager:
         ports = PortfolioManager.active_portfolios()
         if not ports:
             return []
-        all_tickers, pos_map = set(), {}
-        for p in ports:
-            pos = PortfolioManager.positions(p["id"])
-            pos_map[p["id"]] = pos
-            all_tickers.update(x["ticker"] for x in pos)
+        pos_map = PortfolioManager.positions_all([p["id"] for p in ports])
+        all_tickers = {x["ticker"] for pos in pos_map.values() for x in pos}
+        # Son 7 günün alarmları TEK sorguda (pozisyon başına ayrı sorgu yerine)
+        _cutoff7 = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        _recent = {(r["pid"], r["ticker"], r["tip"])
+                   for r in _PMDB.execute(
+                       "SELECT pid, ticker, tip FROM pm_alerts WHERE created_at >= ?",
+                       (_cutoff7,))["rows"]}
+        nav_map = PortfolioManager.nav_histories([p["id"] for p in ports])
         # Güncel fiyatlar (tek toplu indirme)
         price = {}
         try:
@@ -3431,20 +3499,20 @@ class PortfolioManager:
                 t, cur = x["ticker"], price.get(x["ticker"])
                 if not cur:
                     continue
-                if x["stop_price"] and cur <= x["stop_price"] and not PortfolioManager._recent_alert_exists(p["id"], t, "STOP"):
+                if x["stop_price"] and cur <= x["stop_price"] and (p["id"], t, "STOP") not in _recent:
                     new_alerts.append((now, p["id"], t, "STOP",
                         f"🔴 {t}: stop kesildi ({cur:.2f} ≤ {x['stop_price']:.2f}) — '{p['name']}'{golge}. Zararı büyütmemek için çıkış değerlendirilmeli."))
-                elif x["target_price"] and cur >= x["target_price"] and not PortfolioManager._recent_alert_exists(p["id"], t, "HEDEF"):
+                elif x["target_price"] and cur >= x["target_price"] and (p["id"], t, "HEDEF") not in _recent:
                     new_alerts.append((now, p["id"], t, "HEDEF",
                         f"🟡 {t}: hedef fiyata ulaşıldı ({cur:.2f} ≥ {x['target_price']:.2f}) — '{p['name']}'{golge}. Kısmi kâr alma düşünülebilir."))
             # 2) Portföy freni: tepe NAV'dan düşüş profil limitini aşarsa
-            nav = PortfolioManager.nav_history(p["id"])
+            nav = nav_map.get(p["id"], pd.DataFrame())
             if len(nav) >= 2:
                 peak = float(nav["nav"].max())
                 last = float(nav["nav"].iloc[-1])
                 dd = (peak - last) / peak * 100 if peak > 0 else 0
                 limit = PortfolioManager.DRAWDOWN_LIMITS.get(p["profile"], 10.0)
-                if dd >= limit and not PortfolioManager._recent_alert_exists(p["id"], "*", "FREN"):
+                if dd >= limit and (p["id"], "*", "FREN") not in _recent:
                     new_alerts.append((now, p["id"], "*", "FREN",
                         f"⛔ '{p['name']}'{golge}: tepe değerden %{dd:.1f} düşüş ({p['profile']} limiti %{limit:.0f}). "
                         f"Tüm pozisyonları gözden geçir — rejim değişmiş olabilir."))
@@ -3562,10 +3630,10 @@ class PortfolioManager:
         """Kombinasyon karnesi: tüm gölge portföylerin (aktif+arşiv) ortalama
         nominal/reel/XU100-göreli getirisi, vade×profil bazında."""
         rows = []
-        for p in PortfolioManager.all_portfolios():
-            if p.get("kind") != "golge":
-                continue
-            perf = PortfolioManager.performance(p)
+        _golge = [p for p in PortfolioManager.all_portfolios() if p.get("kind") == "golge"]
+        _perfs = PortfolioManager.performances(_golge)
+        for p in _golge:
+            perf = _perfs[p["id"]]
             if perf["gun"] < 1:
                 continue
             rows.append({"Vade": p["horizon"], "Profil": p["profile"],
@@ -9655,8 +9723,9 @@ def render_kokpit_page(ui_lang):
     try:
         ports = [p for p in PortfolioManager.active_portfolios() if p.get("kind") != "golge"]
         noms, reels, xrels = [], [], []
+        _kperfs = PortfolioManager.performances(ports)
         for p in ports:
-            perf = PortfolioManager.performance(p)
+            perf = _kperfs[p["id"]]
             if perf["gun"] >= 0:
                 noms.append(perf["nominal"]); reels.append(perf["reel"]); xrels.append(perf["xu100_rel"])
         c1, c2, c3, c4 = st.columns(4)
@@ -9907,6 +9976,12 @@ def render_portfolio_manager_page(ui_lang):
         _all_active = PortfolioManager.active_portfolios()
         ports    = [p for p in _all_active if p.get("kind") != "golge"]
         shadows  = [p for p in _all_active if p.get("kind") == "golge"]
+        # Toplu okumalar: 13 portfoy icin ~28 sorgu yerine 3 sorgu (taze veri, cache yok)
+        _pids      = [p["id"] for p in _all_active]
+        _navs_all  = PortfolioManager.nav_histories(_pids)
+        _perfs_all = {p["id"]: PortfolioManager._perf_from_nav(p, _navs_all.get(p["id"], pd.DataFrame()))
+                      for p in _all_active}
+        _poss_all  = PortfolioManager.positions_all(_pids)
 
         # KARŞILAŞTIRMA GRAFİĞİ — tüm portföyler tek grafikte
         st.markdown("### 📈 " + ("Portföy Karşılaştırma" if ui_lang == "TR" else "Portfolio Comparison"))
@@ -9926,8 +10001,8 @@ def render_portfolio_manager_page(ui_lang):
         xu_series = {}   # tarih -> xu100 (benchmark için tüm portföylerden topla)
         _total_pts = 0
         for p in _chart_ports:
-            nav = PortfolioManager.nav_history(p["id"])
-            nav = nav[nav["date"] >= _cutoff]
+            nav = _navs_all.get(p["id"], pd.DataFrame())
+            nav = nav[nav["date"] >= _cutoff] if len(nav) else nav
             if nav.empty:
                 continue
             base = float(nav["nav"].iloc[0])
@@ -9972,7 +10047,7 @@ def render_portfolio_manager_page(ui_lang):
             st.info("Henüz kayıtlı portföy yok. 'Yeni Portföy Öner' sekmesinden oluşturun. "
                     "(Sistemin otomatik kayıtları aşağıdaki Gölge Portföyler bölümünde.)")
         for p in ports:
-            perf = PortfolioManager.performance(p)
+            perf = _perfs_all[p["id"]]
             _m = _pm_meta(p["horizon"], p["profile"])
             with st.expander(f"{_m['ikon']} {p['name']}  ({p['horizon']} / {p['profile']} / "
                              f"{p['created_at'][:10]} / başlangıç rejimi: {p.get('regime_at_start','?')})",
@@ -9986,12 +10061,12 @@ def render_portfolio_manager_page(ui_lang):
                           help="Endeksi yendiyseniz pozitif")
                 m4.metric("Gün", perf["gun"])
 
-                nav_df = PortfolioManager.nav_history(p["id"])
+                nav_df = _navs_all.get(p["id"], pd.DataFrame())
                 if len(nav_df) >= 2:
                     chart = nav_df.set_index("date")[["nav"]].rename(columns={"nav": "Portföy (100 baz)"})
                     st.line_chart(chart, height=200)
 
-                pos_df = pd.DataFrame(PortfolioManager.positions(p["id"]))
+                pos_df = pd.DataFrame(_poss_all.get(p["id"], []))
                 if not pos_df.empty:
                     pos_df = pos_df[["ticker", "entry_price", "weight", "stop_price", "target_price"]]
                     pos_df.columns = ["Hisse", "Giriş", "Ağırlık %", "Stop", "Hedef"]
@@ -10039,7 +10114,7 @@ def render_portfolio_manager_page(ui_lang):
         else:
             srows = []
             for p in shadows:
-                perf = PortfolioManager.performance(p)
+                perf = _perfs_all[p["id"]]
                 _m = _pm_meta(p["horizon"], p["profile"])
                 srows.append({
                     "Portföy": f"{_m['ikon']} {_m['ad']} — {p['name'].split(' ')[-1]}",
@@ -10419,14 +10494,24 @@ def run_app():
     except Exception:
         pass
 
-    # Uygulama açılışında bekleyen sinyalleri otomatik kontrol et (1 kez)
+    # Uygulama açılışında bekleyen sinyalleri kontrol et — GÜNDE 1 KEZ yeterli:
+    # sinyal doğrulaması 1/3/7/14/30 GÜN çözünürlüklü, gün içinde tekrarı anlamsız.
+    # (Eskiden her oturumda çalışıp ilk sayfayı 10-30 sn geciktiriyordu.)
     if "validation_checked" not in st.session_state:
+        today = datetime.now().strftime("%Y-%m-%d")
         try:
-            _history_db.check_pending_signals()
+            with sqlite3.connect(DB_PATH) as _mc:
+                _mc.execute("CREATE TABLE IF NOT EXISTS app_meta (k TEXT PRIMARY KEY, v TEXT)")
+                _row = _mc.execute("SELECT v FROM app_meta WHERE k='last_signal_check'").fetchone()
+            if not _row or _row[0] != today:
+                _history_db.check_pending_signals()
+                with sqlite3.connect(DB_PATH) as _mc:
+                    _mc.execute("INSERT OR REPLACE INTO app_meta (k, v) VALUES ('last_signal_check', ?)", (today,))
+                    _mc.commit()
         except Exception:
             pass
         try:
-            PortfolioManager.update_navs()  # kayıtlı portföylerin günlük değeri
+            PortfolioManager.update_navs()  # portföy değerleri her oturumda taze (hızlı: toplu)
         except Exception:
             pass
         st.session_state["validation_checked"] = True
