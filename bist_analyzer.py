@@ -10210,6 +10210,53 @@ def render_portfolio_manager_page(ui_lang):
             sdf_shadow = pd.DataFrame(srows).sort_values("ENAG-Reel %", ascending=False)
             st.dataframe(sdf_shadow, use_container_width=True, hide_index=True)
 
+        # PORTFÖY İÇERİK GÖRÜNTÜLEYİCİ — gölge dahil her portföyün içine bak
+        st.markdown("---")
+        st.markdown("### 🔎 " + ("Portföy İçeriği Görüntüle" if ui_lang == "TR" else "Inspect Portfolio Contents"))
+        _tum = PortfolioManager.all_portfolios()   # aktif + arşiv, kullanıcı + gölge
+        if _tum:
+            def _plabel(p):
+                _mi = _pm_meta(p["horizon"], p["profile"])
+                durum = "" if p.get("status") == "aktif" else " · arşiv"
+                tip = " 👻" if p.get("kind") == "golge" else ""
+                return f"{_mi['ikon']} {p['name']}{tip}{durum}"
+            _sec = st.selectbox(
+                "Portföy seç" if ui_lang == "TR" else "Select portfolio",
+                options=list(range(len(_tum))),
+                format_func=lambda i: _plabel(_tum[i]),
+                key="pm_inspect_sel",
+            )
+            _p = _tum[_sec]
+            _pid = _p["id"]
+            _pos = _poss_all.get(_pid) or PortfolioManager.positions(_pid)
+            _nav = _navs_all.get(_pid)
+            if _nav is None or (hasattr(_nav, "empty") and _nav.empty):
+                _nav = PortfolioManager.nav_history(_pid)
+            _pf = (_perfs_all.get(_pid) or PortfolioManager._perf_from_nav(_p, _nav))
+
+            _mi = _pm_meta(_p["horizon"], _p["profile"])
+            st.caption(f"**{_mi['ad']}** — {_mi['desc']}  \n"
+                       f"Kuruluş: {_p['created_at']} · Başlangıç rejimi: {_p.get('regime_at_start','?')} · "
+                       f"Durum: {_p.get('status','aktif')}")
+            i1, i2, i3, i4 = st.columns(4)
+            i1.metric("Nominal", f"%{_pf['nominal']:+.1f}")
+            i2.metric("ENAG-Reel", f"%{_pf['reel']:+.1f}")
+            i3.metric("XU100'e Göre", f"%{_pf['xu100_rel']:+.1f}")
+            i4.metric("Gün", _pf["gun"])
+
+            if _pos:
+                _pdf = pd.DataFrame(_pos)[["ticker", "entry_price", "weight", "stop_price", "target_price"]]
+                _pdf.columns = ["Hisse", "Giriş", "Ağırlık %", "Stop", "Hedef"]
+                _pdf.insert(2, "Sektör", _pdf["Hisse"].map(_sector_of))
+                _pdf = _with_logo_col(_pdf)
+                st.dataframe(_pdf, use_container_width=True, hide_index=True,
+                             column_config=_LOGO_COL_CFG)
+            else:
+                st.info("Bu portföyün pozisyon kaydı bulunamadı.")
+            if _nav is not None and len(_nav) >= 2:
+                st.line_chart(_nav.set_index("date")[["nav"]]
+                              .rename(columns={"nav": "Değer (100 baz)"}), height=180)
+
         score_df = PortfolioManager.shadow_scoreboard()
         if not score_df.empty:
             st.markdown("#### 🏆 " + ("Kombinasyon Karnesi (tüm gölge geçmişi)"
