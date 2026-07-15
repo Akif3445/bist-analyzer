@@ -2184,6 +2184,68 @@ BIST_SCAN_UNIVERSE = [
 # Tekrar edenleri temizle
 BIST_SCAN_UNIVERSE = list(dict.fromkeys(BIST_SCAN_UNIVERSE))
 
+# DİNAMİK EVREN (2026-07): el yapımı liste yerine TradingView'dan likidite
+# filtreli TÜM BIST. 30 günlük ort. hacim >= 20M TL → ~500/600 hisse geçer;
+# yalnızca gerçekten işlem görmeyen mikro/kabuk hisseler elenir.
+# Eski statik liste yedek olarak kalır (TV erişilemezse tarama durmasın).
+
+UNIVERSE_MIN_TL_VOLUME = 20_000_000   # günlük ort. işlem hacmi eşiği (TL)
+
+_TV_SECTOR_TR = {
+    "Electronic Technology": "Teknoloji", "Technology Services": "Teknoloji",
+    "Finance": "Finans", "Communications": "İletişim",
+    "Energy Minerals": "Enerji", "Utilities": "Enerji Dağıtım",
+    "Non-Energy Minerals": "Madencilik & Metal", "Process Industries": "Proses Sanayi",
+    "Producer Manufacturing": "Sanayi", "Industrial Services": "Sanayi Hizmetleri",
+    "Consumer Non-Durables": "Temel Tüketim", "Consumer Durables": "Dayanıklı Tüketim",
+    "Consumer Services": "Tüketici Hizmetleri", "Retail Trade": "Perakende",
+    "Transportation": "Ulaştırma", "Health Technology": "Sağlık",
+    "Health Services": "Sağlık", "Commercial Services": "Ticari Hizmetler",
+    "Distribution Services": "Dağıtım", "Miscellaneous": "Diğer",
+}
+
+_UNIVERSE_CACHE = {"date": None, "tickers": None, "sectors": {}}
+
+
+def get_scan_universe() -> list:
+    """Likidite filtreli dinamik BIST evreni (günde 1 kez TV'den çekilir).
+
+    'Eksik kalmasın' ilkesi: hacim eşiğini geçen HER hisse + eski el listesi
+    + aktif portföylerdeki pozisyonlar (izlenen hisse asla evren dışı kalmaz).
+    TV erişilemezse statik listeye düşer.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _UNIVERSE_CACHE["date"] == today and _UNIVERSE_CACHE["tickers"]:
+        return _UNIVERSE_CACHE["tickers"]
+    try:
+        from tradingview_screener import Query
+        _n, df = (Query().set_markets("turkey")
+                  .select("name", "close", "average_volume_30d_calc", "sector")
+                  .limit(700).get_scanner_data())
+        df["tl_hacim"] = df["close"] * df["average_volume_30d_calc"]
+        likit = df[df["tl_hacim"] >= UNIVERSE_MIN_TL_VOLUME]
+        tickers = [str(t) for t in likit["name"] if t and str(t).isalpha()]
+        sectors = {}
+        for _, r in df.iterrows():
+            t, sec = str(r.get("name") or ""), r.get("sector")
+            if t and isinstance(sec, str):
+                sectors[t] = _TV_SECTOR_TR.get(sec, sec)
+        # Eski liste + portföy pozisyonları her koşulda dahil
+        merged = list(dict.fromkeys(tickers + BIST_SCAN_UNIVERSE))
+        try:
+            ports = PortfolioManager.active_portfolios()
+            pos = PortfolioManager.positions_all([p["id"] for p in ports])
+            held = {x["ticker"] for xs in pos.values() for x in xs}
+            merged = list(dict.fromkeys(merged + sorted(held)))
+        except Exception:
+            pass
+        _UNIVERSE_CACHE.update({"date": today, "tickers": merged, "sectors": sectors})
+        log.info("Dinamik evren: %d hisse (esik %dM TL)", len(merged), UNIVERSE_MIN_TL_VOLUME // 10**6)
+        return merged
+    except Exception as exc:
+        log.warning("Dinamik evren alınamadı, statik listeye düşülüyor: %s", exc)
+        return BIST_SCAN_UNIVERSE
+
 # 7A. PORTFOLIO SCANNER & SMART PORTFOLIO BUILDER
 
 @dataclass
@@ -2279,24 +2341,35 @@ class PortfolioScanner:
         except Exception:
             pass
 
+        universe = get_scan_universe()   # dinamik likidite-filtreli evren (~500 hisse)
         results = []
-        total   = len(BIST_SCAN_UNIVERSE)
+        total   = len(universe)
 
         # Toplu veri indirme (yfinance batch download — çok daha hızlı)
-        symbols = [_yf_symbol(t, "BIST") for t in BIST_SCAN_UNIVERSE]
+        # ~500 sembol tek istekte sorun çıkarabilir → 100'lük partiler
+        symbols = [_yf_symbol(t, "BIST") for t in universe]
+        bulk_parts = []
         try:
-            bulk = yf.download(
-                symbols, period="1y",
-                auto_adjust=True, progress=False,
-                group_by="ticker",
-            )
+            for i in range(0, len(symbols), 100):
+                part = yf.download(
+                    symbols[i:i+100], period="1y",
+                    auto_adjust=True, progress=False,
+                    group_by="ticker",
+                )
+                bulk_parts.append(part)
+                if progress_cb:
+                    # İndirme aşamasını ilerlemenin ilk %30'u say
+                    done = min(i + 100, len(symbols))
+                    progress_cb(f"veri indiriliyor {done}/{len(symbols)}",
+                                int(done / len(symbols) * total * 0.3), total)
+            bulk = pd.concat(bulk_parts, axis=1) if bulk_parts else None
         except Exception as exc:
             log.error("Bulk download hatası: %s", exc)
-            bulk = None
+            bulk = bulk_parts[0] if bulk_parts else None
 
-        for idx, ticker in enumerate(BIST_SCAN_UNIVERSE):
+        for idx, ticker in enumerate(universe):
             if progress_cb:
-                progress_cb(ticker, idx, total)
+                progress_cb(ticker, int(total * 0.3 + idx * 0.7), total)
 
             result = StockScanResult(ticker=ticker)
             try:
@@ -2826,13 +2899,23 @@ class InflationEngine:
 
 
 def _sector_of(ticker: str) -> str:
-    """BIST_STOCKS kategorilerinden sektör bulur (BIST 30 hariç)."""
+    """Sektör: önce el yapımı kategoriler, sonra TradingView sektörü, sonra 'Diğer'.
+
+    Dinamik evren (~500 hisse) el listesinden çok daha geniş — TV sektörleri
+    olmadan hepsi 'Diğer'e düşer ve sektör yoğunlaşma limiti anlamsızlaşırdı.
+    """
     for cat, ts in BIST_STOCKS.items():
         if cat == "BIST 30":
             continue
         if ticker in ts:
             return cat
-    return "Diğer"
+    if not _UNIVERSE_CACHE.get("sectors"):
+        try:
+            get_scan_universe()   # sektör haritasını doldurur (günde 1 TV çağrısı)
+        except Exception:
+            pass
+    tv_sec = _UNIVERSE_CACHE.get("sectors", {}).get(ticker.upper().replace(".IS", ""))
+    return tv_sec or "Diğer"
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
