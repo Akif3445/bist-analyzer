@@ -51,16 +51,22 @@ def main() -> int:
     try:
         week = datetime.now().strftime("%G-W%V")
         rows = ba._PMDB.execute(
-            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND name LIKE ?",
+            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' AND name LIKE ?",
             (f"%{week}%",))["rows"]
-        if not rows or rows[0].get("c", 0) == 0:
-            print("      Bu haftanın gölge seti yok — tarama başlıyor (~2 dk)...")
+        rows_k = ba._PMDB.execute(
+            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon = 'kontrol' AND name LIKE ?",
+            (f"%{week}%",))["rows"]
+        eksik_g = not rows or rows[0].get("c", 0) == 0
+        eksik_k = not rows_k or rows_k[0].get("c", 0) == 0
+        if eksik_g or eksik_k:
+            print("      Bu haftanın gölge/kontrol seti eksik — tarama başlıyor (~2 dk)...")
             regime = ba.compute_market_regime()
             scan = ba.PortfolioScanner.scan_all(force=True)
-            created = ba.PortfolioManager.ensure_shadow_batch(regime, scan)
-            print(f"      Gölge set oluşturuldu: {created} portföy (rejim: {regime['regime']})")
+            n_g = ba.PortfolioManager.ensure_shadow_batch(regime, scan) if eksik_g else 0
+            n_k = ba.PortfolioManager.ensure_control_batch(scan) if eksik_k else 0
+            print(f"      Oluşturuldu: {n_g} gölge + {n_k} kontrol (rejim: {regime['regime']})")
         else:
-            print(f"      Gölge set {week} zaten mevcut ({rows[0]['c']} portföy)")
+            print(f"      Gölge+kontrol set {week} mevcut ({rows[0]['c']}+{rows_k[0]['c']})")
         ba.PortfolioManager.auto_archive_shadows()
     except Exception as exc:
         print(f"      Gölge set hatası: {exc}")

@@ -3035,6 +3035,12 @@ PORTFOLIO_META = {
     ("trend", "*"): {"ad": "Trend Avcısı", "ikon": "🚀",
         "desc": "Rotasyon haritasının 'Lider' çeyreğindeki sektörlerden en güçlü hisseleri toplar — "
                 "paranın şu an aktığı yere biner. Rejim dönüşlerinde hızlı çıkış gerekir."},
+    ("kontrol", "Rastgele"): {"ad": "Kontrol: Kura", "ikon": "🎲",
+        "desc": "BİLİMSEL KIYAS — evrenden kurayla 6 hisse, eşit ağırlık, hiçbir sinyal yok. "
+                "Sistem bunu yenemiyorsa skorların değeri yoktur."},
+    ("kontrol", "BIST30"): {"ad": "Kontrol: Pasif BIST-30", "ikon": "📇",
+        "desc": "BİLİMSEL KIYAS — BIST-30'un tamamı eşit ağırlık; 'hiç uğraşmasaydım' alternatifi. "
+                "Sistemin pasif yatırıma karşı katma değer ölçütü."},
 }
 
 
@@ -3169,7 +3175,7 @@ def _render_position_table(pos: list):
 
 # Strateji rozetleri — emoji yerine hisse logolarıyla aynı dilde SVG rozet
 _HORIZON_HUE = {"kisa": "#b45309", "orta": "#27509e", "uzun": "#1d6f4e",
-                "sektor": "#6d3f8e", "trend": "#a2701d"}
+                "sektor": "#6d3f8e", "trend": "#a2701d", "kontrol": "#6b6357"}
 
 
 def _strategy_badge_uri(horizon: str, profile: str) -> str:
@@ -3728,7 +3734,7 @@ class PortfolioManager:
         PortfolioManager._init_tables()
         week = datetime.now().strftime("%G-W%V")
         rows = _PMDB.execute(
-            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND name LIKE ?",
+            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' AND name LIKE ?",
             (f"%{week}%",))["rows"]
         if rows and rows[0].get("c", 0) > 0:
             return 0
@@ -3788,6 +3794,48 @@ class PortfolioManager:
                 _PMDB.execute_batch(stmts[i:i + 40])
         log.info("TV hedef fotoğrafı: %d hisse kaydedildi (%s)", len(stmts), today)
         return len(stmts)
+
+    @staticmethod
+    def ensure_control_batch(scan_results: list) -> int:
+        """Haftalık BİLİMSEL KONTROL portföyleri (Roadmap-B):
+        - Kura: evrenden rastgele 6 hisse (hafta tohumlu, tekrarlanabilir)
+        - Pasif BIST-30: eşit ağırlık
+        Sinyalsiz kıyaslar — sistem bunları yenemiyorsa alfa iddiası boştur.
+        Stop/hedef = 0 (kontroller yönetilmez, alarm üretmezler)."""
+        PortfolioManager._init_tables()
+        week = datetime.now().strftime("%G-W%V")
+        rows = _PMDB.execute(
+            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon='kontrol' AND name LIKE ?",
+            (f"%{week}%",))["rows"]
+        if rows and rows[0].get("c", 0) > 0:
+            return 0
+        created = 0
+        fiyat = {r.ticker: r.current_price for r in scan_results
+                 if not r.error and r.current_price > 0}
+        # 1) Kura — hafta numarası tohum: aynı hafta yeniden koşulsa aynı seçim
+        havuz = sorted(r.ticker for r in scan_results
+                       if not r.error and r.data_rows >= 200 and r.volume_ok
+                       and r.current_price > 0)
+        if len(havuz) >= 6:
+            rng = np.random.default_rng(int(week.replace("-W", "")))
+            secim = list(rng.choice(havuz, 6, replace=False))
+            picks = [{"ticker": t, "fiyat": fiyat[t], "agirlik": round(100/6, 1),
+                      "stop": 0.0, "hedef": 0.0} for t in secim]
+            PortfolioManager.save_portfolio(f"Kontrol Kura {week}", "kontrol",
+                                            "Rastgele", picks, "-", kind="golge")
+            created += 1
+        # 2) Pasif BIST-30
+        b30 = [t for t in BIST_STOCKS["BIST 30"] if t in fiyat]
+        if len(b30) >= 20:
+            w = round(100 / len(b30), 2)
+            picks = [{"ticker": t, "fiyat": fiyat[t], "agirlik": w,
+                      "stop": 0.0, "hedef": 0.0} for t in b30]
+            PortfolioManager.save_portfolio(f"Kontrol BIST30 {week}", "kontrol",
+                                            "BIST30", picks, "-", kind="golge")
+            created += 1
+        if created:
+            log.info("Kontrol portföyleri oluşturuldu: %d (%s)", created, week)
+        return created
 
     @staticmethod
     def auto_archive_shadows() -> int:
@@ -10038,15 +10086,21 @@ def render_portfolio_manager_page(ui_lang):
         try:
             PortfolioManager._init_tables()
             _cnt = _PMDB.execute(
-                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND name LIKE ?",
+                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' AND name LIKE ?",
                 (f"%{_week}%",))["rows"]
-            if not _cnt or _cnt[0].get("c", 0) == 0:
-                with st.spinner("Haftalık gölge portföyler oluşturuluyor (tarama gerekir, ~1-2 dk)..."
+            _cntk = _PMDB.execute(
+                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon = 'kontrol' AND name LIKE ?",
+                (f"%{_week}%",))["rows"]
+            _eksik_g = not _cnt or _cnt[0].get("c", 0) == 0
+            _eksik_k = not _cntk or _cntk[0].get("c", 0) == 0
+            if _eksik_g or _eksik_k:
+                with st.spinner("Haftalık gölge/kontrol portföyleri oluşturuluyor (~1-2 dk)..."
                                 if ui_lang == "TR" else "Creating weekly shadow portfolios..."):
                     _scan = PortfolioScanner.scan_all()
-                    _n = PortfolioManager.ensure_shadow_batch(regime, _scan)
+                    _n = PortfolioManager.ensure_shadow_batch(regime, _scan) if _eksik_g else 0
+                    _n += PortfolioManager.ensure_control_batch(_scan) if _eksik_k else 0
                 if _n:
-                    st.toast(f"{_n} gölge portföy kaydedildi ({_week})")
+                    st.toast(f"{_n} gölge/kontrol portföyü kaydedildi ({_week})")
             PortfolioManager.auto_archive_shadows()
             PortfolioManager.snapshot_tv_targets()  # haftalık analist hedef arşivi
         except Exception as exc:
