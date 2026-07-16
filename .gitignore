@@ -34,3 +34,4 @@ faz2_modules.py
 
 # Kalibrasyon veri panelleri (weight_calibration.py ile yeniden üretilebilir)
 calibration_*.csv
+pipeline_nav.csv

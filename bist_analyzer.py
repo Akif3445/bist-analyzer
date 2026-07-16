@@ -2698,6 +2698,14 @@ class SmartPortfolioBuilder:
 # "tahmini" işaretliler: 2025 yıllığı %56.14'ten türetildi (ay verisi bulunamadı).
 # Yeni aylar UI'daki "ENAG Verisi" bölümünden eklenir — tablo DB'de tutulur.
 ENAG_MOM_DEFAULTS = {
+    # 2020-2024: ENAG yıllık değerlerinden türetilmiş düz aylık eşdeğerler
+    # (ay bazlı seri yayında yok; yıllıklar: 2020 %36.7, 2021 %82.8,
+    #  2022 %137.5, 2023 %127.2, 2024 %83.4). Tarihsel simülasyon için.
+    **{f"2020-{m:02d}": (2.65, "tahmini-yillik") for m in range(1, 13)},
+    **{f"2021-{m:02d}": (5.16, "tahmini-yillik") for m in range(1, 13)},
+    **{f"2022-{m:02d}": (7.47, "tahmini-yillik") for m in range(1, 13)},
+    **{f"2023-{m:02d}": (7.08, "tahmini-yillik") for m in range(1, 13)},
+    **{f"2024-{m:02d}": (5.18, "tahmini-yillik") for m in range(1, 13)},
     "2025-01": (5.10, "tahmini"), "2025-02": (5.10, "tahmini"),
     "2025-03": (5.10, "tahmini"), "2025-04": (4.46, "resmi"),
     "2025-05": (3.66, "resmi"),   "2025-06": (1.94, "resmi"),
