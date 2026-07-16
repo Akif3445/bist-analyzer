@@ -80,6 +80,22 @@ def main() -> int:
     except Exception as exc:
         print(f"[3/4] Risk kontrolü hatası: {exc}")
 
+    # 3.5) Aylık parametre kararlılık koşusu (Roadmap-D) — ayda 1, ayın ilk günlerinde
+    try:
+        ay = datetime.now().strftime("%Y-%m")
+        ba._PMDB.execute("CREATE TABLE IF NOT EXISTS calib_history "
+                         "(run_date TEXT, metric TEXT, value REAL, PRIMARY KEY (run_date, metric))")
+        rows = ba._PMDB.execute(
+            "SELECT COUNT(*) AS c FROM calib_history WHERE run_date LIKE ?", (f"{ay}%",))["rows"]
+        if not rows or rows[0].get("c", 0) == 0:
+            print("[3.5]  Bu ayın kalibrasyon koşusu yok — başlıyor (~3 dk)...")
+            import weight_calibration as wc
+            wc.stability()
+        else:
+            print(f"[3.5]  Kalibrasyon {ay} zaten koşulmuş")
+    except Exception as exc:
+        print(f"[3.5]  Kalibrasyon hatası: {exc}")
+
     # 4) Rejim günlüğü
     try:
         regime = ba.compute_market_regime()

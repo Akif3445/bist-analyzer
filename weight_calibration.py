@@ -22,7 +22,7 @@ haber duygu kaynağı GDELT'tir (2017+, TR medya dahil).
 
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -366,6 +366,68 @@ def analyze_stops():
                   f"(ort %{cur['ort_getiri'].iloc[0]})")
 
 
+def _xsic_rank(df, col, fwd):
+    """Kesitsel Spearman IC — scipy'siz (rank + pearson); ort. IC ve t döner."""
+    def _one(g):
+        if len(g) < 8:
+            return np.nan
+        return g[col].rank().corr(g[fwd].rank())
+    daily = df.groupby("date").apply(_one, include_groups=False).dropna()
+    if len(daily) < 10:
+        return np.nan, 0.0
+    m = float(daily.mean())
+    t = m / (float(daily.std()) / np.sqrt(len(daily)))
+    return m, t
+
+
+def stability():
+    """Aylık parametre kararlılık koşusu (Roadmap-D).
+
+    Taze panel kurar, kilit parametreleri ölçer, Turso'daki calib_history
+    tablosuna yazar ve tüm geçmiş koşuların karşılaştırma tablosunu basar.
+    Ekim sunumundaki 'parametreler zamanla kararlı mı?' kanıtı buradan çıkar.
+    """
+    build_tech()
+    tech = pd.read_csv(TECH_CSV)
+    bugun = datetime.now().strftime("%Y-%m-%d")
+
+    metrikler = {}
+    for ad, col, fwd in [
+        ("ic_momentum_14g", "tech_score_momentum", "fwd_14"),
+        ("ic_momentum_30g", "tech_score_momentum", "fwd_30"),
+        ("ic_52hafta_30g",  "week52_position",     "fwd_30"),
+        ("ic_eski_skor_30g", "tech_score",         "fwd_30"),
+    ]:
+        m, t = _xsic_rank(tech, col, fwd)
+        metrikler[ad] = round(m, 4)
+        metrikler[ad + "_t"] = round(t, 2)
+    # Rejim güncelliği: sadece son 6 ayın kesitsel IC'si
+    son6 = tech[tech["date"] >= (datetime.now() - timedelta(days=183)).strftime("%Y-%m-%d")]
+    m6, t6 = _xsic_rank(son6, "tech_score_momentum", "fwd_30")
+    metrikler["ic_momentum_30g_son6ay"] = round(m6, 4) if not np.isnan(m6) else None
+    metrikler["gozlem_sayisi"] = len(tech)
+
+    from bist_analyzer import _PMDB
+    _PMDB.execute("""
+        CREATE TABLE IF NOT EXISTS calib_history (
+            run_date TEXT, metric TEXT, value REAL,
+            PRIMARY KEY (run_date, metric)
+        )""")
+    _PMDB.execute_batch([
+        ("INSERT OR REPLACE INTO calib_history (run_date, metric, value) VALUES (?,?,?)",
+         (bugun, k, v)) for k, v in metrikler.items() if v is not None])
+    print(f"\ncalib_history'ye yazıldı ({bugun}): {len(metrikler)} metrik")
+
+    # Kararlılık tablosu — tüm koşular yan yana
+    rows = _PMDB.execute("SELECT run_date, metric, value FROM calib_history ORDER BY run_date")["rows"]
+    if rows:
+        hist = pd.DataFrame(rows).pivot(index="metric", columns="run_date", values="value")
+        print("\nPARAMETRE KARARLILIK TABLOSU (koşular yan yana):")
+        print(hist.to_string())
+        print("\nOkuma: ic_momentum_* satırları pozitif ve t>2 kaldıkça sistemin"
+              "\ntemel varsayımı geçerli demektir; işaret dönerse yeniden kalibrasyon şart.")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "build-tech":
@@ -376,5 +438,7 @@ if __name__ == "__main__":
         analyze()
     elif cmd == "analyze-stops":
         analyze_stops()
+    elif cmd == "stability":
+        stability()
     else:
         print(__doc__)
