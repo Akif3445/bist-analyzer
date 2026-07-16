@@ -8384,9 +8384,10 @@ def render_backtest_page(ui_lang: str):
     )
     st.markdown("---")
 
-    # Ortak sidebar ayarları
-    with st.sidebar:
-        st.markdown("## Backtest Ayarları")
+    # Ayarlar — ANA ALANDA (eskiden kenar çubuğundaydı: mobilde panel gizli
+    # kaldığı için "buton yok" görünüyordu; kritik kontroller artık hep görünür)
+    c_sol, c_sag = st.columns([1, 2])
+    with c_sol:
         bt_mode = st.radio(
             "Strateji Modu",
             options=["swing", "trend", "universal", "investor", "buyhold"],
@@ -8404,37 +8405,46 @@ def render_backtest_page(ui_lang: str):
             help="AL sinyalinde negatif haber varsa atlar.",
             key="bt_news_filter",
         )
-        st.markdown("---")
+        cfg_disp = BacktestEngine.MODES.get(bt_mode, BacktestEngine.MODES["universal"])
+        st.caption(
+            f"**{cfg_disp['label']}** — {cfg_disp['desc']}  \n"
+            f"AL ≥{cfg_disp['BUY_THRESHOLD']} · SAT ≤{cfg_disp['SELL_THRESHOLD']} · "
+            f"Stop %{cfg_disp['STOP_PCT']*100:.0f} · TP %{cfg_disp['TP_PCT']*100:.0f} · "
+            f"Max {cfg_disp['MAX_HOLD_DAYS']} gün"
+        )
 
+    with c_sag:
         if bt_mode_tab == "Manuel Hisse Seçimi":
             _preload = st.session_state.pop("preload_bt_tickers", None)
             _default_tickers = _preload if _preload else [t for t in BACKTEST_TICKERS if t in BIST_SCAN_UNIVERSE]
             selected_tickers = st.multiselect(
                 "Test Edilecek Hisseler",
-                options=sorted(BIST_SCAN_UNIVERSE),
+                options=sorted(get_scan_universe()),
                 default=[t for t in _default_tickers if t in BIST_SCAN_UNIVERSE],
                 placeholder="Hisse kodu ara...",
                 help="5-10 hisse önerilir.",
                 key="bt_manual_tickers",
             )
-            bt_period = st.selectbox(
-                "Veri Periyodu",
-                options=["1y", "2y", "3y"],
-                index=1,
-                format_func=lambda x: {"1y": "1 Yıl", "2y": "2 Yıl", "3y": "3 Yıl"}[x],
-                key="bt_period_sel",
-            )
-            st.markdown("---")
-            st.markdown("**Gelişmiş**")
-            enable_short = st.checkbox("Aciga Satis (Short)", value=False, key="bt_short")
-            enable_scaling = st.checkbox("Kademeli Kar Al", value=True, key="bt_scaling")
-            enable_optimizer = st.checkbox("Walk-Forward Optimize", value=False, key="bt_optimizer")
-            risk_slider = st.slider(
-                "Islem Basina Risk %",
-                min_value=0.5, max_value=5.0, value=2.0, step=0.5, key="bt_risk",
-            ) / 100.0
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                bt_period = st.selectbox(
+                    "Veri Periyodu",
+                    options=["1y", "2y", "3y"],
+                    index=1,
+                    format_func=lambda x: {"1y": "1 Yıl", "2y": "2 Yıl", "3y": "3 Yıl"}[x],
+                    key="bt_period_sel",
+                )
+            with pc2:
+                risk_slider = st.slider(
+                    "Islem Basina Risk %",
+                    min_value=0.5, max_value=5.0, value=2.0, step=0.5, key="bt_risk",
+                ) / 100.0
+            with st.expander("Gelişmiş Ayarlar"):
+                enable_short = st.checkbox("Aciga Satis (Short)", value=False, key="bt_short")
+                enable_scaling = st.checkbox("Kademeli Kar Al", value=True, key="bt_scaling")
+                enable_optimizer = st.checkbox("Walk-Forward Optimize", value=False, key="bt_optimizer")
             run_btn = st.button(
-                "Backtest Calistir",
+                "▶ Backtest Çalıştır",
                 type="primary", use_container_width=True,
                 disabled=len(selected_tickers) < 1,
                 key="bt_run_manual",
@@ -8443,22 +8453,25 @@ def render_backtest_page(ui_lang: str):
             # Zaman Makinesi ayarları
             _styles = TimeMachineEngine.PORTFOLIO_STYLES
             _style_keys = [k for k in _styles if k != "custom"]
-            tm_years = st.selectbox(
-                "Kac Yil Geriye?", [1, 2, 3, 5], index=2,
-                format_func=lambda x: f"{x} Yil",
-                key="bt_tm_years",
-            )
-            tm_market = st.radio("Piyasa", ["BIST", "US"], index=0, key="bt_tm_market")
-            tm_style = st.radio(
-                "Portfoy Stili",
-                _style_keys,
-                index=0,
-                format_func=lambda x: _styles[x]["label"],
-                key="bt_tm_style",
-            )
-            st.caption(f"_{_styles[tm_style]['desc']}_")
-            st.markdown("---")
-            _all_tickers = BIST_SCAN_UNIVERSE if tm_market == "BIST" else US_POPULAR_TICKERS
+            tc1, tc2 = st.columns(2)
+            with tc1:
+                tm_years = st.selectbox(
+                    "Kac Yil Geriye?", [1, 2, 3, 5], index=2,
+                    format_func=lambda x: f"{x} Yil",
+                    key="bt_tm_years",
+                )
+                tm_market = st.radio("Piyasa", ["BIST", "US"], index=0,
+                                     horizontal=True, key="bt_tm_market")
+            with tc2:
+                tm_style = st.selectbox(
+                    "Portfoy Stili",
+                    _style_keys,
+                    index=0,
+                    format_func=lambda x: _styles[x]["label"],
+                    key="bt_tm_style",
+                )
+                st.caption(f"_{_styles[tm_style]['desc']}_")
+            _all_tickers = get_scan_universe() if tm_market == "BIST" else US_POPULAR_TICKERS
             custom_tickers = st.multiselect(
                 "Ozel Portfoy (istege bagli)",
                 options=sorted(_all_tickers),
@@ -8467,7 +8480,7 @@ def render_backtest_page(ui_lang: str):
                 placeholder="Kendi hisselerini sec...",
             )
             run_btn = st.button(
-                "Zaman Makinesi Calistir",
+                "▶ Zaman Makinesi Çalıştır",
                 type="primary", use_container_width=True,
                 key="bt_run_tm",
             )
@@ -8478,17 +8491,6 @@ def render_backtest_page(ui_lang: str):
             enable_scaling = True
             enable_optimizer = False
             risk_slider = 0.02
-
-        st.markdown("---")
-        cfg_disp = BacktestEngine.MODES.get(bt_mode, BacktestEngine.MODES["universal"])
-        st.caption(
-            f"**{cfg_disp['label']}** — {cfg_disp['desc']}  \n"
-            f"AL esigi : >={cfg_disp['BUY_THRESHOLD']} puan  \n"
-            f"SAT esigi: <={cfg_disp['SELL_THRESHOLD']} puan  \n"
-            f"Stop-Loss: %{cfg_disp['STOP_PCT']*100:.0f}  \n"
-            f"Take-Profit: %{cfg_disp['TP_PCT']*100:.0f}  \n"
-            f"Max sure : {cfg_disp['MAX_HOLD_DAYS']} gun"
-        )
 
     # ==================== MANUEL BACKTEST ====================
     if bt_mode_tab == "Manuel Hisse Seçimi":
@@ -10861,7 +10863,7 @@ def run_app():
         st.markdown("---")
         # Global Disclaimer
         st.markdown(
-            "<div style='background:#1a1a2e;border:1px solid #b45309;border-radius:8px;"
+            f"<div style='background:{_theme()['panel']};border:1px solid #b45309;border-radius:8px;"
             "padding:8px 12px;margin-top:8px;font-size:11px;color:#b45309;text-align:center'>"
             + (
                 "⚠️ Bu uygulama <b>yatırım tavsiyesi</b> niteliğinde değildir. "
