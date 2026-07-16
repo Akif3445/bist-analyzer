@@ -3456,8 +3456,10 @@ class PortfolioManager:
             VALUES (?,?,?,?,?,?)
         """, (pid, p["ticker"], p["fiyat"], p["agirlik"], p["stop"], p["hedef"])) for p in picks]
         # Gün-0 NAV kaydı
+        # Gün-0 NAV 99.8: %0.2 giriş maliyeti (tek yön) — defter sürtünmesiz olmasın.
+        # Kontroller dahil herkese eşit uygulanır; karşılaştırma adil kalır.
         stmts.append(("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
-                      (pid, datetime.now().strftime("%Y-%m-%d"), 100.0,
+                      (pid, datetime.now().strftime("%Y-%m-%d"), 99.8,
                        PortfolioManager._xu100_close())))
         _PMDB.execute_batch(stmts)
         return pid
@@ -3587,6 +3589,34 @@ class PortfolioManager:
         xu1 = float(df["xu100_close"].iloc[-1] or 0)
         if xu0 > 0 and xu1 > 0:
             out["xu100_rel"] = round(nominal - (xu1 / xu0 - 1) * 100, 2)
+        return out
+
+    @staticmethod
+    def risk_metrics(nav_df: pd.DataFrame) -> dict:
+        """Kurumsal risk metrikleri (Roadmap-C). En az 10 NAV noktası ister.
+
+        Sharpe/Sortino: günlük getirilerden yıllıklandırılmış (rf=0 varsayımı —
+        TL risksiz getiri tartışmalı; sunumda belirtilir).
+        IR (Information Ratio): XU100'e göre fazla getirinin tutarlılığı.
+        """
+        out = {"sharpe": None, "sortino": None, "maxdd": None, "ir": None,
+               "n_gun": len(nav_df)}
+        if len(nav_df) < 10:
+            return out
+        nav = nav_df["nav"].astype(float)
+        r = nav.pct_change().dropna()
+        if r.std() > 0:
+            out["sharpe"] = round(float(r.mean() / r.std() * np.sqrt(252)), 2)
+        downside = r[r < 0]
+        if len(downside) > 1 and downside.std() > 0:
+            out["sortino"] = round(float(r.mean() / downside.std() * np.sqrt(252)), 2)
+        out["maxdd"] = round(float(((nav / nav.cummax()) - 1).min() * 100), 2)
+        xu = nav_df["xu100_close"].astype(float)
+        if (xu > 0).all():
+            aktif = r - xu.pct_change().dropna()
+            aktif = aktif.dropna()
+            if len(aktif) > 2 and aktif.std() > 0:
+                out["ir"] = round(float(aktif.mean() / aktif.std() * np.sqrt(252)), 2)
         return out
 
     @staticmethod
@@ -3861,13 +3891,16 @@ class PortfolioManager:
         rows = []
         _golge = [p for p in PortfolioManager.all_portfolios() if p.get("kind") == "golge"]
         _perfs = PortfolioManager.performances(_golge)
+        _navs  = PortfolioManager.nav_histories([p["id"] for p in _golge])
         for p in _golge:
             perf = _perfs[p["id"]]
             if perf["gun"] < 1:
                 continue
+            _rm = PortfolioManager.risk_metrics(_navs.get(p["id"], pd.DataFrame()))
             rows.append({"Vade": p["horizon"], "Profil": p["profile"],
                          "nominal": perf["nominal"], "reel": perf["reel"],
-                         "xu": perf["xu100_rel"], "gun": perf["gun"]})
+                         "xu": perf["xu100_rel"], "gun": perf["gun"],
+                         "sharpe": _rm["sharpe"], "maxdd": _rm["maxdd"]})
         if not rows:
             return pd.DataFrame()
         df = pd.DataFrame(rows)
@@ -3876,6 +3909,8 @@ class PortfolioManager:
                       Ort_Nominal=("nominal", "mean"),
                       Ort_Reel=("reel", "mean"),
                       Ort_XU100_Rel=("xu", "mean"),
+                      Ort_Sharpe=("sharpe", "mean"),
+                      Ort_MaxDD=("maxdd", "mean"),
                       Ort_Gun=("gun", "mean"))
                  .round(2).reset_index())
         return agg.sort_values("Ort_Reel", ascending=False)
@@ -10392,6 +10427,15 @@ def render_portfolio_manager_page(ui_lang):
             i2.metric("ENAG-Reel", f"%{_pf['reel']:+.1f}")
             i3.metric("XU100'e Göre", f"%{_pf['xu100_rel']:+.1f}")
             i4.metric("Gün", _pf["gun"])
+            _rm = PortfolioManager.risk_metrics(_nav if _nav is not None else pd.DataFrame())
+            r1, r2, r3, r4 = st.columns(4)
+            _fmt = lambda v, s="": (f"{v}{s}" if v is not None else "—")
+            r1.metric("Sharpe", _fmt(_rm["sharpe"]), help="Getiri/oynaklık (yıllık, rf=0). >1 iyi, >2 çok iyi")
+            r2.metric("Sortino", _fmt(_rm["sortino"]), help="Sadece aşağı oynaklığa göre getiri")
+            r3.metric("Max Düşüş", _fmt(_rm["maxdd"], "%"), help="Tepe değerden en derin kayıp")
+            r4.metric("IR (vs XU100)", _fmt(_rm["ir"]), help="Endeks-üstü getirinin tutarlılığı")
+            if _rm["sharpe"] is None:
+                st.caption(f"Risk metrikleri için ≥10 günlük NAV gerekir (şu an {_rm['n_gun']}). Veri biriktikçe dolacak.")
 
             _render_position_table(_pos)
             if _nav is not None and len(_nav) >= 2:
@@ -10405,6 +10449,7 @@ def render_portfolio_manager_page(ui_lang):
             score_df = score_df.rename(columns={
                 "Portfoy": "Portföy Sayısı", "Ort_Nominal": "Ort. Nominal %",
                 "Ort_Reel": "Ort. ENAG-Reel %", "Ort_XU100_Rel": "Ort. XU100-Göreli %",
+                "Ort_Sharpe": "Ort. Sharpe", "Ort_MaxDD": "Ort. MaxDD %",
                 "Ort_Gun": "Ort. Gün"})
             st.dataframe(score_df, use_container_width=True, hide_index=True)
             st.caption("Veri biriktikçe hangi vade×profil kombinasyonunun gerçekten "
