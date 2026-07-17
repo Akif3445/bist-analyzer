@@ -8620,6 +8620,8 @@ def render_backtest_page(ui_lang: str):
                 )
                 tm_market = st.radio("Piyasa", ["BIST", "US"], index=0,
                                      horizontal=True, key="bt_tm_market")
+                st.caption("⚠️ Zaman Makinesi ESKİ portföy mantığını simüle eder — "
+                           "güncel sistemin tarihsel kanıtı pipeline_backtest çıktısıdır (CLAUDE.md Roadmap-A).")
             with tc2:
                 tm_style = st.selectbox(
                     "Portfoy Stili",
@@ -10008,6 +10010,28 @@ _TR_AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
 _TR_GUNLER = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _kokpit_macro() -> list:
+    """Kokpit makro şeridi: USD/TL, EUR/TL, Altın, BIST100 (+günlük %)."""
+    semboller = [("USDTRY=X", "USD/TL", "₺{:.2f}"), ("EURTRY=X", "EUR/TL", "₺{:.2f}"),
+                 ("GC=F", "Altın (ons)", "${:,.0f}"), ("XU100.IS", "BIST 100", "{:,.0f}")]
+    out = []
+    try:
+        bulk = yf.download([s for s, _, _ in semboller], period="5d", interval="1d",
+                           auto_adjust=True, progress=False, group_by="ticker")
+        for sym, ad, fmt in semboller:
+            try:
+                cl = bulk[sym]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
+                if len(cl) >= 2:
+                    son, onceki = float(cl.iloc[-1]), float(cl.iloc[-2])
+                    out.append((ad, fmt.format(son), f"{(son/onceki-1)*100:+.2f}%"))
+            except Exception:
+                continue
+    except Exception as exc:
+        log.warning("Kokpit makro hatası: %s", exc)
+    return out
+
+
 def render_kokpit_page(ui_lang):
     """Piyasa Defteri — gazete manşeti tarzı tek bakış kokpiti.
 
@@ -10036,6 +10060,13 @@ def render_kokpit_page(ui_lang):
         f"<div style='font-family:Inter,sans-serif;font-size:11.5px;color:{t['muted']};"
         f"margin-bottom:16px'>{' · '.join(regime['detay'])}</div>",
         unsafe_allow_html=True)
+
+    # Makro şerit (Piyasa Özeti'nden taşındı — o sayfa emekli edildi)
+    _makro = _kokpit_macro()
+    if _makro:
+        mc = st.columns(len(_makro))
+        for _col, (_ad, _val, _chg) in zip(mc, _makro):
+            _col.metric(_ad, _val, _chg)
 
     # ---- ALARMLAR (varsa manşetin hemen altında) ----
     try:
@@ -11003,15 +11034,15 @@ def run_app():
         st.markdown("---")
 
         if active_market == "BIST":
+            # Not: "Piyasa Ozeti" ve "Sistem Portfolyleri" menüden emekli edildi
+            # (Kokpit + Portföy Yöneticisi kapsıyor); render fonksiyonları duruyor.
             pages = [
-                "Kokpit", "Piyasa Ozeti", "Portfoy Yoneticisi", "BIST Listesi", "Hisse Analizi",
-                "Portfolyum", "Backtest", "Sistem Portfolyleri",
-                "Sinyal Takip",
+                "Kokpit", "Portfoy Yoneticisi", "BIST Listesi", "Hisse Analizi",
+                "Portfolyum", "Backtest", "Sinyal Takip",
             ]
             page_icons = [
-                "newspaper", "speedometer2", "wallet2", "list-ul", "search",
-                "briefcase", "clock-history", "robot",
-                "graph-up-arrow",
+                "newspaper", "wallet2", "list-ul", "search",
+                "briefcase", "clock-history", "graph-up-arrow",
             ]
             _default_page = "Kokpit"
         else:  # US
