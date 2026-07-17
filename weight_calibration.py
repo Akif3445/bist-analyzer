@@ -407,6 +407,15 @@ def stability():
     metrikler["ic_momentum_30g_son6ay"] = round(m6, 4) if not np.isnan(m6) else None
     metrikler["gozlem_sayisi"] = len(tech)
 
+    # O gün uygulamanın FİİLEN kullandığı parametreleri de logla —
+    # "hangi tarihte hangi ayar geçerliydi" tablodan okunur, geri dönüş
+    # için ayrıca her değişiklik git geçmişinde commit'lidir.
+    from bist_analyzer import WEIGHTS, PortfolioManager
+    for k, v in WEIGHTS.items():
+        metrikler[f"param_agirlik_{k}"] = float(v)
+    for h, v in PortfolioManager.STOP_MULTS.items():
+        metrikler[f"param_stop_{h}"] = float(v)
+
     from bist_analyzer import _PMDB
     _PMDB.execute("""
         CREATE TABLE IF NOT EXISTS calib_history (

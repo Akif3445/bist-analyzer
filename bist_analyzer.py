@@ -3212,6 +3212,10 @@ class PortfolioManager:
         "Orta (1-3 ay)":     "orta",
         "Uzun (6-12 ay)":    "uzun",
     }
+    # 2026-07 kalibrasyonu (analyze-stops) — değişiklikler git geçmişinde,
+    # her aylık koşuda calib_history'ye de yazılır (geri dönüş garantisi)
+    STOP_MULTS   = {"kisa": 2.5, "orta": 3.5, "uzun": 3.5}
+    TARGET_MULTS = {"kisa": 3.5, "orta": 6.0, "uzun": 9.0}
 
     _initialized = False
 
@@ -3288,8 +3292,8 @@ class PortfolioManager:
         # felaket sigortası kalır; hedef artık bilgi seviyesidir (alarm önerir,
         # otomatik çıkış yok). Ayı piyasası deneyimi henüz veri setinde yok —
         # rejim kapısı + portföy freni bu açığı kapatan diğer katmanlar.
-        stop_mult   = {"kisa": 2.5, "orta": 3.5, "uzun": 3.5}[horizon]
-        target_mult = {"kisa": 3.5, "orta": 6.0, "uzun": 9.0}[horizon]
+        stop_mult   = PortfolioManager.STOP_MULTS[horizon]
+        target_mult = PortfolioManager.TARGET_MULTS[horizon]
         picks = PortfolioManager._format_picks(pool, keyf, prof["max_pos"],
                                                prof["sector_cap"], stop_mult, target_mult)
         return picks, warning
