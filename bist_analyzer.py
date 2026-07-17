@@ -8782,7 +8782,7 @@ def _render_backtest_results(ui_lang: str):
     """Manuel backtest sonuclarini gosterir."""
     all_runs = BacktestEngine.load_runs()
     if not all_runs:
-        st.info("Sol menuден hisseleri secip **Backtest Calistir** butonuna bas.")
+        st.info("Yukarıdan hisseleri seçip **Backtest Çalıştır** butonuna bas.")
         return
 
     run_ids = list(dict.fromkeys(r["run_id"] for r in all_runs))
@@ -9400,11 +9400,9 @@ def render_analysis_page(ui_lang):
     if "selected_ticker" not in st.session_state:
         st.session_state["selected_ticker"] = "THYAO"
 
-    with st.sidebar:
-        st.markdown("## BIST Investment Assistant")
-        st.markdown("---")
-
-        # Manuel giriş
+    # Girişler ANA ALANDA — mobilde kenar çubuğu gizli kalıyordu (backtest dersi)
+    gc1, gc2, gc3 = st.columns([2, 1, 1])
+    with gc1:
         ticker_input = st.text_input(
             "Hisse Kodu / Stock Code",
             value=st.session_state["selected_ticker"],
@@ -9412,44 +9410,42 @@ def render_analysis_page(ui_lang):
             help="Borsa İstanbul kodu (.IS otomatik eklenir)",
             key="ticker_text_input",
         ).strip().upper()
-
-        # Metin kutusundaki değer session_state ile senkronize
         if ticker_input != st.session_state["selected_ticker"]:
             st.session_state["selected_ticker"] = ticker_input
-
-        st.markdown("---")
-
+    with gc2:
+        period = st.selectbox(
+            "Periyot",
+            options=["6mo", "1y", "2y"], index=1,
+            format_func=lambda x: {"6mo": "6 Ay", "1y": "1 Yıl", "2y": "2 Yıl"}[x],
+        )
+    with gc3:
         analyst_target = st.number_input(
-            "Analist Hedef Fiyat (TL)" if ui_lang == "TR" else "Analyst Target Price",
+            "Hedef Fiyat (ops.)",
             min_value=0.0, value=0.0, step=0.5,
-            help="Aracı kurum analist raporlarındaki hedef fiyat. Boş bırakırsanız prim skoru nötr (50) olur."
-                 if ui_lang == "TR" else "Broker target price. Leave 0 for neutral upside score (50).",
+            help="Elle analist hedefi — boşsa TradingView konsensüsü otomatik kullanılır."
+                 if ui_lang == "TR" else "Manual target; TradingView consensus auto-used if 0.",
         )
         analyst_target = analyst_target if analyst_target > 0 else None
 
-        period = st.selectbox(
-            "Analiz Periyodu / Period",
-            options=["6mo", "1y", "2y"], index=1,
-            format_func=lambda x: {"6mo": "6 Ay / 6M", "1y": "1 Yıl / 1Y", "2y": "2 Yıl / 2Y"}[x],
-        )
-        st.caption("Haberler: TR + EN otomatik" if ui_lang == "TR" else "News: TR + EN auto")
+    bc1, bc2 = st.columns([3, 1])
+    with bc1:
         analyze_btn = st.button(
-            "Analiz Et" if ui_lang == "TR" else "Analyze",
+            "🔍 Analiz Et" if ui_lang == "TR" else "🔍 Analyze",
             use_container_width=True, type="primary"
         )
-        # Liste veya geçmişten seçilince otomatik analiz flag'i
-        if st.session_state.get("auto_analyze"):
-            analyze_btn = True
-            st.session_state["auto_analyze"] = False
-
+    with bc2:
         force_update = st.checkbox(
-            "Zorla Yenile (Sıfırdan)" if ui_lang == "TR" else "Force Update (Bypass Cache)",
+            "Zorla Yenile" if ui_lang == "TR" else "Force Update",
             value=False,
-            help="İşaretlerseniz önbellekteki veriyi yoksayıp İnternetten Taze veri taraması yapar." if ui_lang == "TR" else "Check to bypass cache and run full analysis."
+            help="Önbelleği yoksayıp taze veri çeker." if ui_lang == "TR" else "Bypass cache."
         )
-        st.markdown("---")
+    # Liste veya geçmişten seçilince otomatik analiz flag'i
+    if st.session_state.get("auto_analyze"):
+        analyze_btn = True
+        st.session_state["auto_analyze"] = False
 
-        # Analiz Geçmişi
+    with st.sidebar:
+        # Analiz Geçmişi (ikincil bilgi — kenar çubuğunda kalması doğal)
         history = _history_db.load_all()
         if history:
             st.markdown("### " + ("Analiz Geçmişi" if ui_lang == "TR" else "Analysis History"))
