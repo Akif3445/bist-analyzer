@@ -2706,6 +2706,17 @@ ENAG_MOM_DEFAULTS = {
     **{f"2022-{m:02d}": (7.47, "tahmini-yillik") for m in range(1, 13)},
     **{f"2023-{m:02d}": (7.08, "tahmini-yillik") for m in range(1, 13)},
     **{f"2024-{m:02d}": (5.18, "tahmini-yillik") for m in range(1, 13)},
+    # Wayback arşivinden hasat edilen GERÇEK aylık değerler (2026-07 taraması;
+    # site kopyalarındaki resmi duyurulardan) — düz tahminlerin üzerine yazar:
+    "2020-11": (4.03, "resmi-arsiv"), "2020-12": (4.08, "resmi-arsiv"),
+    "2021-01": (2.99, "resmi-arsiv"), "2021-03": (3.36, "resmi-arsiv"),
+    "2021-04": (2.62, "resmi-arsiv"), "2021-05": (3.94, "resmi-arsiv"),
+    "2022-07": (5.03, "resmi-arsiv"), "2022-09": (5.30, "resmi-arsiv"),
+    "2023-07": (13.18, "resmi-arsiv"), "2023-10": (5.09, "resmi-arsiv"),
+    "2023-11": (5.58, "resmi-arsiv"), "2024-01": (9.38, "resmi-arsiv"),
+    "2024-02": (4.32, "resmi-arsiv"), "2024-05": (5.66, "resmi-arsiv"),
+    "2024-06": (4.27, "resmi-arsiv"), "2024-12": (2.34, "resmi-arsiv"),
+    "2025-02": (3.37, "resmi-arsiv"),
     "2025-01": (5.10, "tahmini"), "2025-02": (5.10, "tahmini"),
     "2025-03": (5.10, "tahmini"), "2025-04": (4.46, "resmi"),
     "2025-05": (3.66, "resmi"),   "2025-06": (1.94, "resmi"),
