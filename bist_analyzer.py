@@ -3596,6 +3596,58 @@ class PortfolioManager:
         return out
 
     @staticmethod
+    def intraday_navs(ports: list, poss: dict, navs: dict, days: int = 8) -> tuple:
+        """Saatlik NAV yeniden inşası — grafikler 'dümdüz' kalmasın diye.
+
+        pm_nav günde 1 nokta tutar; burada pozisyonlardan (giriş fiyatı +
+        ağırlık) son N günün SAATLİK fiyatlarıyla NAV'ı yeniden hesaplarız.
+        Baz, portföyün gün-0 NAV'ına oturtulur (giriş maliyeti korunur).
+        Dönüş: ({pid: pd.Series}, xu100_series)
+        """
+        tickers = {x["ticker"] for pid in poss for x in poss.get(pid, [])}
+        if not tickers:
+            return {}, pd.Series(dtype=float)
+        try:
+            syms = [t + ".IS" for t in tickers] + ["XU100.IS"]
+            bulk = yf.download(syms, period=f"{days}d", interval="60m",
+                               auto_adjust=True, progress=False, group_by="ticker")
+            price = {}
+            for s in syms:
+                try:
+                    cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
+                    if len(cl):
+                        price[s[:-3] if s.endswith(".IS") else s] = cl
+                except Exception:
+                    continue
+            xu = price.pop("XU100", pd.Series(dtype=float))
+            out = {}
+            for p in ports:
+                pos = poss.get(p["id"], [])
+                if not pos:
+                    continue
+                created = pd.Timestamp(p["created_at"][:10])
+                nav0_rows = navs.get(p["id"])
+                base = float(nav0_rows["nav"].iloc[0]) if nav0_rows is not None and len(nav0_rows) else 100.0
+                seri, w_top = None, 0.0
+                for x in pos:
+                    cl = price.get(x["ticker"])
+                    if cl is None or x["entry_price"] <= 0:
+                        continue
+                    katki = x["weight"] * (cl / x["entry_price"])
+                    seri = katki if seri is None else seri.add(katki, fill_value=None)
+                    w_top += x["weight"]
+                if seri is None or w_top <= 0:
+                    continue
+                seri = (seri / w_top * base).dropna()
+                seri = seri[seri.index.tz_localize(None) >= created] if seri.index.tz else seri[seri.index >= created]
+                if len(seri) >= 2:
+                    out[p["id"]] = seri
+            return out, xu
+        except Exception as exc:
+            log.warning("Saatlik NAV inşası hatası: %s", exc)
+            return {}, pd.Series(dtype=float)
+
+    @staticmethod
     def risk_metrics(nav_df: pd.DataFrame) -> dict:
         """Kurumsal risk metrikleri (Roadmap-C). En az 10 NAV noktası ister.
 
@@ -10276,7 +10328,27 @@ def render_portfolio_manager_page(ui_lang):
         fig_cmp = go.Figure()
         xu_series = {}   # tarih -> xu100 (benchmark için tüm portföylerden topla)
         _total_pts = 0
+        # 1 Hafta görünümü: pozisyonlardan SAATLİK yeniden inşa (canlı, sık aralık);
+        # diğer aralıklar: kayıtlı günlük NAV
+        _saatlik = {}
+        _xu_saat = pd.Series(dtype=float)
+        if range_label == "1 Hafta":
+            _saatlik, _xu_saat = PortfolioManager.intraday_navs(_chart_ports, _poss_all, _navs_all)
         for p in _chart_ports:
+            _m = _pm_meta(p["horizon"], p["profile"])
+            is_shadow = p.get("kind") == "golge"
+            label = f"{_m['ikon']} {p['name']}"
+            _hs = _saatlik.get(p["id"])
+            if _hs is not None and len(_hs) >= 2:
+                base = float(_hs.iloc[0])
+                fig_cmp.add_trace(go.Scatter(
+                    x=_hs.index, y=(_hs / base * 100.0).round(2), mode="lines",
+                    name=label, opacity=0.55 if is_shadow else 1.0,
+                    line=dict(width=1.2 if is_shadow else 2.5,
+                              dash="dot" if is_shadow else "solid"),
+                ))
+                _total_pts += len(_hs)
+                continue
             nav = _navs_all.get(p["id"], pd.DataFrame())
             nav = nav[nav["date"] >= _cutoff] if len(nav) else nav
             if nav.empty:
@@ -10285,9 +10357,6 @@ def render_portfolio_manager_page(ui_lang):
             if base <= 0:
                 continue
             rebased = nav["nav"] / base * 100.0
-            _m = _pm_meta(p["horizon"], p["profile"])
-            is_shadow = p.get("kind") == "golge"
-            label = f"{_m['ikon']} {p['name']}"
             fig_cmp.add_trace(go.Scatter(
                 x=nav["date"], y=rebased.round(2), mode="lines+markers",
                 name=label, opacity=0.55 if is_shadow else 1.0,
@@ -10298,6 +10367,12 @@ def render_portfolio_manager_page(ui_lang):
             for d, x in zip(nav["date"], nav["xu100_close"]):
                 if x and x > 0:
                     xu_series[d] = x
+        if range_label == "1 Hafta" and len(_xu_saat) >= 2:
+            _xb = float(_xu_saat.iloc[0])
+            fig_cmp.add_trace(go.Scatter(
+                x=_xu_saat.index, y=(_xu_saat / _xb * 100.0).round(2), mode="lines",
+                name="XU100 (endeks)", line=dict(width=2, color="#8a8172", dash="dash")))
+            xu_series = {}   # günlük benchmark çizgisini tekrar ekleme
         if xu_series:
             xs = sorted(xu_series.items())
             xu_base = xs[0][1]
@@ -10481,8 +10556,8 @@ def render_portfolio_manager_page(ui_lang):
                 sec_stats.append({
                     "Sektör": sec,
                     "Hisse": len(rs),
-                    "1A Mom %": round(np.mean([r.momentum_1m for r in rs]), 1),
-                    "3A Mom %": round(np.mean([r.momentum_3m for r in rs]), 1),
+                    "1A Mom %": round(float(np.median([r.momentum_1m for r in rs])), 1),
+                    "3A Mom %": round(float(np.median([r.momentum_3m for r in rs])), 1),
                     "Ort. Skor": round(np.mean([r.score for r in rs]), 1),
                     "SMA200 Üstü %": round(np.mean([r.price_above_sma200 for r in rs]) * 100, 0),
                 })
@@ -10495,34 +10570,51 @@ def render_portfolio_manager_page(ui_lang):
 
             # Çeyrek (kadran) grafiği: x=3A, y=1A momentum
             fig = go.Figure()
-            for s in sec_stats:
+            _pozisyonlar = ["top center", "bottom center", "middle right", "middle left"]
+            for _si, s in enumerate(sec_stats):
                 x, y = s["3A Mom %"], s["1A Mom %"]
                 if x >= 0 and y >= 0:   color, quad = "#1d6f4e", "Lider"
                 elif x < 0 and y >= 0:  color, quad = "#27509e", "Toparlanan"
                 elif x >= 0 and y < 0:  color, quad = "#a2701d", "Zayıflayan"
                 else:                   color, quad = "#9e2b25", "Geride"
+                _az_ornek = s["Hisse"] < 4   # 3 hisselik sektor ortalamasi guvensiz
                 fig.add_trace(go.Scatter(
                     x=[x], y=[y], mode="markers+text",
-                    marker=dict(size=10 + s["Hisse"] * 2, color=color, opacity=0.85),
-                    text=[s["Sektör"]], textposition="top center",
-                    textfont=dict(size=11, color="#1a1712"),
+                    marker=dict(size=min(9 + s["Hisse"] * 1.2, 24), color=color,
+                                opacity=0.35 if _az_ornek else 0.9,
+                                line=dict(width=1, color=_theme()["line"])),
+                    text=[s["Sektör"] + (" *" if _az_ornek else "")],
+                    textposition=_pozisyonlar[_si % 4],
+                    textfont=dict(size=10.5, color=_theme()["muted" ] if _az_ornek else _theme()["ink"]),
                     name=quad, showlegend=False,
                     hovertemplate=f"{s['Sektör']}<br>3A: %{{x}}<br>1A: %{{y}}<br>"
                                   f"Skor: {s['Ort. Skor']}<extra></extra>",
                 ))
             fig.add_hline(y=0, line_color="#b8ae9a", line_width=1)
             fig.add_vline(x=0, line_color="#b8ae9a", line_width=1)
+            _xs = [s["3A Mom %"] for s in sec_stats]; _ys = [s["1A Mom %"] for s in sec_stats]
+            _xpad = max(3.0, (max(_xs) - min(_xs)) * 0.22); _ypad = max(2.0, (max(_ys) - min(_ys)) * 0.22)
             fig.update_layout(
-                template=_theme()["plotly"], height=420,
-                xaxis_title="3 Aylık Momentum %", yaxis_title="1 Aylık Momentum %",
+                template=_theme()["plotly"], height=560,
+                xaxis_title="3 Aylık Momentum % (medyan)", yaxis_title="1 Aylık Momentum % (medyan)",
+                xaxis_range=[min(_xs)-_xpad, max(_xs)+_xpad],
+                yaxis_range=[min(_ys)-_ypad, max(_ys)+_ypad],
                 paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["bg"],
                 margin=dict(l=40, r=20, t=30, b=40),
                 title="Sektör Rotasyon Haritası — sağ üst köşe güçlü",
             )
+            for _qx, _qy, _qt in [(0.98, 0.98, "LİDER"), (0.02, 0.98, "TOPARLANAN"),
+                                   (0.98, 0.02, "ZAYIFLAYAN"), (0.02, 0.02, "GERİDE")]:
+                fig.add_annotation(xref="paper", yref="paper", x=_qx, y=_qy, text=_qt,
+                                   showarrow=False, font=dict(size=10, color=_theme()["muted"]),
+                                   opacity=0.55)
             st.plotly_chart(fig, use_container_width=True)
 
             sdf = sdf.sort_values("Ort. Skor", ascending=False)
             st.dataframe(sdf, use_container_width=True, hide_index=True)
+            st.caption("⚠️ Sektör büyüklükleri eşit değil (3 hisselik sektör ile 29 hisselik kıyaslanmaz) — "
+                       "bu yüzden medyan kullanılır, * işaretli/soluk balonlar 4'ten az hisseli sektörlerdir; "
+                       "onların konumunu tek bir hisse belirlemiş olabilir, temkinli oku.")
             best = sdf.iloc[0]
             st.info(f"💡 En güçlü sektör: **{best['Sektör']}** (ort. skor {best['Ort. Skor']}, "
                     f"hisselerin %{best['SMA200 Üstü %']:.0f}'i uzun vadeli trend üstünde). "
