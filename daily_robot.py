@@ -80,6 +80,64 @@ def main() -> int:
     except Exception as exc:
         print(f"[3/4] Risk kontrolü hatası: {exc}")
 
+    # 2.7) ENAG hatırlatıcısı — geçen ayın verisi eksikse duyuruyu tespit et
+    # Not: haber başlıkları YILLIK değeri verir, sitenin SSL'i bozuk (525) —
+    # bu yüzden sayı OTOMATİK YAZILMAZ; site düzelirse dener, yoksa
+    # kullanıcıya "değeri gir" alarmı bırakır. Elle giriş her zaman esas.
+    try:
+        import re as _re
+        from urllib.parse import quote as _q
+        onceki_ay = (datetime.now().replace(day=1) - __import__("datetime").timedelta(days=1)).strftime("%Y-%m")
+        rates = ba.InflationEngine.rates()
+        kayit = rates.get(onceki_ay)
+        eksik = (kayit is None) or ("tahmin" in (kayit[1] or ""))
+        if eksik and datetime.now().day >= 4:
+            yazildi = False
+            try:  # 1) site (çoğunlukla 525, ama denemesi bedava)
+                import requests as _rq
+                r = _rq.get("https://enagrup.org/", timeout=20,
+                            headers={"User-Agent": "Mozilla/5.0"})
+                if r.status_code == 200:
+                    m = _re.search(r"ayl[ıi]k[^%]{0,60}%\s*(\d{1,2})[.,](\d{1,2})",
+                                   _re.sub(r"<[^>]+>", " ", r.text), _re.IGNORECASE)
+                    if m:
+                        val = float(f"{m.group(1)}.{m.group(2)}")
+                        if 0 < val < 25:
+                            ba.InflationEngine.set_rate(onceki_ay, val)
+                            ba._PMDB.execute(
+                                "INSERT INTO pm_alerts (created_at, pid, ticker, tip, mesaj) VALUES (?,?,?,?,?)",
+                                (datetime.now().strftime("%Y-%m-%d %H:%M"), 0, "*", "ENAG",
+                                 f"ℹ️ ENAG {onceki_ay} aylık %{val} siteden otomatik alındı — ENAG Verisi sekmesinden DOĞRULA."))
+                            yazildi = True
+                            print(f"[2.7]  ENAG {onceki_ay}: %{val} siteden alındı (doğrulama alarmı bırakıldı)")
+            except Exception:
+                pass
+            if not yazildi:  # 2) duyuru tespiti → hatırlatma alarmı (ayda 1)
+                aylar_tr = ["", "ocak", "şubat", "mart", "nisan", "mayıs", "haziran",
+                            "temmuz", "ağustos", "eylül", "ekim", "kasım", "aralık"]
+                ay_adi = aylar_tr[int(onceki_ay[5:])]
+                import requests as _rq
+                xml = _rq.get(f"https://news.google.com/rss/search?q={_q('ENAG ' + ay_adi + ' enflasyon')}"
+                              f"&hl=tr&gl=TR&ceid=TR:tr", timeout=20).text
+                duyuru_var = ay_adi in xml.lower() and "enag" in xml.lower()
+                onceki_alarm = ba._PMDB.execute(
+                    "SELECT COUNT(*) AS c FROM pm_alerts WHERE tip='ENAG' AND mesaj LIKE ?",
+                    (f"%{onceki_ay}%",))["rows"]
+                if duyuru_var and (not onceki_alarm or onceki_alarm[0].get("c", 0) == 0):
+                    ba.PortfolioManager._init_alerts()
+                    ba._PMDB.execute(
+                        "INSERT INTO pm_alerts (created_at, pid, ticker, tip, mesaj) VALUES (?,?,?,?,?)",
+                        (datetime.now().strftime("%Y-%m-%d %H:%M"), 0, "*", "ENAG",
+                         f"📰 ENAG {ay_adi} ayı enflasyonunu açıkladı — AYLIK değeri "
+                         f"@ENAGRUP'tan bakıp ENAG Verisi sekmesine gir ({onceki_ay})."))
+                    print(f"[2.7]  ENAG {onceki_ay} eksik — hatırlatma alarmı bırakıldı")
+                else:
+                    print(f"[2.7]  ENAG {onceki_ay} eksik, duyuru henüz tespit edilemedi")
+        else:
+            print(f"[2.7]  ENAG {onceki_ay} kayıtlı ✓")
+    except Exception as exc:
+        print(f"[2.7]  ENAG kontrol hatası: {exc}")
+
     # 3.5) Aylık parametre kararlılık koşusu (Roadmap-D) — ayda 1, ayın ilk günlerinde
     try:
         ay = datetime.now().strftime("%Y-%m")
