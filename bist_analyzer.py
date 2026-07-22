@@ -10607,8 +10607,101 @@ def render_portfolio_manager_page(ui_lang):
             sdf = pd.DataFrame(sec_stats)
 
             # Çeyrek (kadran) grafiği: x=3A, y=1A momentum
+            # Eksen aralığı aykırı değere dayanıklı (IQR-kırpma): tek uç sektör
+            # (örn. +%31 Çelik) ekseni germesin diye taşanlar kenara sabitlenir,
+            # gerçek değerleri etikette/hover'da gösterilir.
+            _xs = [s["3A Mom %"] for s in sec_stats]; _ys = [s["1A Mom %"] for s in sec_stats]
+
+            def _robust_range(vals, min_pad):
+                q1, q3 = np.percentile(vals, [25, 75])
+                iqr = max(q3 - q1, 1.0)
+                lo = max(min(vals), q1 - 1.8 * iqr)
+                hi = min(max(vals), q3 + 1.8 * iqr)
+                pad = max(min_pad, (hi - lo) * 0.16)
+                # 0 çizgisi (kadran sınırı) her zaman görünür kalsın
+                return min(lo, 0) - pad, max(hi, 0) + pad
+
+            _xlo, _xhi = _robust_range(_xs, 3.0)
+            _ylo, _yhi = _robust_range(_ys, 2.0)
+
+            # Etiket yerleşimi: önce yakın komşulardan DIŞA iten yön, çakışırsa
+            # alternatif konumlar denenir (yaklaşık piksel modeliyle açgözlü).
+            _pts = list(zip(_xs, _ys))
+            _PX_W, _PX_H = 1050.0, 450.0        # yaklaşık çizim alanı
+            _sx = _PX_W / ((_xhi - _xlo) or 1.0); _sy = _PX_H / ((_yhi - _ylo) or 1.0)
+
+            def _px(p):  # veri koordinatı → yaklaşık piksel
+                return (p[0] - _xlo) * _sx, (_yhi - p[1]) * _sy
+
+            def _lbl_box(px, py, nchar, pos):
+                w = nchar * 7.5 + 10; h = 18.0
+                vert, _, horiz = pos.partition(" ")
+                cx = px + (w/2 + 10 if horiz == "right" else -w/2 - 10 if horiz == "left" else 0)
+                cy = py + (h/2 + 12 if vert == "bottom" else -h/2 - 12 if vert == "top" else 0)
+                return cx - w/2, cy - h/2, cx + w/2, cy + h/2
+
+            def _overlap_area(box, placed):
+                tot = 0.0
+                for b in placed:
+                    w = min(box[2], b[2]) - max(box[0], b[0])
+                    h = min(box[3], b[3]) - max(box[1], b[1])
+                    if w > 0 and h > 0:
+                        tot += w * h
+                return tot
+
+            def _pref_order(i):
+                xi, yi = _pts[i]
+                others = sorted((((p[0]-xi)*_sx)**2 + ((p[1]-yi)*_sy)**2, p)
+                                for j, p in enumerate(_pts) if j != i)[:3]
+                cx = np.mean([p[0] for _, p in others]) if others else xi - 1
+                cy = np.mean([p[1] for _, p in others]) if others else yi - 1
+                dx = (xi - cx) * _sx; dy = (yi - cy) * _sy
+                vert = "top" if dy >= 0 else "bottom"
+                anti = "bottom" if vert == "top" else "top"
+                horiz = "right" if dx >= 0 else "left"
+                ahoriz = "left" if horiz == "right" else "right"
+                first = (f"middle {horiz}" if abs(dx) > abs(dy) * 1.6
+                         else f"{vert} {horiz}" if abs(dx) > abs(dy) * 0.5
+                         else f"{vert} center")
+                cands = [first, f"{vert} center", f"{vert} {horiz}", f"middle {horiz}",
+                         f"{vert} {ahoriz}", f"{anti} center", f"middle {ahoriz}",
+                         f"{anti} {horiz}", f"{anti} {ahoriz}"]
+                return list(dict.fromkeys(cands))
+
+            def _assign_positions(labels):
+                placed, out = [], []
+                for i in range(len(_pts)):
+                    px, py = _px(_pts[i])
+                    pos_seq = _pref_order(i)
+                    # Boş konum varsa ilk tercihe en yakınını al; hepsi doluysa
+                    # en az çakışanı seç (yoğun kümede kaçınılmaz)
+                    best_pos, best_ov = pos_seq[0], float("inf")
+                    for pos in pos_seq:
+                        box = _lbl_box(px, py, len(labels[i]), pos)
+                        ov = _overlap_area(box, placed)
+                        if ov == 0:
+                            best_pos = pos
+                            break
+                        if ov < best_ov:
+                            best_pos, best_ov = pos, ov
+                    placed.append(_lbl_box(px, py, len(labels[i]), best_pos))
+                    out.append(best_pos)
+                return out
+            # Ön geçiş: kenara sabitleme (aykırı değer) + etiket metinleri
+            _clipped, _labels = [], []
+            for s in sec_stats:
+                x, y = s["3A Mom %"], s["1A Mom %"]
+                _cx = float(np.clip(x, _xlo + (_xhi-_xlo)*0.03, _xhi - (_xhi-_xlo)*0.03))
+                _cy = float(np.clip(y, _ylo + (_yhi-_ylo)*0.03, _yhi - (_yhi-_ylo)*0.03))
+                _tasti = (_cx != x) or (_cy != y)
+                _lbl = s["Sektör"] + (" *" if s["Hisse"] < 4 else "")
+                if _tasti:
+                    _lbl += f" ({x:+.0f}/{y:+.0f})"
+                _clipped.append((_cx, _cy, _tasti)); _labels.append(_lbl)
+            _pts = [(c[0], c[1]) for c in _clipped]   # yerleşim, kırpılmış konuma göre
+            _positions = _assign_positions(_labels)
+
             fig = go.Figure()
-            _pozisyonlar = ["top center", "bottom center", "middle right", "middle left"]
             for _si, s in enumerate(sec_stats):
                 x, y = s["3A Mom %"], s["1A Mom %"]
                 if x >= 0 and y >= 0:   color, quad = "#1d6f4e", "Lider"
@@ -10616,27 +10709,27 @@ def render_portfolio_manager_page(ui_lang):
                 elif x >= 0 and y < 0:  color, quad = "#a2701d", "Zayıflayan"
                 else:                   color, quad = "#9e2b25", "Geride"
                 _az_ornek = s["Hisse"] < 4   # 3 hisselik sektor ortalamasi guvensiz
+                _cx, _cy, _tasti = _clipped[_si]
                 fig.add_trace(go.Scatter(
-                    x=[x], y=[y], mode="markers+text",
+                    x=[_cx], y=[_cy], mode="markers+text",
                     marker=dict(size=min(9 + s["Hisse"] * 1.2, 24), color=color,
                                 opacity=0.35 if _az_ornek else 0.9,
+                                symbol="diamond" if _tasti else "circle",
                                 line=dict(width=1, color=_theme()["line"])),
-                    text=[s["Sektör"] + (" *" if _az_ornek else "")],
-                    textposition=_pozisyonlar[_si % 4],
+                    text=[_labels[_si]],
+                    textposition=_positions[_si],
                     textfont=dict(size=10.5, color=_theme()["muted" ] if _az_ornek else _theme()["ink"]),
                     name=quad, showlegend=False,
-                    hovertemplate=f"{s['Sektör']}<br>3A: %{{x}}<br>1A: %{{y}}<br>"
+                    hovertemplate=f"{s['Sektör']}<br>3A: %{x:+.1f}<br>1A: %{y:+.1f}<br>"
                                   f"Skor: {s['Ort. Skor']}<extra></extra>",
                 ))
             fig.add_hline(y=0, line_color="#b8ae9a", line_width=1)
             fig.add_vline(x=0, line_color="#b8ae9a", line_width=1)
-            _xs = [s["3A Mom %"] for s in sec_stats]; _ys = [s["1A Mom %"] for s in sec_stats]
-            _xpad = max(3.0, (max(_xs) - min(_xs)) * 0.22); _ypad = max(2.0, (max(_ys) - min(_ys)) * 0.22)
             fig.update_layout(
                 template=_theme()["plotly"], height=560,
                 xaxis_title="3 Aylık Momentum % (medyan)", yaxis_title="1 Aylık Momentum % (medyan)",
-                xaxis_range=[min(_xs)-_xpad, max(_xs)+_xpad],
-                yaxis_range=[min(_ys)-_ypad, max(_ys)+_ypad],
+                xaxis_range=[_xlo, _xhi],
+                yaxis_range=[_ylo, _yhi],
                 paper_bgcolor=_theme()["bg"], plot_bgcolor=_theme()["bg"],
                 margin=dict(l=40, r=20, t=30, b=40),
                 title="Sektör Rotasyon Haritası — sağ üst köşe güçlü",
@@ -10652,7 +10745,9 @@ def render_portfolio_manager_page(ui_lang):
             st.dataframe(sdf, use_container_width=True, hide_index=True)
             st.caption("⚠️ Sektör büyüklükleri eşit değil (3 hisselik sektör ile 29 hisselik kıyaslanmaz) — "
                        "bu yüzden medyan kullanılır, * işaretli/soluk balonlar 4'ten az hisseli sektörlerdir; "
-                       "onların konumunu tek bir hisse belirlemiş olabilir, temkinli oku.")
+                       "onların konumunu tek bir hisse belirlemiş olabilir, temkinli oku. "
+                       "◆ elmas işaretli sektörler harita aralığının dışına taşan uç değerlerdir — "
+                       "kenara sabitlenmiştir, gerçek momentum parantez içindedir.")
             best = sdf.iloc[0]
             st.info(f"💡 En güçlü sektör: **{best['Sektör']}** (ort. skor {best['Ort. Skor']}, "
                     f"hisselerin %{best['SMA200 Üstü %']:.0f}'i uzun vadeli trend üstünde). "
