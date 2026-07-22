@@ -2813,12 +2813,17 @@ class _PMDB:
                 out = []
                 for res in r.json()["results"][:len(stmts)]:
                     if res.get("type") == "error":
-                        raise RuntimeError(res.get("error", {}).get("message", "turso error"))
+                        # SQL hatası: Turso'ya ULAŞILDI, statement geçersiz.
+                        # Lokale düşme (split-brain yazma riski) — hatayı yükselt.
+                        raise sqlite3.OperationalError(
+                            res.get("error", {}).get("message", "turso error"))
                     rr = res["response"]["result"]
                     lid = rr.get("last_insert_rowid")
                     out.append({"rows": _PMDB._parse_rows(rr),
                                 "lastrowid": int(lid) if lid else None})
                 return out
+            except sqlite3.OperationalError:
+                raise
             except Exception as exc:
                 log.warning("Turso erişim hatası — lokal SQLite'a düşülüyor: %s", exc)
         # Lokal SQLite yolu
@@ -3232,6 +3237,14 @@ class PortfolioManager:
 
     @staticmethod
     def _init_tables():
+        # _initialized sınıf özniteliği her Streamlit rerun'ında sıfırlanır
+        # (script baştan çalışır) — session_state rerun'lar arası kalıcıdır,
+        # yoksa her tıklamada Turso'ya CREATE TABLE turu atılır.
+        try:
+            if st.session_state.get("_pm_db_init"):
+                return
+        except Exception:
+            pass   # Streamlit dışı bağlam (robot) — sınıf bayrağıyla devam
         if PortfolioManager._initialized:
             return
         _PMDB.execute_batch([
@@ -3258,12 +3271,18 @@ class PortfolioManager:
                 )
             """, ()),
         ])
-        # Eski tabloya kind kolonu ekle (varsa hata verir, yut)
+        # Eski tabloya kind kolonu ekle — idempotent: önce var mı diye bak
         try:
-            _PMDB.execute("ALTER TABLE pm_portfolios ADD COLUMN kind TEXT DEFAULT 'kullanici'")
+            cols = _PMDB.execute("SELECT name FROM pragma_table_info('pm_portfolios')")["rows"]
+            if not any(c.get("name") == "kind" for c in cols):
+                _PMDB.execute("ALTER TABLE pm_portfolios ADD COLUMN kind TEXT DEFAULT 'kullanici'")
+        except Exception as exc:
+            log.warning("pm_portfolios kind migration atlandı: %s", exc)
+        PortfolioManager._initialized = True
+        try:
+            st.session_state["_pm_db_init"] = True
         except Exception:
             pass
-        PortfolioManager._initialized = True
 
     # PORTFÖY ÖNERİSİ
 
