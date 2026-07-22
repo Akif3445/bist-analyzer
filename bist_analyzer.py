@@ -3326,6 +3326,16 @@ class PortfolioManager:
         target_mult = PortfolioManager.TARGET_MULTS[horizon]
         picks = PortfolioManager._format_picks(pool, keyf, prof["max_pos"],
                                                prof["sector_cap"], stop_mult, target_mult)
+        # Minimum çeşitleme koruması: filtrelerden 3'ten az hisse geçtiyse
+        # portföy KURULMAZ. Tek hisseye %100 ağırlık "portföy" değildir —
+        # W29 kisa/Temkinli gölgesi tek hisse TUPRS ile kaydolmuştu; o hafta
+        # +%16 yazdı ama bu temkinlilik değil konsantrasyon kumarıdır.
+        MIN_POS = 3
+        if 0 < len(picks) < MIN_POS:
+            adlar = ", ".join(p["ticker"] for p in picks)
+            return [], (f"Filtrelerden yalnız {len(picks)} hisse geçti ({adlar}) — "
+                        f"{MIN_POS} hisseden az portföy önerilmez (tek hisseye yığılma riski). "
+                        "Bu vade/profil kombinasyonu için bu hafta beklemek daha sağlıklı.")
         return picks, warning
 
     # Günlük kapanış serisi cache'i (korelasyon filtresi için — günde 1 indirme)
@@ -10376,12 +10386,26 @@ def render_portfolio_manager_page(ui_lang):
                                    ["1 Hafta", "1 Ay", "3 Ay", "1 Yıl", "Tümü"],
                                    index=4, horizontal=True, key="pm_cmp_range")
         with gc2:
-            inc_shadow = st.checkbox("Gölge portföyler dahil" if ui_lang == "TR" else "Include shadows",
-                                     value=True, key="pm_cmp_shadow")
+            golge_sec = st.radio("Gölge portföyler" if ui_lang == "TR" else "Shadows",
+                                 ["Son kohort", "Tümü", "Yok"], index=0, horizontal=True,
+                                 key="pm_cmp_shadow_mode",
+                                 help="Her hafta 9 gölge + 2 kontrol açılır; hepsi çizilirse "
+                                      "grafik okunmaz olur. 'Son kohort' yalnız en yeni haftayı "
+                                      "gösterir — eski kohortlar arkada izlenmeye devam eder "
+                                      "(Kombinasyon Karnesi hepsini toplar).")
         _range_days = {"1 Hafta": 7, "1 Ay": 30, "3 Ay": 90, "1 Yıl": 365, "Tümü": 9999}[range_label]
         _cutoff = (datetime.now() - timedelta(days=_range_days)).strftime("%Y-%m-%d")
 
-        _chart_ports = _all_active if inc_shadow else ports
+        if golge_sec == "Yok":
+            _chart_ports = ports
+        elif golge_sec == "Tümü":
+            _chart_ports = _all_active
+        else:
+            # Son kohort: gölge adları "... 2026-W29" ile biter — en yeni hafta etiketi
+            _hafta = [p["name"].split()[-1] for p in shadows if "-W" in p["name"].split()[-1]]
+            _son_h = max(_hafta) if _hafta else ""
+            _chart_ports = ports + [p for p in shadows
+                                    if _son_h and p["name"].split()[-1] == _son_h]
         fig_cmp = go.Figure()
         xu_series = {}   # tarih -> xu100 (benchmark için tüm portföylerden topla)
         _total_pts = 0
