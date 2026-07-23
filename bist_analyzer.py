@@ -3447,10 +3447,23 @@ class PortfolioManager:
 
         warning = ""
         if regime.get("regime") == "Ayı":
+            # US'te AYI rejiminde TÜM vadeler kapalı — rejim-koşullu kalibrasyon
+            # (2026-07-23, analyze-us-regime, 26.5k gözlem): US momentum skorunun
+            # Ayı rejimindeki IC'si -0.0633 (t=-3.24), yani sinyal anlamlı biçimde
+            # YANLIŞ tarafta. BIST'te böyle bir kanıt yok; orada eski davranış
+            # (yalnız kısa vade kapalı, diğerleri uyarılı) korunur.
+            if market == "US":
+                return [], ("US piyasası AYI rejiminde — hiçbir vadede alım önerilmez. "
+                            "Kalibrasyon, bu rejimde skorun ters yönde çalıştığını gösteriyor "
+                            "(IC -0.063, t=-3.24): sinyale uymak zarar ettiriyor. "
+                            "Rejim dönene kadar nakit.")
             if horizon == "kisa":
                 return [], ("Piyasa AYI rejiminde — kısa vadeli alım önerilmez. "
                             "Sermayeyi korumak da bir pozisyondur; rejim dönene kadar nakit/kısa vadeli mevduat.")
             warning = "Piyasa AYI rejiminde: pozisyon boyutlarını yarıya indirmek ve stopları sıkmak önerilir."
+        elif market == "US" and regime.get("regime") == "Nötr":
+            warning = ("US Nötr rejim: kalibrasyonda skorun öngörü gücü bu rejimde "
+                       "sıfıra yakın (IC +0.002). Pozisyonları küçük tutun.")
 
         # Vadeye göre filtre + sıralama anahtarı
         if horizon == "kisa":

@@ -568,6 +568,85 @@ def analyze_us():
         print("-> iki stil de anlamsiz; US skorunu tek basina siralama olarak KULLANMA")
 
 
+
+def analyze_us_regime():
+    """Rejim-koşullu IC: sinyal HANGİ rejimde çalışıyor?
+
+    Bulgu (2026-07-23): 52 hafta pozisyonunun 90 günlük IC'si toplamda
+    t=3.95 ama yıl bazında episodik (2023 ve 2026 taşıyor). Hipotez: sinyal
+    momentum/boğa rejiminde çalışıyor, diğerlerinde değil. Burada geçmiş
+    rejim POINT-IN-TIME yeniden kurulur ve IC rejime göre ayrıştırılır.
+
+    Geçmiş rejim skoru canlı compute_market_regime ile aynı şemadır:
+      S&P500 SMA200 üstü (+2), golden cross (+1), 1A momentum>0 (+1),
+      genişlik >=60%/>=40% (+2/+1), VIX<22 (+1)  → 0-7
+    Genişlik panelin kendi above_sma200 kolonundan gelir (o tarihte
+    gerçekten bilinen bilgi — look-ahead yok).
+    """
+    panel = pd.read_csv(US_TECH_CSV)
+    panel["date"] = pd.to_datetime(panel["date"])
+
+    # 1) Endeks + VIX geçmişi
+    spx = yf.download("^GSPC", period="10y", interval="1d",
+                      auto_adjust=True, progress=False)
+    spx = _flatten_columns(spx)["Close"].dropna()
+    vix = yf.download("^VIX", period="10y", interval="1d",
+                      auto_adjust=True, progress=False)
+    vix = _flatten_columns(vix)["Close"].dropna()
+
+    sma50, sma200 = spx.rolling(50).mean(), spx.rolling(200).mean()
+    mom1m = spx / spx.shift(21) - 1
+
+    # 2) Genişlik: panelde o tarihte SMA200 üstü hisse oranı
+    breadth = panel.groupby("date")["above_sma200"].mean() * 100
+
+    # 3) Her panel tarihi için rejim puanı
+    kayit = {}
+    for d in panel["date"].unique():
+        d = pd.Timestamp(d)
+        try:
+            i = spx.index.asof(d)
+            if pd.isna(i):
+                continue
+            pts = 0
+            if spx.loc[i] > sma200.loc[i]:  pts += 2
+            if sma50.loc[i] > sma200.loc[i]: pts += 1
+            if mom1m.loc[i] > 0:             pts += 1
+            b = breadth.get(d, np.nan)
+            if not np.isnan(b):
+                pts += 2 if b >= 60 else (1 if b >= 40 else 0)
+            vi = vix.index.asof(d)
+            if not pd.isna(vi) and float(vix.loc[vi]) < 22:
+                pts += 1
+            kayit[d] = pts
+        except Exception:
+            continue
+    panel["rejim_puan"] = panel["date"].map(kayit)
+    panel = panel.dropna(subset=["rejim_puan"])
+    panel["rejim"] = np.where(panel["rejim_puan"] >= 5, "Boğa",
+                      np.where(panel["rejim_puan"] >= 3, "Nötr", "Ayı"))
+    panel["date"] = panel["date"].dt.strftime("%Y-%m-%d")
+
+    print(f"Panel: {len(panel)} gözlem | rejim dağılımı:")
+    for r, n in panel["rejim"].value_counts().items():
+        print(f"   {r:5}: {n:>6} gözlem (%{n/len(panel)*100:.0f})")
+
+    fwd = "fwd_90" if "fwd_90" in panel.columns else "fwd_30"
+    print(f"\nREJİM-KOŞULLU IC ({fwd}):")
+    print(f"{'Sinyal':<24} {'Rejim':<7} {'IC':>9} {'t':>7}   Yorum")
+    print("-" * 64)
+    for ad, col in [("52 hafta pozisyonu", "week52_position"),
+                    ("Momentum skoru", "tech_score_momentum")]:
+        for r in ("Boğa", "Nötr", "Ayı"):
+            alt = panel[panel["rejim"] == r]
+            if len(alt) < 500:
+                print(f"{ad:<24} {r:<7} {'—':>9} {'—':>7}   yetersiz gözlem")
+                continue
+            ic, t = _xsic_rank(alt, col, fwd)
+            yorum = ("GUCLU" if abs(t) > 2.5 else "zayif" if abs(t) > 1.5 else "anlamsiz")
+            print(f"{ad:<24} {r:<7} {ic:>+9.4f} {t:>+7.2f}   {yorum}")
+        print()
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "build-tech":
@@ -590,5 +669,8 @@ if __name__ == "__main__":
     elif cmd == "analyze-us-mid":
         US_TECH_CSV = "calibration_tech_us_mid.csv"
         analyze_us()
+    elif cmd == "analyze-us-regime":
+        US_TECH_CSV = "calibration_tech_us_mid.csv"
+        analyze_us_regime()
     else:
         print(__doc__)
