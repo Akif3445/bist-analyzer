@@ -1,19 +1,32 @@
 # BIST Smart Investment Assistant - Dependencies
 # pip install -r requirements.txt
+#
+# SÜRÜMLER SABİT (==) — tedarik zinciri koruması (2026-07-23).
+# Neden: robot GitHub Actions'ta TURSO_AUTH_TOKEN ortamdayken pip install
+# çalıştırıyor. ">=" ile her koşuda PyPI'daki EN YENİ sürüm inerdi; küçük bir
+# paketin (borsapy, tradingview-screener, streamlit-option-menu) hesabı ele
+# geçirilip zararlı sürüm yayınlansa robot onu otomatik kurar ve token sızardı.
+# Sabit sürümle her koşuda aynı, bilinen kod gelir.
+#
+# BEDELİ: otomatik güvenlik güncellemesi de durur. Sürümleri ARADA BİR ELLE
+# güncelle: `pip install -U <paket>` → uygulamayı çalıştırıp doğrula → buradaki
+# numarayı güncelle → commit. Not: yalnız doğrudan bağımlılıklar sabit;
+# onların alt bağımlılıkları hâlâ serbest (tam koruma için pip-tools/uv ile
+# hash'li lock dosyası gerekir — açık kalem).
 
-streamlit>=1.28.0
-streamlit-option-menu>=0.3.6
-plotly>=5.18.0
-pandas>=2.0.0
-numpy>=1.24.0
-yfinance>=0.2.40
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-lxml>=4.9.0
-feedparser>=6.0.0
-borsapy>=0.10.0   # KAP bildirimleri (news_engine._src_kap) — import'u lazy, RAM'e dokunmuyor
-python-dotenv>=1.0.0   # lokal .env okuma (ANTHROPIC_API_KEY, TURSO_*) — yoksa sessizce atlanır
-tradingview-screener>=3.0.0   # BIST analist hedef fiyat konsensüsü (fetch_tv_analyst_targets)
+streamlit==1.59.2
+streamlit-option-menu==0.4.0
+plotly==6.9.0
+pandas==3.0.3
+numpy==2.5.1
+yfinance==1.5.1
+requests==2.34.2
+beautifulsoup4==4.15.0
+lxml==6.1.1
+feedparser==6.0.12
+borsapy==0.10.2   # KAP bildirimleri (news_engine._src_kap) — import'u lazy, RAM'e dokunmuyor
+python-dotenv==1.2.2   # lokal .env okuma (ANTHROPIC_API_KEY, TURSO_*) — yoksa sessizce atlanır
+tradingview-screener==3.2.1   # BIST analist hedef fiyat konsensüsü (fetch_tv_analyst_targets)
 
 # Note: transformers + torch are NOT included here.
 # Streamlit Cloud free tier has ~1GB RAM — torch alone is 2GB+.
