@@ -78,6 +78,33 @@ def _get_secret(key: str, default: str = "") -> str:
         pass
     return (os.getenv(key) or default).strip()
 
+
+# ── Yazma koruması ────────────────────────────────────────────────────────
+# Halka açık demo (Streamlit Cloud) Turso yazma kimlik bilgileriyle koşar;
+# auth yoktur. Anonim ziyaretçinin paylaşılan veriyi (portföyler, NAV, ENAG
+# reel-getiri tablosu) bozmasını engellemek için: APP_EDIT_KEY secret'ı
+# TANIMLIYSA tüm yazma işlemleri o anahtarla kilit açmayı gerektirir.
+# Anahtar tanımlı DEĞİLSE (yerel geliştirme) davranış eskisi gibi serbesttir.
+def _writes_locked() -> bool:
+    """Yazma işlemleri kilitli mi? (secret tanımlı ve oturum açılmamışsa evet)"""
+    if not _get_secret("APP_EDIT_KEY"):
+        return False   # yerel/anahtarsız → serbest
+    try:
+        return not st.session_state.get("_edit_unlocked", False)
+    except Exception:
+        return False
+
+
+def _guard_write() -> bool:
+    """Yazma butonlarından önce çağrılır. Kilitliyse kullanıcıyı uyarır ve
+    False döner (çağıran işlem yapmaz). Serbestse True."""
+    if not _writes_locked():
+        return True
+    st.warning("🔒 Bu demo salt-görüntüleme modunda. Değişiklik yapmak için "
+               "kenar çubuğundan editör anahtarını girin.")
+    return False
+
+
 # News Engine
 try:
     from news_engine import analyze_news, render_news_panel, NewsAnalysisResult
@@ -10366,7 +10393,7 @@ def render_portfolio_manager_page(ui_lang):
                 pname = st.text_input("Portföy adı" if ui_lang == "TR" else "Portfolio name",
                                       value=f"{_m2['ad']} {datetime.now().strftime('%d.%m')}")
                 if st.button("Portföyü Kaydet ve İzlemeye Al" if ui_lang == "TR" else "Save & Track",
-                             use_container_width=True):
+                             use_container_width=True) and _guard_write():
                     pid = PortfolioManager.save_portfolio(pname, h_saved, p_saved, picks, regime["regime"])
                     del st.session_state["pm_last_proposal"]
                     st.success(f"Portföy #{pid} kaydedildi — performansı 'Portföylerim' sekmesinde izlenecek.")
@@ -10524,7 +10551,7 @@ def render_portfolio_manager_page(ui_lang):
                                 unsafe_allow_html=True)
                 with rc2:
                     if st.button("📦 Arşivle (izlemeyi durdur)", key=f"pm_arc_{p['id']}",
-                                 use_container_width=True):
+                                 use_container_width=True) and _guard_write():
                         PortfolioManager.archive(p["id"])
                         st.rerun()
 
@@ -10908,10 +10935,19 @@ def render_portfolio_manager_page(ui_lang):
             new_pct = st.number_input("Aylık artış %", value=3.0, step=0.01, format="%.2f")
         with ec3:
             st.write("")
-            if st.button("Kaydet", key="enag_save"):
-                InflationEngine.set_rate(new_ym.strip(), float(new_pct))
-                st.success(f"{new_ym}: %{new_pct} kaydedildi.")
-                st.rerun()
+            if st.button("Kaydet", key="enag_save") and _guard_write():
+                # Girdi doğrulama: geçerli YYYY-AA ve makul aralık (reel-getiri
+                # tablosunu saçma değerlere karşı koru)
+                import re as _re
+                _ym = new_ym.strip()
+                if not _re.fullmatch(r"20\d{2}-(0[1-9]|1[0-2])", _ym):
+                    st.error("Ay formatı YYYY-AA olmalı (örn. 2026-07).")
+                elif not (-50.0 <= float(new_pct) <= 100.0):
+                    st.error("Aylık oran -50 ile 100 arasında olmalı.")
+                else:
+                    InflationEngine.set_rate(_ym, float(new_pct))
+                    st.success(f"{_ym}: %{new_pct} kaydedildi.")
+                    st.rerun()
 
 
 def check_portfolio_alerts(ui_lang):
@@ -11175,6 +11211,25 @@ def run_app():
             format_func=lambda x: {"TR": "Turkce", "EN": "English"}[x],
             key="global_lang_select"
         )
+
+        # Editör kilidi — yalnız APP_EDIT_KEY secret'ı tanımlıysa gösterilir
+        # (halka açık demoda yazma korumasının kilit açma noktası)
+        if _get_secret("APP_EDIT_KEY"):
+            if st.session_state.get("_edit_unlocked"):
+                st.caption("🔓 Editör modu açık")
+                if st.button("Kilitle", key="_edit_lock_btn"):
+                    st.session_state["_edit_unlocked"] = False
+                    st.rerun()
+            else:
+                with st.expander("🔒 Editör girişi"):
+                    _k = st.text_input("Editör anahtarı", type="password", key="_edit_key_in")
+                    if st.button("Aç", key="_edit_unlock_btn"):
+                        import hmac
+                        if hmac.compare_digest(_k, _get_secret("APP_EDIT_KEY")):
+                            st.session_state["_edit_unlocked"] = True
+                            st.rerun()
+                        else:
+                            st.error("Anahtar hatalı.")
         st.markdown("---")
 
         if active_market == "BIST":
