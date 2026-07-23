@@ -14,7 +14,10 @@ Live demo: https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app
 streamlit run bist_analyzer.py          # run the app (also: Streamlid.bat)
 python test_backtest.py                 # ad-hoc manual backtest sanity check (not pytest, just run it)
 python test_rss.py                      # check which RSS news sources are currently reachable
+python tools/pmdb_admin.py enag-list    # PM DB maintenance: enag-list | enag-delete YYYY-MM | portfolios
 ```
+
+`tools/pmdb_admin.py` exists so DB maintenance doesn't require handing Claude Code a blanket "run any Python" permission — the local `.claude/settings.local.json` allows only `python tools/pmdb_admin.py:*`, so the possible operations are bounded by this script's subcommands. Add new maintenance actions as subcommands here rather than widening the permission rule.
 
 There is no test framework (no pytest) and no lint config — `test_*.py` files are standalone scripts you run and read the printed output of, not asserts.
 
