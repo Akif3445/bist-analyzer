@@ -3964,11 +3964,23 @@ class PortfolioManager:
         return bool(rows and rows[0].get("c", 0) > 0)
 
     @staticmethod
-    def check_risk_alerts() -> list:
+    def check_risk_alerts(market: str = None) -> list:
         """Aktif portföyleri tarar: stop kırılımı / hedefe ulaşma / portföy freni.
-        Yeni alarmları pm_alerts'e yazar (7 gün tekrar-yazma koruması). Dönüş: yeni alarmlar."""
+        Yeni alarmları pm_alerts'e yazar (7 gün tekrar-yazma koruması). Dönüş: yeni alarmlar.
+
+        market=None → her piyasa için ayrı koşar. Ayrı koşmak ŞART: sembol eki
+        piyasaya göre değişir (US'te .IS yoktur), tek toplu indirmede birleşince
+        US pozisyonları sessizce fiyatsız kalırdı."""
         PortfolioManager._init_alerts()
-        ports = PortfolioManager.active_portfolios()
+        if market is None:
+            _out = []
+            for _m in ("BIST", "US"):
+                try:
+                    _out.extend(PortfolioManager.check_risk_alerts(_m))
+                except Exception as exc:
+                    log.warning("Risk alarmı (%s) hatası: %s", _m, exc)
+            return _out
+        ports = PortfolioManager.active_portfolios(market=market)
         if not ports:
             return []
         pos_map = PortfolioManager.positions_all([p["id"] for p in ports])
@@ -3983,12 +3995,12 @@ class PortfolioManager:
         # Güncel fiyatlar (tek toplu indirme)
         price = {}
         try:
-            syms = [t + ".IS" for t in all_tickers]
+            syms = [_yf_symbol(t, market) for t in all_tickers]
             bulk = yf.download(syms, period="5d", interval="1d",
                                auto_adjust=True, progress=False, group_by="ticker")
             for t in all_tickers:
                 try:
-                    s = t + ".IS"
+                    s = _yf_symbol(t, market)
                     cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
                     if len(cl):
                         price[t] = float(cl.iloc[-1])
