@@ -2,6 +2,7 @@
 BIST Smart Investment Assistant
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -143,6 +144,19 @@ def _yf_symbol(ticker: str, market: str = "BIST") -> str:
 def _default_index(market: str = "BIST") -> str:
     """Piyasa ana endeksi."""
     return "^GSPC" if market == "US" else "XU100.IS"
+
+
+def _bench_ad(market: str = "BIST") -> str:
+    """Benchmark endeksin görünen adı."""
+    return "S&P 500" if market == "US" else "XU100"
+
+
+def _reel_var(market: str = "BIST") -> bool:
+    """Reel (enflasyondan arındırılmış) getiri raporlanıyor mu?
+
+    ENAG Türkiye enflasyonudur; US tarafı kullanıcı kararıyla NOMİNAL USD
+    raporlanır (2026-07-23), o yüzden US'te reel kolonu gösterilmez."""
+    return market != "US"
 
 
 ANTHROPIC_API_KEY = _get_secret("ANTHROPIC_API_KEY")
@@ -10245,7 +10259,7 @@ def _kokpit_macro() -> list:
     return out
 
 
-def render_kokpit_page(ui_lang):
+def render_kokpit_page(ui_lang, market: str = "BIST"):
     """Piyasa Defteri — gazete manşeti tarzı tek bakış kokpiti.
 
     Tasarım ilkesi: 'bugün ne yapmalıyım?' sorusuna 10 saniyede cevap.
@@ -10256,7 +10270,7 @@ def render_kokpit_page(ui_lang):
     tarih = f"{now.day} {_TR_AYLAR[now.month-1]} {now.year}, {_TR_GUNLER[now.weekday()]}"
 
     # ---- MANŞET ----
-    regime = compute_market_regime()
+    regime = compute_market_regime(market)
     _rejim_renk = {"Boğa": t["up"], "Nötr": t["warn"], "Ayı": t["down"]}.get(regime["regime"], t["muted"])
     st.markdown(
         f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
@@ -10294,7 +10308,7 @@ def render_kokpit_page(ui_lang):
 
     # ---- KPI ŞERİDİ: kullanıcı portföylerinin toplamı ----
     try:
-        ports = [p for p in PortfolioManager.active_portfolios() if p.get("kind") != "golge"]
+        ports = [p for p in PortfolioManager.active_portfolios(market=market) if p.get("kind") != "golge"]
         noms, reels, xrels = [], [], []
         _kperfs = PortfolioManager.performances(ports)
         for p in ports:
@@ -10304,13 +10318,15 @@ def render_kokpit_page(ui_lang):
         c1, c2, c3, c4 = st.columns(4)
         if noms:
             c1.metric("Portföyler (ort. nominal)", f"%{np.mean(noms):+.1f}")
-            c2.metric("ENAG-Reel", f"%{np.mean(reels):+.1f}",
+            c2.metric("ENAG-Reel",
+                      f"%{np.mean([x for x in reels if x is not None]):+.1f}"
+                      if _reel_var(market) and any(x is not None for x in reels) else "—",
                       help="Enflasyondan arındırılmış gerçek getiri")
-            c3.metric("XU100'e Göre", f"%{np.mean(xrels):+.1f}")
+            c3.metric(f"{_bench_ad(market)}'e Göre", f"%{np.mean(xrels):+.1f}")
         else:
             c1.metric("Portföyler", "—")
             c2.metric("ENAG-Reel", "—")
-            c3.metric("XU100'e Göre", "—")
+            c3.metric(f"{_bench_ad(market)}'e Göre", "—")
         c4.metric("İzlenen Portföy", f"{len(ports)} + gölge")
     except Exception as exc:
         log.warning("Kokpit KPI hatası: %s", exc)
@@ -10378,26 +10394,31 @@ def render_kokpit_page(ui_lang):
                 unsafe_allow_html=True)
 
         st.markdown("### Kısayollar")
+        # Hedef sayfa adları piyasaya göre değişir (US menüsünde "US " ön eki var)
+        _pm_sayfa = "US Portfoy Yoneticisi" if market == "US" else "Portfoy Yoneticisi"
+        _an_sayfa = "US Analiz" if market == "US" else "Hisse Analizi"
         k1, k2 = st.columns(2)
         if k1.button("Portföy Yöneticisi →", use_container_width=True):
-            st.session_state["nav_page"] = "Portfoy Yoneticisi"; st.rerun()
+            st.session_state["nav_page"] = _pm_sayfa; st.rerun()
         if k2.button("Hisse Analizi →", use_container_width=True):
-            st.session_state["nav_page"] = "Hisse Analizi"; st.rerun()
+            st.session_state["nav_page"] = _an_sayfa; st.rerun()
 
 
-def render_portfolio_manager_page(ui_lang):
+def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
     """Portföy Yöneticisi — rejim analizi, vade×profil portföy önerisi, ENAG-reel performans defteri."""
     st.markdown("# " + ("Portföy Yöneticisi" if ui_lang == "TR" else "Portfolio Manager"))
     st.caption(
         "Piyasa rejimini okur, vade ve yatırımcı profiline göre portföy önerir, "
-        "kaydettiğiniz portföylerin performansını nominal + ENAG-reel + XU100-göreli ölçer."
+        + ("kaydettiğiniz portföylerin performansını nominal + ENAG-reel + XU100-göreli ölçer."
+           if _reel_var(market) else
+           f"kaydettiğiniz portföylerin performansını nominal (USD) + {_bench_ad(market)}-göreli ölçer.")
         if ui_lang == "TR" else
         "Reads market regime, proposes portfolios by horizon and investor profile, "
         "tracks saved portfolios in nominal + ENAG-real + XU100-relative terms."
     )
 
     # 1) PİYASA REJİMİ BANDI
-    regime = compute_market_regime()
+    regime = compute_market_regime(market)
     st.markdown(
         f"<div style='background:#efe9db;border-left:6px solid {regime['color']};"
         f"border-radius:8px;padding:12px 16px;margin:8px 0'>"
@@ -10438,7 +10459,7 @@ def render_portfolio_manager_page(ui_lang):
             if _eksik_g or _eksik_k:
                 with st.spinner("Haftalık gölge/kontrol portföyleri oluşturuluyor (~1-2 dk)..."
                                 if ui_lang == "TR" else "Creating weekly shadow portfolios..."):
-                    _scan = PortfolioScanner.scan_all()
+                    _scan = PortfolioScanner.scan_all(market=market)
                     _n = PortfolioManager.ensure_shadow_batch(regime, _scan) if _eksik_g else 0
                     _n += PortfolioManager.ensure_control_batch(_scan) if _eksik_k else 0
                 if _n:
@@ -10460,13 +10481,18 @@ def render_portfolio_manager_page(ui_lang):
          "🟡 Storage: **local SQLite** — on Streamlit Cloud data may reset on sleep.")
     )
 
-    tab_new, tab_perf, tab_sector, tab_report, tab_enag = st.tabs([
+    # ENAG sekmesi yalnız BIST'te — US tarafı nominal USD raporlanır
+    _sekme_adlari = [
         "Yeni Portföy Öner" if ui_lang == "TR" else "Propose New",
         "Portföylerim & Performans" if ui_lang == "TR" else "My Portfolios & Performance",
         "Sektör Rotasyonu" if ui_lang == "TR" else "Sector Rotation",
         "Aylık Rapor" if ui_lang == "TR" else "Monthly Report",
-        "ENAG Verisi" if ui_lang == "TR" else "ENAG Data",
-    ])
+    ]
+    if _reel_var(market):
+        _sekme_adlari.append("ENAG Verisi" if ui_lang == "TR" else "ENAG Data")
+    _sekmeler = st.tabs(_sekme_adlari)
+    tab_new, tab_perf, tab_sector, tab_report = _sekmeler[:4]
+    tab_enag = _sekmeler[4] if _reel_var(market) else None
 
     # 2) YENİ PORTFÖY
     with tab_new:
@@ -10510,14 +10536,14 @@ def render_portfolio_manager_page(ui_lang):
                      type="primary", use_container_width=True):
             prog = st.progress(0, text="Taranıyor...")
             def _cb(t, i, n): prog.progress(min(i / max(n, 1), 1.0), text=f"{t} ({i}/{n})")
-            scan = PortfolioScanner.scan_all(progress_cb=_cb)
+            scan = PortfolioScanner.scan_all(progress_cb=_cb, market=market)
             prog.empty()
             if horizon == "trend":
                 picks, warning = PortfolioManager.propose_trend(scan, profile)
             elif horizon.startswith("sektor:"):
                 picks, warning = PortfolioManager.propose_sector(scan, sel_sector, profile)
             else:
-                picks, warning = PortfolioManager.propose(scan, horizon, profile, regime)
+                picks, warning = PortfolioManager.propose(scan, horizon, profile, regime, market=market)
             st.session_state["pm_last_proposal"] = (picks, warning, horizon, profile)
 
         if "pm_last_proposal" in st.session_state:
@@ -10552,7 +10578,7 @@ def render_portfolio_manager_page(ui_lang):
 
     # 3) PERFORMANS DEFTERİ
     with tab_perf:
-        _all_active = PortfolioManager.active_portfolios()
+        _all_active = PortfolioManager.active_portfolios(market=market)
         ports    = [p for p in _all_active if p.get("kind") != "golge"]
         shadows  = [p for p in _all_active if p.get("kind") == "golge"]
         # Toplu okumalar: 13 portfoy icin ~28 sorgu yerine 3 sorgu (taze veri, cache yok)
@@ -10636,14 +10662,14 @@ def render_portfolio_manager_page(ui_lang):
             _xb = float(_xu_saat.iloc[0])
             fig_cmp.add_trace(go.Scatter(
                 x=_xu_saat.index, y=(_xu_saat / _xb * 100.0).round(2), mode="lines",
-                name="XU100 (endeks)", line=dict(width=2, color="#8a8172", dash="dash")))
+                name=_bench_ad(market) + " (endeks)", line=dict(width=2, color="#8a8172", dash="dash")))
             xu_series = {}   # günlük benchmark çizgisini tekrar ekleme
         if xu_series:
             xs = sorted(xu_series.items())
             xu_base = xs[0][1]
             fig_cmp.add_trace(go.Scatter(
                 x=[d for d, _ in xs], y=[round(v / xu_base * 100, 2) for _, v in xs],
-                mode="lines", name="XU100 (endeks)",
+                mode="lines", name=_bench_ad(market) + " (endeks)",
                 line=dict(width=2, color="#6b6357", dash="dash")))
         fig_cmp.update_layout(
             template=_theme()["plotly"], height=430,
@@ -10656,7 +10682,7 @@ def render_portfolio_manager_page(ui_lang):
         st.plotly_chart(fig_cmp, use_container_width=True)
         if _total_pts <= len(_chart_ports):
             st.caption("ℹ️ Grafik her gün bir nokta biriktirir — birkaç gün içinde eğriler belirginleşecek. "
-                       "Düz çizgiler: gölge portföyler, kesikli gri: XU100 endeksi.")
+                       "Düz çizgiler: gölge portföyler, kesikli gri: benchmark endeks.")
 
         st.markdown("---")
         if not ports:
@@ -10671,9 +10697,10 @@ def render_portfolio_manager_page(ui_lang):
                 st.caption(f"**{_m['ad']}** — {_m['desc']}")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Nominal", f"%{perf['nominal']:+.1f}")
-                m2.metric("ENAG-Reel", f"%{perf['reel']:+.1f}",
+                m2.metric("ENAG-Reel",
+                          f"%{perf['reel']:+.1f}" if perf.get('reel') is not None else "—",
                           help="Enflasyondan arındırılmış gerçek getiri (ENAG E-TÜFE)")
-                m3.metric("XU100'e Göre", f"%{perf['xu100_rel']:+.1f}",
+                m3.metric(f"{_bench_ad(market)}'e Göre", f"%{perf['xu100_rel']:+.1f}",
                           help="Endeksi yendiyseniz pozitif")
                 m4.metric("Gün", perf["gun"])
 
@@ -10689,7 +10716,7 @@ def render_portfolio_manager_page(ui_lang):
                     if st.button("🔄 Rebalans Önerisi", key=f"pm_reb_{p['id']}",
                                  use_container_width=True):
                         with st.spinner("Güncel tarama ile karşılaştırılıyor..."):
-                            scan = PortfolioScanner.scan_all()
+                            scan = PortfolioScanner.scan_all(market=market)
                             sugg = PortfolioManager.rebalance_suggestions(p, scan)
                         if not sugg:
                             st.success("Değişiklik önerisi yok — portföy sağlıklı görünüyor.")
@@ -10732,16 +10759,20 @@ def render_portfolio_manager_page(ui_lang):
                     "Strateji": f"{p['horizon']}/{p['profile']}",
                     "Gün": perf["gun"],
                     "Nominal %": perf["nominal"],
-                    "ENAG-Reel %": perf["reel"],
-                    "XU100'e Göre %": perf["xu100_rel"],
+                    "ENAG-Reel %": perf["reel"],   # US'te None -> tabloda bos
+                    f"{_bench_ad(market)}'e Göre %": perf["xu100_rel"],
                 })
-            sdf_shadow = pd.DataFrame(srows).sort_values("ENAG-Reel %", ascending=False)
+            _sirala = "ENAG-Reel %" if _reel_var(market) else "Nominal %"
+            sdf_shadow = pd.DataFrame(srows)
+            if _sirala not in sdf_shadow.columns:
+                _sirala = sdf_shadow.columns[-1]
+            sdf_shadow = sdf_shadow.sort_values(_sirala, ascending=False)
             st.dataframe(sdf_shadow, use_container_width=True, hide_index=True, column_config={"Rozet": st.column_config.ImageColumn("", width="small")})
 
         # PORTFÖY İÇERİK GÖRÜNTÜLEYİCİ — gölge dahil her portföyün içine bak
         st.markdown("---")
         st.markdown("### " + ("Portföy İçeriği Görüntüle" if ui_lang == "TR" else "Inspect Portfolio Contents"))
-        _tum = PortfolioManager.all_portfolios()   # aktif + arşiv, kullanıcı + gölge
+        _tum = PortfolioManager.all_portfolios(market=market)   # aktif + arşiv, kullanıcı + gölge
         if _tum:
             def _plabel(p):
                 _mi = _pm_meta(p["horizon"], p["profile"])
@@ -10768,8 +10799,9 @@ def render_portfolio_manager_page(ui_lang):
                        f"Durum: {_p.get('status','aktif')}")
             i1, i2, i3, i4 = st.columns(4)
             i1.metric("Nominal", f"%{_pf['nominal']:+.1f}")
-            i2.metric("ENAG-Reel", f"%{_pf['reel']:+.1f}")
-            i3.metric("XU100'e Göre", f"%{_pf['xu100_rel']:+.1f}")
+            i2.metric("ENAG-Reel",
+                      f"%{_pf['reel']:+.1f}" if _pf.get('reel') is not None else "—")
+            i3.metric(f"{_bench_ad(market)}'e Göre", f"%{_pf['xu100_rel']:+.1f}")
             i4.metric("Gün", _pf["gun"])
             _rm = PortfolioManager.risk_metrics(_nav if _nav is not None else pd.DataFrame())
             r1, r2, r3, r4 = st.columns(4)
@@ -10777,7 +10809,7 @@ def render_portfolio_manager_page(ui_lang):
             r1.metric("Sharpe", _fmt(_rm["sharpe"]), help="Getiri/oynaklık (yıllık, rf=0). >1 iyi, >2 çok iyi")
             r2.metric("Sortino", _fmt(_rm["sortino"]), help="Sadece aşağı oynaklığa göre getiri")
             r3.metric("Max Düşüş", _fmt(_rm["maxdd"], "%"), help="Tepe değerden en derin kayıp")
-            r4.metric("IR (vs XU100)", _fmt(_rm["ir"]), help="Endeks-üstü getirinin tutarlılığı")
+            r4.metric(f"IR (vs {_bench_ad(market)})", _fmt(_rm["ir"]), help="Endeks-üstü getirinin tutarlılığı")
             if _rm["sharpe"] is None:
                 st.caption(f"Risk metrikleri için ≥10 günlük NAV gerekir (şu an {_rm['n_gun']}). Veri biriktikçe dolacak.")
 
@@ -10807,7 +10839,7 @@ def render_portfolio_manager_page(ui_lang):
         if st.button("Sektör Analizini Çalıştır" if ui_lang == "TR" else "Run Sector Analysis",
                      use_container_width=True, key="pm_sector_btn"):
             with st.spinner("Tarama verisi hazırlanıyor..."):
-                scan = PortfolioScanner.scan_all()
+                scan = PortfolioScanner.scan_all(market=market)
             rows = {}
             for r in scan:
                 if r.error or r.data_rows < 100:
@@ -11009,7 +11041,7 @@ def render_portfolio_manager_page(ui_lang):
             lines.append("")
 
             # Portföyler (aktif + arşiv, o ay NAV'ı olanlar)
-            ports_all = PortfolioManager.all_portfolios()
+            ports_all = PortfolioManager.all_portfolios(market=market)
 
             lines.append("## Portföy Performansları")
             lines.append("")
@@ -11072,8 +11104,10 @@ def render_portfolio_manager_page(ui_lang):
                 use_container_width=True,
             )
 
-    # 6) ENAG VERİ YÖNETİMİ
-    with tab_enag:
+    # 6) ENAG VERİ YÖNETİMİ (yalnız BIST — US nominal USD raporlanır)
+    with (tab_enag if tab_enag is not None else contextlib.nullcontext()):
+        if tab_enag is None:
+            return
         st.markdown("ENAG E-TÜFE aylık oranları. Yeni ay açıklandığında buradan ekleyin — "
                     "reel getiri hesapları bu tabloyu kullanır.")
         rates = InflationEngine.rates()
@@ -11299,7 +11333,10 @@ def run_app():
 
     # TOP BAR — Market Secici (BIST vs US)
     if "selected_market" not in st.session_state:
-        st.session_state["selected_market"] = "BIST"
+        # ?piyasa=US ile derin bağlantı (tema parametresiyle aynı kalıp) —
+        # paylaşılan link doğrudan ilgili piyasada açılır
+        _qp = (st.query_params.get("piyasa") or "").upper()
+        st.session_state["selected_market"] = "US" if _qp == "US" else "BIST"
 
     market_options = ["BIST (Borsa Istanbul)", "US Markets (NASDAQ/NYSE)"]
     market_icons   = ["flag", "globe"]
@@ -11336,6 +11373,10 @@ def run_app():
 
     active_market = "US" if "US" in selected_market_label else "BIST"
     st.session_state["selected_market"] = active_market
+    try:   # yenilemede/paylaşımda piyasa korunsun
+        st.query_params["piyasa"] = active_market
+    except Exception:
+        pass
 
     # SIDEBAR — Tema + Dil + Sayfa Navigasyonu (market'e göre)
     with st.sidebar:
@@ -11395,18 +11436,16 @@ def run_app():
                 "briefcase", "clock-history", "graph-up-arrow",
             ]
             _default_page = "Kokpit"
-        else:  # US
+        else:  # US — BIST menüsüyle birebir aynı şekil (2026-07-23)
             pages = [
-                "US Analiz", "US Backtest",
-                "US Stock List", "US Portfolios",
-                "Portfolyum", "US Sinyal Takip",
+                "US Kokpit", "US Portfoy Yoneticisi", "US Listesi", "US Analiz",
+                "Portfolyum", "US Backtest", "US Sinyal Takip",
             ]
             page_icons = [
-                "search", "clock-history",
-                "list-ul", "robot",
-                "briefcase", "graph-up-arrow",
+                "newspaper", "wallet2", "list-ul", "search",
+                "briefcase", "clock-history", "graph-up-arrow",
             ]
-            _default_page = "US Analiz"
+            _default_page = "US Kokpit"
 
         _nav_redirect = False
         if "nav_page" in st.session_state:
@@ -11504,14 +11543,18 @@ def run_app():
         elif page == "Sinyal Takip":
             _safe_render(render_validation_page, ui_lang)
     else:  # US Markets
-        if page == "US Analiz":
+        # US sayfaları BIST render fonksiyonlarının market="US" halidir —
+        # ~2000 satır çoğaltmak yerine tek kaynak parametrelendi.
+        if page == "US Kokpit":
+            _safe_render(render_kokpit_page, ui_lang, market="US")
+        elif page == "US Portfoy Yoneticisi":
+            _safe_render(render_portfolio_manager_page, ui_lang, market="US")
+        elif page == "US Listesi":
+            _safe_render(render_us_stock_list_page, ui_lang)
+        elif page == "US Analiz":
             _safe_render(render_us_markets_page, ui_lang, mode_override="analysis")
         elif page == "US Backtest":
             _safe_render(render_us_markets_page, ui_lang, mode_override="backtest")
-        elif page == "US Stock List":
-            _safe_render(render_us_stock_list_page, ui_lang)
-        elif page == "US Portfolios":
-            _safe_render(render_us_system_portfolios_page, ui_lang)
         elif page == "Portfolyum":
             _safe_render(render_portfolio_page, ui_lang)
         elif page == "US Sinyal Takip":
