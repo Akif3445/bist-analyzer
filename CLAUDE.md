@@ -75,6 +75,10 @@ Shared infrastructure is market-parameterized rather than duplicated: `get_scan_
 
 US specifics: liquidity threshold `UNIVERSE_MIN_USD_VOLUME` = $200M/day → ~596 names (measured: 50M→1395, 100M→975, 150M→745, 200M→603, 300M→443; $200M matches the S&P-500 + NASDAQ-100 union of ~600). Regime uses S&P 500 trend + breadth + **VIX as a level** (<22 calm) instead of USDTRY — a dollar portfolio has no currency risk, it has a volatility regime. Benchmark is `_default_index(market)` = `^GSPC`; the `pm_nav.xu100_close` column keeps its name for compatibility but holds the portfolio's own index. `performance()` returns `reel=None` for US. Passive control group is the 100 most liquid US names (NASDAQ-100 proxy) instead of BIST-30.
 
+UI: the US menu mirrors BIST exactly (US Kokpit · US Portfoy Yoneticisi · US Listesi · US Analiz · Portfolyum · US Backtest · US Sinyal Takip). `render_kokpit_page` and `render_portfolio_manager_page` take a `market` param instead of being duplicated — the US menu calls the same functions with `market="US"`. Helpers: `_bench_ad(market)` for the benchmark label, `_reel_var(market)` for whether a real-return column exists. The ENAG tab is only built for BIST, and real-return metrics render "—" when `perf['reel']` is None. **Market is deep-linkable via `?piyasa=US`** (same pattern as `?tema=`) and persists across reruns — this is also the only way to drive the US side from browser automation, since the market selector is an iframe component whose clicks don't propagate.
+
+**Robot note:** `daily_robot.py` still runs BIST only. Wiring it to also build US shadow/control batches is the next step (`ensure_shadow_batch(..., market="US")` / `ensure_control_batch(..., market="US")` are ready).
+
 ### US calibration finding (2026-07-23) — the edge is in mid-caps, not mega-caps
 
 Two point-in-time panels, same Grinold-Kahn method as BIST (120 stocks × 6y × weekly, ~28k observations each), via `weight_calibration.py build-tech-us` / `build-tech-us-mid` + `analyze-us` / `analyze-us-mid`:
