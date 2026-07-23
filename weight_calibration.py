@@ -407,6 +407,23 @@ def stability():
     metrikler["ic_momentum_30g_son6ay"] = round(m6, 4) if not np.isnan(m6) else None
     metrikler["gozlem_sayisi"] = len(tech)
 
+    # US paneli de aylık takibe dahil (2026-07-23) — US tarafı artık canlı
+    # portföy üretiyor, parametreleri de BIST gibi izlenmeli. Panel kurulumu
+    # ~3 dk; hata verirse BIST metrikleri yine yazılır.
+    try:
+        build_tech_us(offset=300, csv_yol="calibration_tech_us_mid.csv")
+        us = pd.read_csv("calibration_tech_us_mid.csv")
+        for ad, col, fwd in [("us_ic_momentum_30g", "tech_score_momentum", "fwd_30"),
+                             ("us_ic_52hafta_90g",  "week52_position",     "fwd_90")]:
+            if fwd not in us.columns:
+                continue
+            m, t = _xsic_rank(us, col, fwd)
+            metrikler[ad] = round(m, 4)
+            metrikler[ad + "_t"] = round(t, 2)
+        metrikler["us_gozlem_sayisi"] = len(us)
+    except Exception as exc:
+        print(f"  US kararlılık paneli atlandı: {exc}")
+
     # O gün uygulamanın FİİLEN kullandığı parametreleri de logla —
     # "hangi tarihte hangi ayar geçerliydi" tablodan okunur, geri dönüş
     # için ayrıca her değişiklik git geçmişinde commit'lidir.

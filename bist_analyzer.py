@@ -3,6 +3,7 @@ BIST Smart Investment Assistant
 """
 
 import contextlib
+import html
 import json
 import logging
 import os
@@ -144,6 +145,11 @@ def _yf_symbol(ticker: str, market: str = "BIST") -> str:
 def _default_index(market: str = "BIST") -> str:
     """Piyasa ana endeksi."""
     return "^GSPC" if market == "US" else "XU100.IS"
+
+
+def _para(market: str = "BIST") -> str:
+    """Piyasanın para birimi simgesi."""
+    return "$" if market == "US" else "₺"
 
 
 def _bench_ad(market: str = "BIST") -> str:
@@ -3038,12 +3044,22 @@ def _sector_of(ticker: str) -> str:
             continue
         if ticker in ts:
             return cat
-    if not _UNIVERSE_CACHE.get("sectors"):
+    t_up = ticker.upper().replace(".IS", "")
+    # Sektör haritaları tembel yüklenir (günde 1 TV çağrısı, piyasa başına).
+    # US tarafı da doldurulmalı: Kokpit taramayı DB önbelleğinden okur,
+    # get_scan_universe'ü çağırmaz — o yüzden US sektörleri boş kalıp
+    # hepsi "Diğer"e düşüyordu.
+    if not _UNIVERSE_CACHE.get("sectors") and t_up not in US_SECTOR_MAP:
         try:
-            get_scan_universe()   # sektör haritasını doldurur (günde 1 TV çağrısı)
+            get_scan_universe("BIST")
         except Exception:
             pass
-    t_up = ticker.upper().replace(".IS", "")
+    if (not _UNIVERSE_CACHE_US.get("sectors")
+            and t_up not in _UNIVERSE_CACHE.get("sectors", {})):
+        try:
+            get_scan_universe("US")
+        except Exception:
+            pass
     # Önce BIST TV sektörü, sonra US sektör haritası / US TV sektörü
     tv_sec = (_UNIVERSE_CACHE.get("sectors", {}).get(t_up)
               or US_SECTOR_MAP.get(t_up)
@@ -3207,6 +3223,41 @@ def _pm_meta(horizon: str, profile: str) -> dict:
 
 
 # Hisse logoları — bilinen şirketlerde gerçek favicon, kalanında renkli monogram rozet
+
+# US hisse logoları — Google favicon servisi için domain haritası.
+# Kapsam: en likit / portföylerde en sık görünen isimler; haritada olmayan
+# ticker deterministik renkli monogram rozetine düşer (BIST'teki gibi).
+US_LOGO_DOMAINS = {
+    "AAPL": "apple.com", "MSFT": "microsoft.com", "NVDA": "nvidia.com",
+    "GOOGL": "google.com", "GOOG": "google.com", "AMZN": "amazon.com",
+    "META": "meta.com", "TSLA": "tesla.com", "AVGO": "broadcom.com",
+    "BRK-B": "berkshirehathaway.com", "JPM": "jpmorganchase.com", "V": "visa.com",
+    "MA": "mastercard.com", "UNH": "unitedhealthgroup.com", "XOM": "exxonmobil.com",
+    "JNJ": "jnj.com", "WMT": "walmart.com", "PG": "pg.com", "HD": "homedepot.com",
+    "COST": "costco.com", "NFLX": "netflix.com", "CRM": "salesforce.com",
+    "AMD": "amd.com", "INTC": "intel.com", "DIS": "disney.com", "PYPL": "paypal.com",
+    "BA": "boeing.com", "NKE": "nike.com", "SBUX": "starbucks.com", "KO": "coca-cola.com",
+    "PEP": "pepsico.com", "MCD": "mcdonalds.com", "ABBV": "abbvie.com",
+    "MRK": "merck.com", "PFE": "pfizer.com", "LLY": "lilly.com", "TMO": "thermofisher.com",
+    "ORCL": "oracle.com", "ADBE": "adobe.com", "QCOM": "qualcomm.com", "CSCO": "cisco.com",
+    "TXN": "ti.com", "AMAT": "appliedmaterials.com", "LRCX": "lamresearch.com",
+    "MU": "micron.com", "IBM": "ibm.com", "GE": "ge.com", "CAT": "caterpillar.com",
+    "GS": "goldmansachs.com", "MS": "morganstanley.com", "BAC": "bankofamerica.com",
+    "WFC": "wellsfargo.com", "C": "citigroup.com", "T": "att.com", "VZ": "verizon.com",
+    "CVX": "chevron.com", "COP": "conocophillips.com", "VLO": "valero.com",
+    "UPS": "ups.com", "FDX": "fedex.com", "DAL": "delta.com", "LUV": "southwest.com",
+    "UAL": "united.com", "F": "ford.com", "GM": "gm.com", "TGT": "target.com",
+    "LOW": "lowes.com", "MMM": "3m.com", "HON": "honeywell.com", "RTX": "rtx.com",
+    "LMT": "lockheedmartin.com", "TRV": "travelers.com", "AXP": "americanexpress.com",
+    "BKNG": "booking.com", "ABNB": "airbnb.com", "UBER": "uber.com", "SHOP": "shopify.com",
+    "SQ": "block.xyz", "SNOW": "snowflake.com", "PLTR": "palantir.com",
+    "MRVL": "marvell.com", "WAB": "wabtec.com", "CF": "cfindustries.com",
+    "PCAR": "paccar.com", "PCG": "pge.com", "VTR": "ventasreit.com", "DLR": "digitalrealty.com",
+    "TDY": "teledyne.com", "SCCO": "southernperu.com", "HUN": "huntsman.com",
+    "PM": "pmi.com", "WBS": "websteronline.com", "CAH": "cardinalhealth.com",
+    "LYV": "livenationentertainment.com", "ASND": "ascendispharma.com",
+}
+
 BIST_LOGO_DOMAINS = {
     "THYAO": "turkishairlines.com",  "GARAN": "garantibbva.com.tr", "AKBNK": "akbank.com",
     "ISCTR": "isbank.com.tr",        "YKBNK": "yapikredi.com.tr",   "VAKBN": "vakifbank.com.tr",
@@ -3233,7 +3284,7 @@ BIST_LOGO_DOMAINS = {
 def _logo_url(ticker: str) -> str:
     """Hisse logosu: bilinen domain'de Google favicon servisi, yoksa monogram SVG rozet."""
     t = ticker.upper().replace(".IS", "")
-    dom = BIST_LOGO_DOMAINS.get(t)
+    dom = BIST_LOGO_DOMAINS.get(t) or US_LOGO_DOMAINS.get(t)
     if dom:
         return f"https://www.google.com/s2/favicons?domain={dom}&sz=64"
     # Deterministik renkli monogram (harici servis yok, her zaman çalışır)
@@ -4045,8 +4096,16 @@ class PortfolioManager:
         return [a[4] for a in new_alerts]
 
     @staticmethod
-    def unread_alerts() -> list:
+    def unread_alerts(market: str = None) -> list:
+        """market verilirse yalnız o piyasanın portföylerine ait alarmlar.
+        pm_alerts'te market kolonu yok; pid üzerinden pm_portfolios'a bağlanır.
+        pid=0 genel alarmdır (ENAG hatırlatıcısı gibi) ve her piyasada görünür."""
         PortfolioManager._init_alerts()
+        if market:
+            return _PMDB.execute(
+                "SELECT a.* FROM pm_alerts a LEFT JOIN pm_portfolios p ON p.id = a.pid "
+                "WHERE a.okundu=0 AND (a.pid=0 OR COALESCE(p.market,'BIST')=?) "
+                "ORDER BY a.created_at DESC LIMIT 20", (market,))["rows"]
         return _PMDB.execute(
             "SELECT * FROM pm_alerts WHERE okundu=0 ORDER BY created_at DESC LIMIT 20")["rows"]
 
@@ -10269,10 +10328,18 @@ _TR_GUNLER = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartes
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _kokpit_macro() -> list:
-    """Kokpit makro şeridi: USD/TL, EUR/TL, Altın, BIST100 (+günlük %)."""
-    semboller = [("USDTRY=X", "USD/TL", "₺{:.2f}"), ("EURTRY=X", "EUR/TL", "₺{:.2f}"),
-                 ("GC=F", "Altın (ons)", "${:,.0f}"), ("XU100.IS", "BIST 100", "{:,.0f}")]
+def _kokpit_macro(market: str = "BIST") -> list:
+    """Kokpit makro şeridi (+günlük %).
+
+    BIST: USD/TL, EUR/TL, Altın, BIST100
+    US  : S&P 500, NASDAQ 100, VIX, Altın — TL kurları US ekranında anlamsız
+    """
+    if market == "US":
+        semboller = [("^GSPC", "S&P 500", "{:,.0f}"), ("^NDX", "NASDAQ 100", "{:,.0f}"),
+                     ("^VIX", "VIX", "{:.1f}"), ("GC=F", "Altın (ons)", "${:,.0f}")]
+    else:
+        semboller = [("USDTRY=X", "USD/TL", "₺{:.2f}"), ("EURTRY=X", "EUR/TL", "₺{:.2f}"),
+                     ("GC=F", "Altın (ons)", "${:,.0f}"), ("XU100.IS", "BIST 100", "{:,.0f}")]
     out = []
     try:
         bulk = yf.download([s for s, _, _ in semboller], period="5d", interval="1d",
@@ -10320,7 +10387,7 @@ def render_kokpit_page(ui_lang, market: str = "BIST"):
         unsafe_allow_html=True)
 
     # Makro şerit (Piyasa Özeti'nden taşındı — o sayfa emekli edildi)
-    _makro = _kokpit_macro()
+    _makro = _kokpit_macro(market)
     if _makro:
         mc = st.columns(len(_makro))
         for _col, (_ad, _val, _chg) in zip(mc, _makro):
@@ -10328,12 +10395,19 @@ def render_kokpit_page(ui_lang, market: str = "BIST"):
 
     # ---- ALARMLAR (varsa manşetin hemen altında) ----
     try:
-        alerts = PortfolioManager.unread_alerts()
+        alerts = PortfolioManager.unread_alerts(market)
         if alerts:
-            st.markdown("#### 🚨 Dikkat Gerektirenler")
-            for a in alerts[:5]:
-                st.warning(a["mesaj"])
-            st.caption("Tümü ve 'okundu' işaretleme: Portföy Yöneticisi sayfasında.")
+            # Kompakt: eskiden 5 ayrı st.warning kutusuydu, manşetin altını
+            # kaplıyordu. Şimdi tek satırlık özet + kapalı detay.
+            _s = sum(1 for a in alerts if "stop" in (a.get("mesaj") or "").lower())
+            _h = sum(1 for a in alerts if "hedef" in (a.get("mesaj") or "").lower())
+            _ozet = " · ".join(x for x in (f"🔴 {_s} stop" if _s else "",
+                                           f"🟡 {_h} hedef" if _h else "") if x) or "detay"
+            with st.expander(f"🚨 {len(alerts)} uyarı  ({_ozet})", expanded=False):
+                for a in alerts[:8]:
+                    st.markdown(f"<div style='font-size:12.5px;padding:2px 0'>"
+                                f"{html.escape(str(a['mesaj']))}</div>", unsafe_allow_html=True)
+                st.caption("Tümü ve 'okundu' işaretleme: Portföy Yöneticisi sayfasında.")
     except Exception:
         alerts = []
 
@@ -10349,14 +10423,20 @@ def render_kokpit_page(ui_lang, market: str = "BIST"):
         c1, c2, c3, c4 = st.columns(4)
         if noms:
             c1.metric("Portföyler (ort. nominal)", f"%{np.mean(noms):+.1f}")
-            c2.metric("ENAG-Reel",
-                      f"%{np.mean([x for x in reels if x is not None]):+.1f}"
-                      if _reel_var(market) and any(x is not None for x in reels) else "—",
-                      help="Enflasyondan arındırılmış gerçek getiri")
+            if _reel_var(market):
+                c2.metric("ENAG-Reel",
+                          f"%{np.mean([x for x in reels if x is not None]):+.1f}"
+                          if any(x is not None for x in reels) else "—",
+                          help="Enflasyondan arındırılmış gerçek getiri")
+            else:
+                c2.metric("Gölge Portföy", f"{len(PortfolioManager.active_portfolios(market=market)) - len(ports)}",
+                          help="Sistemin otomatik izlediği gölge/kontrol portföy sayısı")
             c3.metric(f"{_bench_ad(market)}'e Göre", f"%{np.mean(xrels):+.1f}")
         else:
             c1.metric("Portföyler", "—")
-            c2.metric("ENAG-Reel", "—")
+            c2.metric("ENAG-Reel" if _reel_var(market) else "Gölge Portföy",
+                      "—" if _reel_var(market) else
+                      f"{len(PortfolioManager.active_portfolios(market=market))}")
             c3.metric(f"{_bench_ad(market)}'e Göre", "—")
         c4.metric("İzlenen Portföy", f"{len(ports)} + gölge")
     except Exception as exc:
@@ -10369,7 +10449,7 @@ def render_kokpit_page(ui_lang, market: str = "BIST"):
     with col_sol:
         st.markdown("### Günün Sinyalleri")
         try:
-            scan = PortfolioScanner._load_cache() or []
+            scan = PortfolioScanner._load_cache(market) or []
             iyi = sorted([r for r in scan if not r.error and r.data_rows >= 100],
                          key=lambda r: r.score, reverse=True)
             if iyi:
@@ -10382,11 +10462,13 @@ def render_kokpit_page(ui_lang, market: str = "BIST"):
                         f"style='vertical-align:middle;border-radius:4px;margin-right:8px'>"
                         f"<b>{r.ticker}</b> <span style='color:{t['muted']};font-size:12px'>"
                         f"{_sector_of(r.ticker)}</span></span>"
-                        f"<span style='font-family:Inter,sans-serif'>₺{r.current_price:,.2f}</span>"
+                        f"<span style='font-family:Inter,sans-serif'>{_para(market)}{r.current_price:,.2f}</span>"
                         f"<span style='font-family:Inter,sans-serif;font-size:11.5px;font-weight:600;"
                         f"color:{renk}'>{sig} · {r.score:.0f}</span></div>",
                         unsafe_allow_html=True)
-                st.caption("En güçlü 4 + en zayıf 2. Tam liste: BIST Listesi · Derin analiz: Hisse Analizi.")
+                st.caption(f"En güçlü 4 + en zayıf 2. Tam liste: "
+                           f"{'US Listesi' if market == 'US' else 'BIST Listesi'} · "
+                           f"Derin analiz: {'US Analiz' if market == 'US' else 'Hisse Analizi'}.")
             else:
                 st.info("Henüz tarama verisi yok — Portföy Yöneticisi'nde 'Tara ve Portföy Öner' çalıştırınca burası dolar.")
         except Exception as exc:
@@ -10461,7 +10543,7 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
 
     # RİSK ALARMLARI BANDI — robot veya oturum kontrolünün bulduğu uyarılar
     try:
-        _alerts = PortfolioManager.unread_alerts()
+        _alerts = PortfolioManager.unread_alerts(market)
         if _alerts:
             with st.container():
                 st.markdown("### 🚨 " + ("Risk Alarmları" if ui_lang == "TR" else "Risk Alerts"))
@@ -10480,19 +10562,21 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
         try:
             PortfolioManager._init_tables()
             _cnt = _PMDB.execute(
-                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' AND name LIKE ?",
-                (f"%{_week}%",))["rows"]
+                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' "
+                "AND COALESCE(market,'BIST')=? AND name LIKE ?",
+                (market, f"%{_week}%"))["rows"]
             _cntk = _PMDB.execute(
-                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon = 'kontrol' AND name LIKE ?",
-                (f"%{_week}%",))["rows"]
+                "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon = 'kontrol' "
+                "AND COALESCE(market,'BIST')=? AND name LIKE ?",
+                (market, f"%{_week}%"))["rows"]
             _eksik_g = not _cnt or _cnt[0].get("c", 0) == 0
             _eksik_k = not _cntk or _cntk[0].get("c", 0) == 0
             if _eksik_g or _eksik_k:
                 with st.spinner("Haftalık gölge/kontrol portföyleri oluşturuluyor (~1-2 dk)..."
                                 if ui_lang == "TR" else "Creating weekly shadow portfolios..."):
                     _scan = PortfolioScanner.scan_all(market=market)
-                    _n = PortfolioManager.ensure_shadow_batch(regime, _scan) if _eksik_g else 0
-                    _n += PortfolioManager.ensure_control_batch(_scan) if _eksik_k else 0
+                    _n = PortfolioManager.ensure_shadow_batch(regime, _scan, market=market) if _eksik_g else 0
+                    _n += PortfolioManager.ensure_control_batch(_scan, market=market) if _eksik_k else 0
                 if _n:
                     st.toast(f"{_n} gölge/kontrol portföyü kaydedildi ({_week})")
             PortfolioManager.auto_archive_shadows()
