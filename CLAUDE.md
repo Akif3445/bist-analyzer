@@ -92,7 +92,22 @@ So `_tech_style_for` now returns `"momentum"` for **both** markets. Effect measu
 
 **Acted on (2026-07-23):** the universe threshold was lowered $200M → $50M (596 → 1406 names) to *add* the mid-cap band where the edge actually lives, without removing any mega-caps. Horizons were extended to 60/90 days because mid-cap IC was still rising at 30d.
 
-**Longer-horizon result — read this before quoting any t-stat.** The best US signal found is **52-week position at 90 days: IC +0.0323, t=3.95** — the same indicator that dominates BIST. But the year-by-year breakdown shows it is **episodic, not persistent**: 2023 +0.101 (t=6.97) and 2026 +0.117 (t=3.67) carry almost all of it, while 2021 (−0.017), 2024 (−0.010) and 2025 (+0.016) are flat or negative. The half-sample "stable" label is technically true and substantively misleading. This is deliberately **not** wired into scoring. The honest reading: buying names near their 52-week highs paid off spectacularly in strong momentum years and did nothing otherwise — a regime-dependent effect, not a durable edge. A natural follow-up (untested) is to gate it on `compute_market_regime`, which already detects those regimes.
+**Longer-horizon result — read this before quoting any t-stat.** The best US signal found is **52-week position at 90 days: IC +0.0323, t=3.95** — the same indicator that dominates BIST. But the year-by-year breakdown shows it is **episodic, not persistent**: 2023 +0.101 (t=6.97) and 2026 +0.117 (t=3.67) carry almost all of it, while 2021 (−0.017), 2024 (−0.010) and 2025 (+0.016) are flat or negative. The half-sample "stable" label is technically true and substantively misleading. This is deliberately **not** wired into scoring. The honest reading: buying names near their 52-week highs paid off spectacularly in strong momentum years and did nothing otherwise — a regime-dependent effect, not a durable edge. A natural follow-up is to gate it on `compute_market_regime` — **this was then tested, see below.**
+
+### Regime-conditional result (2026-07-23) — the US signal is conditional, not weak
+
+`weight_calibration.py analyze-us-regime` rebuilds the historical regime point-in-time with the same 0-7 scheme as the live engine (SPX vs SMA200, golden cross, 1m momentum, breadth taken from the panel's own `above_sma200` column so there is no look-ahead, VIX), then splits IC by regime. On 26.5k observations at the 90-day horizon:
+
+| Signal | Boğa | Nötr | Ayı |
+|---|---|---|---|
+| 52-week position | **+0.0528 (t=6.02)** | +0.002 | −0.029 |
+| Momentum score | **+0.0448 (t=4.39)** | −0.015 | **−0.063 (t=−3.24)** |
+
+Two conclusions. **In a bull regime US IC is on par with BIST's headline +0.045** — the earlier "US is half as strong" reading was an artifact of averaging across regimes. And **in a bear regime the momentum score is significantly inverted**: following it loses money.
+
+Applied: `propose()` refuses *every* horizon for US in Ayı (previously only `kisa` was blocked) and warns on Nötr. BIST is unchanged — there is no equivalent evidence for it.
+
+**Caveat for the presentation:** Boğa is 72% of the sample and the regime split largely coincides with the strong years (2023, 2026). What makes this a usable filter rather than hindsight is that *regime is observable at decision time, a year label is not*. Still one market, one 6-year window — present it as a conditional finding, not a law.
 
 ## Roadmap — October professor presentation (agreed 2026-07-16)
 
