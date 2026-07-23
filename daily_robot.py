@@ -103,7 +103,11 @@ def main() -> int:
                     if m:
                         val = float(f"{m.group(1)}.{m.group(2)}")
                         if 0 < val < 25:
-                            ba.InflationEngine.set_rate(onceki_ay, val)
+                            # Kazınmış değer 'resmi' DEĞİL — doğrulanana dek
+                            # ayırt edilebilir kalsın (aşağıdaki DOĞRULA alarmı
+                            # ile birlikte). Kullanıcı UI'dan onaylayınca 'resmi' olur.
+                            ba.InflationEngine.set_rate(onceki_ay, val,
+                                                        kaynak="otomatik-dogrulanmadi")
                             ba._PMDB.execute(
                                 "INSERT INTO pm_alerts (created_at, pid, ticker, tip, mesaj) VALUES (?,?,?,?,?)",
                                 (datetime.now().strftime("%Y-%m-%d %H:%M"), 0, "*", "ENAG",

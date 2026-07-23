@@ -2905,10 +2905,13 @@ class InflationEngine:
             return {k: v for k, v in ENAG_MOM_DEFAULTS.items()}
 
     @staticmethod
-    def set_rate(ym: str, pct: float):
+    def set_rate(ym: str, pct: float, kaynak: str = "resmi"):
+        # kaynak: elle UI girişi = 'resmi' (insan doğruladı). Robotun otomatik
+        # web-kazıması 'otomatik-dogrulanmadi' geçmeli — kazınmış değer resmi
+        # veriyle karışmasın (dış kaynak bozulursa reel-getiri metriği çürür).
         InflationEngine._init_table()
-        _PMDB.execute("INSERT OR REPLACE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?, 'resmi')",
-                      (ym, pct))
+        _PMDB.execute("INSERT OR REPLACE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?,?)",
+                      (ym, pct, kaynak))
 
     @staticmethod
     def _monthly_rate(ym: str, table: dict) -> float:
