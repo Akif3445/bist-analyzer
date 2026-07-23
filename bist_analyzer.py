@@ -2256,10 +2256,16 @@ _TV_SECTOR_TR = {
     "Distribution Services": "Dağıtım", "Miscellaneous": "Diğer",
 }
 
-# US likidite eşiği: $200M günlük dolar hacmi → ~600 hisse, yani S&P-500 +
-# NASDAQ-100 birleşiminin (~600 benzersiz isim) likidite bandına denk gelir.
+# US likidite eşiği: $50M günlük dolar hacmi → ~1400 hisse.
 # (Ölçüldü 2026-07-23: 50M→1395, 100M→975, 150M→745, 200M→603, 300M→443)
-UNIVERSE_MIN_USD_VOLUME = 200_000_000
+#
+# Neden $200M değil de $50M (2026-07-23, kalibrasyon sonrası):
+# $200M eşiği S&P-500 + NASDAQ-100 bandını verir ama o bant AĞIRLIKLI
+# MEGA-CAP'tir — kalibrasyonun teknik kenar BULAMADIĞI segment (IC +0.0065,
+# t=0.53). Kenar orta ölçekte ölçüldü (IC +0.0212, t=2.06). Eşiği indirmek
+# mega-cap'leri ÇIKARMAZ, üzerine orta ölçek bandını EKLER — sinyalin
+# gerçekten var olduğu isimler evrene girer. Bedeli: tarama ~36 sn → ~2 dk.
+UNIVERSE_MIN_USD_VOLUME = 50_000_000
 
 # Piyasa başına ayrı önbellek — BIST ve US evrenleri birbirini ezmesin
 _UNIVERSE_CACHE = {"date": None, "tickers": None, "sectors": {}}          # BIST (geri uyumluluk)
@@ -2306,7 +2312,7 @@ def get_scan_universe(market: str = "BIST") -> list:
         from tradingview_screener import Query
         _n, df = (Query().set_markets(cfg["tv"])
                   .select("name", "close", "average_volume_30d_calc", "sector")
-                  .limit(1500 if market == "US" else 700).get_scanner_data())
+                  .limit(2500 if market == "US" else 700).get_scanner_data())
         df["_hacim"] = df["close"] * df["average_volume_30d_calc"]
         likit = df[df["_hacim"] >= cfg["min_vol"]]
         tickers = [str(t) for t in likit["name"] if _valid_ticker(str(t), market)]

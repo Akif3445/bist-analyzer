@@ -445,6 +445,9 @@ def stability():
 # (Grinold-Kahn). Böylece sunumda "iki piyasada aynı cetvel" denebilir.
 
 US_TECH_CSV = "calibration_tech_us.csv"
+# US ufukları BIST'ten uzun: orta ölçekte IC 30 günde hâlâ YÜKSELİYORDU
+# (7g -0.005 → 14g +0.015 → 30g +0.021), momentum literatürü 3-12 ay der.
+US_HORIZONS = [1, 3, 7, 14, 30, 60, 90]
 US_PANEL_N  = 120   # en likit N US hissesi — kesitsel IC için fazlasıyla yeterli
 
 
@@ -489,7 +492,7 @@ def build_tech_us(offset: int = 0, csv_yol: str = None):
         df = veri[ticker]
         if len(df) < MIN_HISTORY + 40:
             continue
-        close, max_h, count = df["Close"], max(HORIZONS), 0
+        close, max_h, count = df["Close"], max(US_HORIZONS), 0
         for i in range(MIN_HISTORY, len(df) - max_h, SAMPLE_STEP):
             window = df.iloc[max(0, i - WINDOW):i + 1]
             try:
@@ -506,7 +509,7 @@ def build_tech_us(offset: int = 0, csv_yol: str = None):
                    "bb_position": tr.bb_position, "adx": tr.adx,
                    "sma_gap_pct": tr.sma_gap_pct,
                    "above_sma200": int(tr.price_above_sma200)}
-            for h in HORIZONS:
+            for h in US_HORIZONS:
                 row[f"fwd_{h}"] = round((float(close.iloc[i + h]) / p0 - 1) * 100, 4)
             rows.append(row)
             count += 1
@@ -532,7 +535,7 @@ def analyze_us():
                     ("Kontrarian skoru (mevcut)", "tech_score"),
                     ("52 hafta pozisyonu", "week52_position"),
                     ("RSI", "rsi")]:
-        for h in (7, 14, 30):
+        for h in (7, 14, 30, 60, 90):
             ic, t = _xsic_rank(panel, col, f"fwd_{h}")
             if np.isnan(ic):
                 continue
