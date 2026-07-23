@@ -1786,9 +1786,20 @@ def _tech_style_for(ticker: str, market: str = "BIST") -> str:
     - Segment-bazlı karma stil DENENDİ ve REDDEDİLDİ: farklı cetvellerle verilen
       puanlar tek sıralamada karşılaştırılınca kesitsel IC bozuluyor (+0.012'ye
       düşüyor). Tüm BIST tek stil kullanmalı.
-    - US için kanıt yok → mevcut davranış ("dengeli") korunur.
+    US kalibrasyonu (2026-07-23, weight_calibration build-tech-us / analyze-us,
+    iki ayrı panel × 120 hisse × 6 yıl × haftalık, ~28k gözlem her biri):
+    - Mega-cap (en likit 120): momentum IC +0.0065 (t=0.53) — ANLAMSIZ, alt
+      dönemlerde işaret değiştiriyor. Kontrarian IC -0.0136 (t=-1.31): tutarlı
+      biçimde YANLIŞ tarafta. Dünyanın en verimli segmentinde teknik kenar yok.
+    - Orta ölçek (likidite sırası 300-420): momentum IC +0.0212 (t=2.06), alt
+      dönemlerde TUTARLI. 52 hafta pozisyonu t=2.14, RSI t=2.27 de sinyalli.
+      Kenar, analist takibinin seyreldiği yerde ortaya çıkıyor.
+    → US için "momentum": orta ölçekte kanıtlı, mega-cap'te en kötü ihtimalle
+      nötr; kontrarian ise her iki panelde de işaret kararsız/negatif.
+    UYARI: US IC'si BIST'in (+0.045, t=2.8) çok altında — US sıralaması zayıf
+    sinyaldir, tek başına güçlü iddia için kullanılmamalıdır.
     """
-    return "momentum" if market == "BIST" else "dengeli"
+    return "momentum"
 
 
 def compute_bist_score(

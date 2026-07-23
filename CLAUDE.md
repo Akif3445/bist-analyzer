@@ -67,6 +67,25 @@ Every signal the app generates gets logged and its forward return is checked at 
 
 Standalone research tool that builds a point-in-time panel (50 BIST stocks × 6y × weekly, `calibration_tech.csv`) plus a GDELT daily news-tone panel (`calibration_sentiment.csv`) and computes cross-sectional ICs (Grinold-Kahn) to ground the compute_bist_score weights in data. Key 2026-07 findings, now applied to the code: the original contrarian technical score (high points for oversold RSI/BB/52w) had ~zero IC because BIST is in a momentum regime (high RSI/52w-position predicted HIGHER returns, t>3, stable across sub-periods; strongest signal = week52_position). Both scoring paths (`TechnicalEngine._compute_score` for live, `BacktestEngine._vectorized_scores` for backtest/time-machine) now take a `style` param — "momentum" (all BIST, selected via `_tech_style_for`) or "dengeli" (original contrarian, still used for US). A segment-based hybrid (contrarian for BIST-30) was tried and REJECTED: mixing scales corrupts cross-sectional ranking (IC drops from +0.045 to +0.012). A/B backtest (8 stocks, 3y, universal mode): avg total return +1.9% → +13.4%, but not uniform (THYAO notably worse). GDELT news tone was weak everywhere (t<1), so sentiment's 35% weight is likely too high — weight rebalance pending. Full run: `build-tech` (~3 min), `build-sentiment` (~45 min, 5.5s/req rate limit, ~15/55 tickers succeed per pass), `analyze`. `analyze-stops` (2026-07, 2730 top-quintile entries) showed tight stops rank dead last (old kisa 1.5×ATR was 24/24) and hard profit-targets cut momentum winners badly; stops were widened to 2.5-3.5×ATR and targets became informational levels (alerts suggest, never auto-exit). Caveat: sample is a bull market — wide stops kept as disaster insurance alongside regime gate + drawdown brake.
 
+## US / NASDAQ parity (started 2026-07-23)
+
+Goal: bring the US side to the same shape as BIST. User decisions: **nominal USD only** (no inflation/real-return layer on the US side — ENAG is Turkish, and a US-CPI layer was declined), **dynamic S&P-500 + NASDAQ-100 universe**, **targeted at the October presentation**.
+
+Shared infrastructure is market-parameterized rather than duplicated: `get_scan_universe(market)`, `PortfolioScanner.scan_all(market=)` (separate cache table `portfolio_scan_us`), `compute_market_regime(market)`, and `PortfolioManager.propose/ensure_shadow_batch/ensure_control_batch/update_navs(market=)`. `pm_portfolios` has a `market` column (idempotent migration; old rows read as BIST via `COALESCE(market,'BIST')`). Every call site defaults to `market="BIST"`, so BIST behaviour is unchanged.
+
+US specifics: liquidity threshold `UNIVERSE_MIN_USD_VOLUME` = $200M/day → ~596 names (measured: 50M→1395, 100M→975, 150M→745, 200M→603, 300M→443; $200M matches the S&P-500 + NASDAQ-100 union of ~600). Regime uses S&P 500 trend + breadth + **VIX as a level** (<22 calm) instead of USDTRY — a dollar portfolio has no currency risk, it has a volatility regime. Benchmark is `_default_index(market)` = `^GSPC`; the `pm_nav.xu100_close` column keeps its name for compatibility but holds the portfolio's own index. `performance()` returns `reel=None` for US. Passive control group is the 100 most liquid US names (NASDAQ-100 proxy) instead of BIST-30.
+
+### US calibration finding (2026-07-23) — the edge is in mid-caps, not mega-caps
+
+Two point-in-time panels, same Grinold-Kahn method as BIST (120 stocks × 6y × weekly, ~28k observations each), via `weight_calibration.py build-tech-us` / `build-tech-us-mid` + `analyze-us` / `analyze-us-mid`:
+
+- **Mega-cap (120 most liquid):** momentum IC +0.0065 (t=0.53) — insignificant, sign flips across sub-periods. Contrarian IC −0.0136 (t=−1.31), consistently on the *wrong* side. No technical edge in the world's most efficient segment.
+- **Mid-cap (liquidity ranks 300–420):** momentum IC +0.0212 (**t=2.06**), **stable across sub-periods**. 52-week position t=2.14, RSI t=2.27 also signal.
+
+So `_tech_style_for` now returns `"momentum"` for **both** markets. Effect measured on a live rescan: score↔1M-momentum correlation went **−0.354 → +0.323**, and the top-10 picks went from 14-of-20 down-on-the-month to **0-of-10**. Before this, the US top pick was a stock down 43% in a month.
+
+**Caveat to state plainly in the presentation:** US IC (+0.021) is far below BIST's (+0.045, t=2.8). The US ranking is a *weak* signal and must not carry a strong claim on its own. Open question flagged to the user: the current $200M universe is dominated by mega-caps, i.e. exactly the band where no edge was found — consider shifting the band down.
+
 ## Roadmap — October professor presentation (agreed 2026-07-16)
 
 Goal: system that credibly beats index and targets ENAG-real returns; academic-grade methodology matters as much as returns. Live shadow tracking needs 4-8 weeks — meanwhile, in priority order:
