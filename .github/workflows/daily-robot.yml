@@ -6,6 +6,12 @@ on:
     - cron: "40 15 * * 1-5"
   workflow_dispatch: {}   # elle tetikleme (Actions sekmesinden "Run workflow")
 
+# En az yetki: robot yalnız kodu okur, Turso'ya yazar. GITHUB_TOKEN'ın repo
+# yazma yetkisi olmasın — bağımlılıklardan biri ele geçirilse bile repoya
+# commit/release atamasın (tedarik zinciri hasar sınırlama).
+permissions:
+  contents: read
+
 jobs:
   robot:
     runs-on: ubuntu-latest

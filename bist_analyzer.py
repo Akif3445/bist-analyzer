@@ -6048,8 +6048,10 @@ def render_smart_portfolio_page(ui_lang: str):
     # Sidebar Kontroller
     with st.sidebar:
         st.markdown("## Portföy Tarama")
+        # Kaynak istismarı koruması: ~500 hisselik tam tarama pahalıdır
+        # (yfinance rate-limit / kaynak tüketimi) — anonim ziyaretçi tetikleyemesin
         force_scan = st.button("🔄 Yeniden Tara", use_container_width=True,
-                               help="Tüm hisseleri sıfırdan tara (2-3 dk)")
+                               help="Tüm hisseleri sıfırdan tara (2-3 dk)") and _guard_write()
         st.markdown("---")
         st.markdown("### Backtest Ayarları")
         bt_period = st.selectbox(
@@ -7895,7 +7897,8 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
             pf_cost = st.number_input("Cost ($)", min_value=0.0, value=round(last_price, 2), format="%.2f", key="us_pf_cost")
         with pf_col3:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Add to Portfolio", key="us_add_pf", use_container_width=True):
+            if st.button("Add to Portfolio", key="us_add_pf",
+                         use_container_width=True) and _guard_write():
                 _history_db.add_portfolio(f"{us_symbol}:US", pf_cost, pf_qty)
                 st.success(f"{us_symbol} added to portfolio!")
 
@@ -9118,7 +9121,7 @@ def render_portfolio_page(ui_lang):
             st.markdown("<br>", unsafe_allow_html=True)
             submitted = st.form_submit_button("Ekle (Add)", use_container_width=True)
 
-        if submitted and p_tick:
+        if submitted and p_tick and _guard_write():
             _history_db.add_portfolio(p_tick, p_cost, p_qty)
             st.success(f"{p_tick} portföye eklendi." if ui_lang == "TR" else f"{p_tick} added to portfolio.")
             st.rerun()
@@ -9231,7 +9234,7 @@ def render_portfolio_page(ui_lang):
         with st.container():
             st.markdown(f"""
     """, unsafe_allow_html=True)
-            if st.button("Sil (Remove)", key=f"p_del_page_{tick}"):
+            if st.button("Sil (Remove)", key=f"p_del_page_{tick}") and _guard_write():
                 _history_db.remove_portfolio(tick)
                 st.rerun()
 
@@ -9543,7 +9546,8 @@ def render_analysis_page(ui_lang):
                         unsafe_allow_html=True,
                     )
                 with h_col2:
-                    if st.button("🗑", key=f"del_hist_{row['ticker']}", help=f"{row['ticker']} sil"):
+                    if st.button("🗑", key=f"del_hist_{row['ticker']}",
+                                 help=f"{row['ticker']} sil") and _guard_write():
                         _history_db.delete(row["ticker"])
                         st.rerun()
 
@@ -9685,7 +9689,8 @@ def render_analysis_page(ui_lang):
             if web:
                 st.markdown(f"**Web:** [{web}]({web})")
                 
-            if st.button("Favorilere (Portföye) Ekle" if ui_lang == "TR" else "Add to Portfolio", key=f"fav_{ticker_input}"):
+            if st.button("Favorilere (Portföye) Ekle" if ui_lang == "TR" else "Add to Portfolio",
+                         key=f"fav_{ticker_input}") and _guard_write():
                 _history_db.add_portfolio(ticker_input, score.stock.current_price, 0)
                 st.success(f"{ticker_input} portföyünüze/favorilerinize eklendi!" if ui_lang == "TR" else f"{ticker_input} added!")
 
