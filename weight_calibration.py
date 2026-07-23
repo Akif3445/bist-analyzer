@@ -437,6 +437,134 @@ def stability():
               "\ntemel varsayımı geçerli demektir; işaret dönerse yeniden kalibrasyon şart.")
 
 
+# US (NASDAQ/NYSE) KALİBRASYONU — momentum mu kontrarian mı?
+#
+# BIST'te momentum stilinin üstünlüğü kanıtlandı (IC +0.045, t=2.8). Aynı
+# sonucu US'e VARSAYMAK bilimsel değil — US'ün kendi kanıtı gerekiyor.
+# Yöntem BIST ile BİREBİR aynı: point-in-time panel + kesitsel Spearman IC
+# (Grinold-Kahn). Böylece sunumda "iki piyasada aynı cetvel" denebilir.
+
+US_TECH_CSV = "calibration_tech_us.csv"
+US_PANEL_N  = 120   # en likit N US hissesi — kesitsel IC için fazlasıyla yeterli
+
+
+def _us_tickers(n: int = US_PANEL_N, offset: int = 0) -> list:
+    """Likiditeye göre sıralı US evreninden N hisse.
+
+    offset=0   → en likit (mega-cap, en verimli segment)
+    offset=300 → orta ölçek (daha az takip edilen; teknik kenar burada olabilir)
+    """
+    from bist_analyzer import get_scan_universe
+    return get_scan_universe("US")[offset:offset + n]
+
+
+def build_tech_us(offset: int = 0, csv_yol: str = None):
+    """US teknik panel — build_tech()'in US karşılığı (aynı parametreler)."""
+    tickers = _us_tickers(offset=offset)
+    global US_TECH_CSV
+    if csv_yol:
+        US_TECH_CSV = csv_yol
+    rows, t0 = [], time.time()
+
+    # Toplu indirme (US sembollerinde .IS eki yok) — 50'lik partiler
+    veri = {}
+    for i in range(0, len(tickers), 50):
+        parca = tickers[i:i + 50]
+        try:
+            bulk = yf.download(parca, period="6y", interval="1d",
+                               auto_adjust=True, progress=False, group_by="ticker")
+            for t in parca:
+                try:
+                    d = bulk[t] if isinstance(bulk.columns, pd.MultiIndex) else bulk
+                    d = _flatten_columns(d.dropna(how="all"))
+                    if d is not None and not d.empty:
+                        veri[t] = d
+                except Exception:
+                    continue
+        except Exception as exc:
+            print(f"  parti {i//50+1} indirilemedi: {exc}")
+        print(f"  indirildi {min(i+50, len(tickers))}/{len(tickers)} ({time.time()-t0:.0f}s)")
+
+    for n, ticker in enumerate(sorted(veri), 1):
+        df = veri[ticker]
+        if len(df) < MIN_HISTORY + 40:
+            continue
+        close, max_h, count = df["Close"], max(HORIZONS), 0
+        for i in range(MIN_HISTORY, len(df) - max_h, SAMPLE_STEP):
+            window = df.iloc[max(0, i - WINDOW):i + 1]
+            try:
+                tr = TechnicalEngine.compute(window)              # dengeli (kontrarian)
+                score_mom = TechnicalEngine._compute_score(tr, "momentum")
+            except Exception:
+                continue
+            p0 = float(close.iloc[i])
+            if p0 <= 0:
+                continue
+            row = {"ticker": ticker, "date": df.index[i].strftime("%Y-%m-%d"),
+                   "tech_score": tr.score, "tech_score_momentum": score_mom,
+                   "rsi": tr.rsi, "week52_position": tr.week52_position,
+                   "bb_position": tr.bb_position, "adx": tr.adx,
+                   "sma_gap_pct": tr.sma_gap_pct,
+                   "above_sma200": int(tr.price_above_sma200)}
+            for h in HORIZONS:
+                row[f"fwd_{h}"] = round((float(close.iloc[i + h]) / p0 - 1) * 100, 4)
+            rows.append(row)
+            count += 1
+        if n % 20 == 0 or n == len(veri):
+            print(f"[{n}/{len(veri)}] {ticker}: {count} gözlem ({time.time()-t0:.0f}s)")
+
+    panel = pd.DataFrame(rows)
+    panel.to_csv(US_TECH_CSV, index=False)
+    print(f"\nToplam {len(panel)} gözlem, {panel['ticker'].nunique()} hisse -> {US_TECH_CSV} "
+          f"({time.time()-t0:.0f}s)")
+
+
+def analyze_us():
+    """US panelinde momentum vs kontrarian IC karşılaştırması."""
+    panel = pd.read_csv(US_TECH_CSV)
+    print(f"US panel: {len(panel)} gözlem, {panel['ticker'].nunique()} hisse, "
+          f"{panel['date'].min()} → {panel['date'].max()}\n")
+
+    print(f"{'Sinyal':<26} {'Ufuk':>6} {'IC':>9} {'t':>7}   Yorum")
+    print("-" * 72)
+    sonuc = {}
+    for ad, col in [("Momentum skoru", "tech_score_momentum"),
+                    ("Kontrarian skoru (mevcut)", "tech_score"),
+                    ("52 hafta pozisyonu", "week52_position"),
+                    ("RSI", "rsi")]:
+        for h in (7, 14, 30):
+            ic, t = _xsic_rank(panel, col, f"fwd_{h}")
+            if np.isnan(ic):
+                continue
+            sonuc[(ad, h)] = (ic, t)
+            yorum = ("GUCLU" if abs(t) > 2.5 else "zayif" if abs(t) > 1.5 else "anlamsiz")
+            print(f"{ad:<26} {h:>4}g {ic:>+9.4f} {t:>+7.2f}   {yorum}")
+        print()
+
+    # Alt dönem kararlılığı — tek dönemin şansı mı, kalıcı mı?
+    panel["yil"] = panel["date"].str[:4]
+    yillar = sorted(panel["yil"].unique())
+    orta = yillar[len(yillar) // 2]
+    print("ALT DÖNEM KARARLILIĞI (30 gün ufku):")
+    for ad, col in [("Momentum", "tech_score_momentum"), ("Kontrarian", "tech_score")]:
+        ilk, _ = _xsic_rank(panel[panel["yil"] < orta], col, "fwd_30")
+        son, _ = _xsic_rank(panel[panel["yil"] >= orta], col, "fwd_30")
+        print(f"  {ad:<12} ilk yarı {ilk:+.4f} | ikinci yarı {son:+.4f} | "
+              f"{'TUTARLI' if (ilk > 0) == (son > 0) else 'ISARET DEGISTI'}")
+
+    m30 = sonuc.get(("Momentum skoru", 30), (0, 0))
+    k30 = sonuc.get(("Kontrarian skoru (mevcut)", 30), (0, 0))
+    print("\n" + "=" * 72)
+    print(f"KARAR: momentum IC {m30[0]:+.4f} (t={m30[1]:+.2f}) vs "
+          f"kontrarian IC {k30[0]:+.4f} (t={k30[1]:+.2f})")
+    if m30[0] > k30[0] and m30[1] > 1.5:
+        print("-> _tech_style_for(market='US') 'momentum' DÖNMELİ")
+    elif k30[0] > m30[0] and k30[1] > 1.5:
+        print("-> mevcut 'dengeli' (kontrarian) stil US icin DOGRU, degistirme")
+    else:
+        print("-> iki stil de anlamsiz; US skorunu tek basina siralama olarak KULLANMA")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "build-tech":
@@ -449,5 +577,15 @@ if __name__ == "__main__":
         analyze_stops()
     elif cmd == "stability":
         stability()
+    elif cmd == "build-tech-us":
+        build_tech_us()
+    elif cmd == "build-tech-us-mid":
+        # Orta olcek paneli: likiditede 300-420 bandi (mega-cap disi)
+        build_tech_us(offset=300, csv_yol="calibration_tech_us_mid.csv")
+    elif cmd == "analyze-us":
+        analyze_us()
+    elif cmd == "analyze-us-mid":
+        US_TECH_CSV = "calibration_tech_us_mid.csv"
+        analyze_us()
     else:
         print(__doc__)

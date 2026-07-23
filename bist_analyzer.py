@@ -3012,20 +3012,39 @@ def _sector_of(ticker: str) -> str:
             get_scan_universe()   # sektör haritasını doldurur (günde 1 TV çağrısı)
         except Exception:
             pass
-    tv_sec = _UNIVERSE_CACHE.get("sectors", {}).get(ticker.upper().replace(".IS", ""))
+    t_up = ticker.upper().replace(".IS", "")
+    # Önce BIST TV sektörü, sonra US sektör haritası / US TV sektörü
+    tv_sec = (_UNIVERSE_CACHE.get("sectors", {}).get(t_up)
+              or US_SECTOR_MAP.get(t_up)
+              or _UNIVERSE_CACHE_US.get("sectors", {}).get(t_up))
     return tv_sec or "Diğer"
 
 
+# Rejim yapılandırması piyasa başına: endeks, genişlik sepeti, stres göstergesi
+_REGIME_CFG = {
+    "BIST": {"index": "XU100.IS", "index_ad": "XU100",
+             "stres": "TRY=X", "stres_ad": "USDTRY", "stres_esik": 4.0},
+    "US":   {"index": "^GSPC",   "index_ad": "S&P 500",
+             "stres": "^VIX",    "stres_ad": "VIX",    "stres_esik": 22.0},
+}
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
-def compute_market_regime() -> dict:
-    """Piyasa rejimi: XU100 trendi + piyasa genişliği + kur baskısı → 0-7 puan.
+def compute_market_regime(market: str = "BIST") -> dict:
+    """Piyasa rejimi: endeks trendi + piyasa genişliği + stres göstergesi → 0-7 puan.
 
     Amaç 'gereksiz para kaybetmemek': Ayı rejiminde kısa vadeli alımlar frenlenir.
+
+    BIST: XU100 trendi + BIST30 genişliği + USDTRY kur baskısı
+    US  : S&P 500 trendi + evren genişliği + VIX (kur yerine volatilite stresi;
+          dolar bazlı yatırımda kur riski yoktur, oynaklık rejimi vardır)
     """
-    out = {"score": 0, "regime": "Belirsiz", "detay": [], "color": _theme()["muted"]}
+    cfg = _REGIME_CFG.get(market, _REGIME_CFG["BIST"])
+    out = {"score": 0, "regime": "Belirsiz", "detay": [], "color": _theme()["muted"],
+           "market": market}
     pts = 0
     try:
-        xu = yf.download("XU100.IS", period="1y", interval="1d",
+        xu = yf.download(cfg["index"], period="1y", interval="1d",
                          auto_adjust=True, progress=False)
         if isinstance(xu.columns, pd.MultiIndex):
             xu.columns = xu.columns.get_level_values(0)
@@ -3035,18 +3054,21 @@ def compute_market_regime() -> dict:
             sma200 = float(c.rolling(200).mean().iloc[-1])
             last   = float(c.iloc[-1])
             mom1m  = (last / float(c.iloc[-21]) - 1) * 100 if len(c) >= 21 else 0
-            if last > sma200: pts += 2; out["detay"].append("XU100 SMA200 üstünde ✓")
-            else:             out["detay"].append("XU100 SMA200 ALTINDA ✗")
+            if last > sma200: pts += 2; out["detay"].append(f"{cfg['index_ad']} SMA200 üstünde ✓")
+            else:             out["detay"].append(f"{cfg['index_ad']} SMA200 ALTINDA ✗")
             if sma50 > sma200: pts += 1; out["detay"].append("Golden cross aktif ✓")
             if mom1m > 0:      pts += 1; out["detay"].append(f"1 aylık momentum %{mom1m:+.1f} ✓")
             else:              out["detay"].append(f"1 aylık momentum %{mom1m:+.1f} ✗")
             out["xu100_mom1m"] = round(mom1m, 1)
     except Exception as exc:
-        out["detay"].append(f"XU100 verisi alınamadı: {exc}")
+        out["detay"].append(f"{cfg['index_ad']} verisi alınamadı: {exc}")
 
     # Piyasa genişliği — BIST30 içinde SMA200 üstündeki hisse oranı
     try:
-        b30 = [t + ".IS" for t in BIST_STOCKS["BIST 30"][:30]]
+        if market == "US":
+            b30 = [_yf_symbol(t, "US") for t in get_scan_universe("US")[:30]]
+        else:
+            b30 = [t + ".IS" for t in BIST_STOCKS["BIST 30"][:30]]
         bulk = yf.download(b30, period="1y", interval="1d",
                            auto_adjust=True, progress=False, group_by="ticker")
         above = total = 0
@@ -3068,18 +3090,31 @@ def compute_market_regime() -> dict:
     except Exception:
         pass
 
-    # Kur baskısı — USDTRY 1 aylık değişim
+    # Stres göstergesi — BIST: kur baskısı (USDTRY 1 aylık %), US: VIX seviyesi
     try:
-        fx = yf.download("TRY=X", period="3mo", interval="1d",
+        fx = yf.download(cfg["stres"], period="3mo", interval="1d",
                          auto_adjust=True, progress=False)
         if isinstance(fx.columns, pd.MultiIndex):
             fx.columns = fx.columns.get_level_values(0)
         fc = fx["Close"].dropna()
-        if len(fc) >= 21:
+        if market == "US":
+            # VIX bir SEVİYE göstergesi (değişim değil): <22 sakin sayılır.
+            # Dolar bazlı yatırımda kur riski yok; rejimi bozan şey oynaklıktır.
+            if len(fc) >= 1:
+                vix = float(fc.iloc[-1])
+                out["vix"] = round(vix, 1)
+                out["usdtry_1m"] = None   # US'te kur baskısı kavramı yok
+                if vix < cfg["stres_esik"]:
+                    pts += 1; out["detay"].append(f"VIX sakin ({vix:.1f}) ✓")
+                else:
+                    out["detay"].append(f"VIX YÜKSEK ({vix:.1f}) ✗")
+        elif len(fc) >= 21:
             fx1m = (float(fc.iloc[-1]) / float(fc.iloc[-21]) - 1) * 100
             out["usdtry_1m"] = round(fx1m, 1)
-            if fx1m < 4.0: pts += 1; out["detay"].append(f"USDTRY sakin (%{fx1m:+.1f}/ay) ✓")
-            else: out["detay"].append(f"USDTRY BASKILI (%{fx1m:+.1f}/ay) ✗")
+            if fx1m < cfg["stres_esik"]:
+                pts += 1; out["detay"].append(f"USDTRY sakin (%{fx1m:+.1f}/ay) ✓")
+            else:
+                out["detay"].append(f"USDTRY BASKILI (%{fx1m:+.1f}/ay) ✗")
     except Exception:
         pass
 
@@ -3368,8 +3403,12 @@ class PortfolioManager:
     # PORTFÖY ÖNERİSİ
 
     @staticmethod
-    def propose(scan_results: list, horizon: str, profile_name: str, regime: dict) -> tuple:
-        """Returns (picks: list[dict], warning: str)."""
+    def propose(scan_results: list, horizon: str, profile_name: str, regime: dict,
+                market: str = "BIST") -> tuple:
+        """Returns (picks: list[dict], warning: str).
+
+        market: sektör adları ve _format_picks korelasyon serileri için gerekir
+        (US sembollerinde .IS eki yoktur)."""
         prof = PortfolioManager.PROFILES[profile_name]
         valid = [r for r in scan_results
                  if not r.error and r.data_rows >= 200 and r.current_price > 0
@@ -3406,7 +3445,8 @@ class PortfolioManager:
         stop_mult   = PortfolioManager.STOP_MULTS[horizon]
         target_mult = PortfolioManager.TARGET_MULTS[horizon]
         picks = PortfolioManager._format_picks(pool, keyf, prof["max_pos"],
-                                               prof["sector_cap"], stop_mult, target_mult)
+                                               prof["sector_cap"], stop_mult, target_mult,
+                                               market=market)
         # Minimum çeşitleme koruması: filtrelerden 3'ten az hisse geçtiyse
         # portföy KURULMAZ. Tek hisseye %100 ağırlık "portföy" değildir —
         # W29 kisa/Temkinli gölgesi tek hisse TUPRS ile kaydolmuştu; o hafta
@@ -3423,7 +3463,7 @@ class PortfolioManager:
     _closes_cache = {"date": None, "series": {}}
 
     @staticmethod
-    def _fetch_closes(tickers: list, period: str = "6mo") -> dict:
+    def _fetch_closes(tickers: list, period: str = "6mo", market: str = "BIST") -> dict:
         """Korelasyon hesabı için kapanış serileri (gün içi cache'li, toplu indirme)."""
         today = datetime.now().strftime("%Y-%m-%d")
         cache = PortfolioManager._closes_cache
@@ -3433,12 +3473,12 @@ class PortfolioManager:
         missing = [t for t in tickers if t not in cache["series"]]
         if missing:
             try:
-                syms = [t + ".IS" for t in missing]
+                syms = [_yf_symbol(t, market) for t in missing]
                 bulk = yf.download(syms, period=period, interval="1d",
                                    auto_adjust=True, progress=False, group_by="ticker")
                 for t in missing:
                     try:
-                        s = t + ".IS"
+                        s = _yf_symbol(t, market)
                         cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
                         if len(cl) >= 60:
                             cache["series"][t] = cl.pct_change().dropna()
@@ -3452,7 +3492,7 @@ class PortfolioManager:
 
     @staticmethod
     def _format_picks(pool: list, keyf, max_pos: int, sector_cap: int,
-                      stop_mult: float, target_mult: float) -> list:
+                      stop_mult: float, target_mult: float, market: str = "BIST") -> list:
         """Havuzdan sıralı seçim + risk katmanı:
         - Sektör limiti (mevcut)
         - KORELASYON eleme: seçilmiş bir hisseyle günlük getiri korelasyonu
@@ -3462,7 +3502,8 @@ class PortfolioManager:
         """
         pool = sorted(pool, key=keyf, reverse=True)
         # Korelasyon serilerini aday havuzunun başı için hazırla (tek toplu indirme)
-        returns = PortfolioManager._fetch_closes([r.ticker for r in pool[:max_pos * 3]])
+        returns = PortfolioManager._fetch_closes([r.ticker for r in pool[:max_pos * 3]],
+                                                 market=market)
 
         picks, sector_count, kept_returns = [], {}, {}
         for r in pool:
@@ -3590,9 +3631,10 @@ class PortfolioManager:
         return pid
 
     @staticmethod
-    def _xu100_close() -> float:
+    def _xu100_close(market: str = "BIST") -> float:
+        """Portföyün piyasasının benchmark endeks kapanışı (BIST→XU100, US→S&P500)."""
         try:
-            xu = yf.download("XU100.IS", period="5d", interval="1d",
+            xu = yf.download(_default_index(market), period="5d", interval="1d",
                              auto_adjust=True, progress=False)
             if isinstance(xu.columns, pd.MultiIndex):
                 xu.columns = xu.columns.get_level_values(0)
@@ -3626,10 +3668,20 @@ class PortfolioManager:
         return _PMDB.execute("SELECT * FROM pm_positions WHERE pid=?", (pid,))["rows"]
 
     @staticmethod
-    def update_navs():
-        """Aktif portföylerin bugünkü NAV'ını yazar (oturum başına 1 kez çağrılır)."""
+    def update_navs(market: str = None):
+        """Aktif portföylerin bugünkü NAV'ını yazar (oturum başına 1 kez çağrılır).
+
+        market=None → her piyasa için ayrı ayrı koşar (sembol eki ve benchmark
+        farklı olduğu için tek toplu indirmede birleştirilemez)."""
         PortfolioManager._init_tables()
-        ports = PortfolioManager.active_portfolios()
+        if market is None:
+            for _m in ("BIST", "US"):
+                try:
+                    PortfolioManager.update_navs(_m)
+                except Exception as exc:
+                    log.warning("NAV güncelleme (%s) hatası: %s", _m, exc)
+            return
+        ports = PortfolioManager.active_portfolios(market=market)
         if not ports:
             return
         today = datetime.now().strftime("%Y-%m-%d")
@@ -3638,19 +3690,21 @@ class PortfolioManager:
         if not all_tickers:
             return
         try:
-            syms = [t + ".IS" for t in all_tickers]
+            syms = [_yf_symbol(t, market) for t in all_tickers]
             bulk = yf.download(syms, period="5d", interval="1d",
                                auto_adjust=True, progress=False, group_by="ticker")
             price = {}
             for t in all_tickers:
                 try:
-                    s = t + ".IS"
+                    s = _yf_symbol(t, market)
                     cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
                     if len(cl):
                         price[t] = float(cl.iloc[-1])
                 except Exception:
                     continue
-            xu = PortfolioManager._xu100_close()
+            # Benchmark: BIST→XU100, US→S&P 500 (kolon adı geriye uyumluluk için
+            # xu100_close kalıyor; içeriği portföyün piyasasının endeksidir)
+            xu = PortfolioManager._xu100_close(market)
             stmts = []
             for p in ports:
                 pos = pos_map[p["id"]]
@@ -3711,14 +3765,18 @@ class PortfolioManager:
     @staticmethod
     def _perf_from_nav(p: dict, df: pd.DataFrame) -> dict:
         """performance() ile aynı hesap — hazır NAV verisiyle (ek sorgu yok)."""
-        out = {"nominal": 0.0, "reel": 0.0, "xu100_rel": 0.0, "gun": 0}
+        out = {"nominal": 0.0, "reel": 0.0, "xu100_rel": 0.0, "gun": 0,
+               "market": (p.get("market") or "BIST")}
         if len(df) < 1:
             return out
         start = p["created_at"][:10]
         end   = df["date"].iloc[-1]
         nominal = float(df["nav"].iloc[-1]) - 100.0
         out["nominal"] = round(nominal, 2)
-        out["reel"]    = InflationEngine.real_return(nominal, start, end)
+        # ENAG Türkiye enflasyonudur; US portföyleri NOMINAL USD raporlanır
+        # (kullanıcı kararı 2026-07-23). reel=None → UI o metriği göstermez.
+        out["reel"]    = (None if out["market"] == "US"
+                          else InflationEngine.real_return(nominal, start, end))
         out["gun"]     = (datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(start, "%Y-%m-%d")).days
         xu0 = float(df["xu100_close"].iloc[0]) if len(df) and float(df["xu100_close"].iloc[0] or 0) > 0 else 0
         xu1 = float(df["xu100_close"].iloc[-1] or 0)
@@ -3815,16 +3873,18 @@ class PortfolioManager:
 
     @staticmethod
     def performance(p: dict) -> dict:
-        """Nominal, ENAG-reel ve XU100-göreli getiri."""
+        """Nominal, (BIST'te) ENAG-reel ve endekse göreli getiri."""
         df = PortfolioManager.nav_history(p["id"])
-        out = {"nominal": 0.0, "reel": 0.0, "xu100_rel": 0.0, "gun": 0}
+        out = {"nominal": 0.0, "reel": 0.0, "xu100_rel": 0.0, "gun": 0,
+               "market": (p.get("market") or "BIST")}
         if len(df) < 1:
             return out
         start = p["created_at"][:10]
         end   = df["date"].iloc[-1]
         nominal = float(df["nav"].iloc[-1]) - 100.0
         out["nominal"] = round(nominal, 2)
-        out["reel"]    = InflationEngine.real_return(nominal, start, end)
+        out["reel"]    = (None if out["market"] == "US"
+                          else InflationEngine.real_return(nominal, start, end))
         out["gun"]     = (datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(start, "%Y-%m-%d")).days
         xu0 = float(df["xu100_close"].iloc[0]) if float(df["xu100_close"].iloc[0]) > 0 else 0
         xu1 = float(df["xu100_close"].iloc[-1])
@@ -3946,25 +4006,29 @@ class PortfolioManager:
     SHADOW_LIMITS = {"kisa": 21, "orta": 90, "uzun": 365}  # gün — vade dolunca arşiv
 
     @staticmethod
-    def ensure_shadow_batch(regime: dict, scan_results: list) -> int:
+    def ensure_shadow_batch(regime: dict, scan_results: list, market: str = "BIST") -> int:
         """Bu haftanın gölge seti yoksa oluşturur. Dönüş: yeni kayıt sayısı."""
         PortfolioManager._init_tables()
         week = datetime.now().strftime("%G-W%V")
         rows = _PMDB.execute(
-            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' AND name LIKE ?",
-            (f"%{week}%",))["rows"]
+            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' "
+            "AND COALESCE(market,'BIST')=? AND name LIKE ?",
+            (market, f"%{week}%"))["rows"]
         if rows and rows[0].get("c", 0) > 0:
             return 0
         created = 0
         for horizon in ("kisa", "orta", "uzun"):
             for profile in ("Temkinli", "Dengeli", "Agresif"):
                 try:
-                    picks, _warn = PortfolioManager.propose(scan_results, horizon, profile, regime)
+                    picks, _warn = PortfolioManager.propose(scan_results, horizon, profile,
+                                                           regime, market=market)
                     if not picks:
                         continue  # rejim engeli / kriter dışı — o kombinasyon bu hafta boş
+                    _etiket = "" if market == "BIST" else f"{market} "
                     PortfolioManager.save_portfolio(
-                        f"Gölge {horizon}/{profile} {week}",
-                        horizon, profile, picks, regime.get("regime", "?"), kind="golge")
+                        f"{_etiket}Gölge {horizon}/{profile} {week}",
+                        horizon, profile, picks, regime.get("regime", "?"),
+                        kind="golge", market=market)
                     created += 1
                 except Exception as exc:
                     log.warning("Gölge portföy oluşturma hatası (%s/%s): %s", horizon, profile, exc)
@@ -4013,7 +4077,7 @@ class PortfolioManager:
         return len(stmts)
 
     @staticmethod
-    def ensure_control_batch(scan_results: list) -> int:
+    def ensure_control_batch(scan_results: list, market: str = "BIST") -> int:
         """Haftalık BİLİMSEL KONTROL portföyleri (Roadmap-B):
         - Kura: evrenden rastgele 6 hisse (hafta tohumlu, tekrarlanabilir)
         - Pasif BIST-30: eşit ağırlık
@@ -4022,8 +4086,9 @@ class PortfolioManager:
         PortfolioManager._init_tables()
         week = datetime.now().strftime("%G-W%V")
         rows = _PMDB.execute(
-            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon='kontrol' AND name LIKE ?",
-            (f"%{week}%",))["rows"]
+            "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon='kontrol' "
+            "AND COALESCE(market,'BIST')=? AND name LIKE ?",
+            (market, f"%{week}%"))["rows"]
         if rows and rows[0].get("c", 0) > 0:
             return 0
         created = 0
@@ -4038,17 +4103,23 @@ class PortfolioManager:
             secim = list(rng.choice(havuz, 6, replace=False))
             picks = [{"ticker": t, "fiyat": fiyat[t], "agirlik": round(100/6, 1),
                       "stop": 0.0, "hedef": 0.0} for t in secim]
-            PortfolioManager.save_portfolio(f"Kontrol Kura {week}", "kontrol",
-                                            "Rastgele", picks, "-", kind="golge")
+            _etiket = "" if market == "BIST" else f"{market} "
+            PortfolioManager.save_portfolio(f"{_etiket}Kontrol Kura {week}", "kontrol",
+                                            "Rastgele", picks, "-", kind="golge", market=market)
             created += 1
-        # 2) Pasif BIST-30
-        b30 = [t for t in BIST_STOCKS["BIST 30"] if t in fiyat]
-        if len(b30) >= 20:
+        # 2) Pasif endeks sepeti — BIST: BIST-30, US: en likit 100 (NASDAQ-100 vekili)
+        if market == "US":
+            _sepet, _sepet_ad, _min = get_scan_universe("US")[:100], "NDX100", 50
+        else:
+            _sepet, _sepet_ad, _min = BIST_STOCKS["BIST 30"], "BIST30", 20
+        b30 = [t for t in _sepet if t in fiyat]
+        if len(b30) >= _min:
             w = round(100 / len(b30), 2)
             picks = [{"ticker": t, "fiyat": fiyat[t], "agirlik": w,
                       "stop": 0.0, "hedef": 0.0} for t in b30]
-            PortfolioManager.save_portfolio(f"Kontrol BIST30 {week}", "kontrol",
-                                            "BIST30", picks, "-", kind="golge")
+            _etiket = "" if market == "BIST" else f"{market} "
+            PortfolioManager.save_portfolio(f"{_etiket}Kontrol {_sepet_ad} {week}", "kontrol",
+                                            _sepet_ad, picks, "-", kind="golge", market=market)
             created += 1
         if created:
             log.info("Kontrol portföyleri oluşturuldu: %d (%s)", created, week)
