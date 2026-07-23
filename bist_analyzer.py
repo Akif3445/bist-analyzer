@@ -2231,47 +2231,81 @@ _TV_SECTOR_TR = {
     "Distribution Services": "Dağıtım", "Miscellaneous": "Diğer",
 }
 
-_UNIVERSE_CACHE = {"date": None, "tickers": None, "sectors": {}}
+# US likidite eşiği: $200M günlük dolar hacmi → ~600 hisse, yani S&P-500 +
+# NASDAQ-100 birleşiminin (~600 benzersiz isim) likidite bandına denk gelir.
+# (Ölçüldü 2026-07-23: 50M→1395, 100M→975, 150M→745, 200M→603, 300M→443)
+UNIVERSE_MIN_USD_VOLUME = 200_000_000
+
+# Piyasa başına ayrı önbellek — BIST ve US evrenleri birbirini ezmesin
+_UNIVERSE_CACHE = {"date": None, "tickers": None, "sectors": {}}          # BIST (geri uyumluluk)
+_UNIVERSE_CACHE_US = {"date": None, "tickers": None, "sectors": {}}       # US
+
+# TradingView pazar kodu + likidite eşiği + statik yedek liste, piyasa başına
+_MARKET_UNIVERSE_CFG = {
+    "BIST": {"tv": "turkey",  "min_vol": UNIVERSE_MIN_TL_VOLUME,  "birim": "M TL"},
+    "US":   {"tv": "america", "min_vol": UNIVERSE_MIN_USD_VOLUME, "birim": "M USD"},
+}
 
 
-def get_scan_universe() -> list:
-    """Likidite filtreli dinamik BIST evreni (günde 1 kez TV'den çekilir).
+def _universe_cache(market: str = "BIST") -> dict:
+    return _UNIVERSE_CACHE_US if market == "US" else _UNIVERSE_CACHE
 
-    'Eksik kalmasın' ilkesi: hacim eşiğini geçen HER hisse + eski el listesi
+
+def _valid_ticker(t: str, market: str) -> bool:
+    """BIST kodları saf harf; US'te nokta/tire olabilir (BRK-B, BF.B)."""
+    if not t:
+        return False
+    if market == "US":
+        return all(c.isalnum() or c in ".-" for c in t) and any(c.isalpha() for c in t)
+    return t.isalpha()
+
+
+def get_scan_universe(market: str = "BIST") -> list:
+    """Likidite filtreli dinamik tarama evreni (günde 1 kez TV'den çekilir).
+
+    'Eksik kalmasın' ilkesi: hacim eşiğini geçen HER hisse + statik yedek liste
     + aktif portföylerdeki pozisyonlar (izlenen hisse asla evren dışı kalmaz).
     TV erişilemezse statik listeye düşer.
+
+    market="BIST" → TradingView turkey, TL hacim eşiği, yedek BIST_SCAN_UNIVERSE
+    market="US"   → TradingView america, USD hacim eşiği, yedek US_POPULAR_TICKERS
+                    (eşik doğal olarak S&P-500 + NASDAQ-100 likidite bandını verir)
     """
-    today = datetime.now().strftime("%Y-%m-%d")
-    if _UNIVERSE_CACHE["date"] == today and _UNIVERSE_CACHE["tickers"]:
-        return _UNIVERSE_CACHE["tickers"]
+    cfg    = _MARKET_UNIVERSE_CFG.get(market, _MARKET_UNIVERSE_CFG["BIST"])
+    cache  = _universe_cache(market)
+    yedek  = US_POPULAR_TICKERS if market == "US" else BIST_SCAN_UNIVERSE
+    today  = datetime.now().strftime("%Y-%m-%d")
+    if cache["date"] == today and cache["tickers"]:
+        return cache["tickers"]
     try:
         from tradingview_screener import Query
-        _n, df = (Query().set_markets("turkey")
+        _n, df = (Query().set_markets(cfg["tv"])
                   .select("name", "close", "average_volume_30d_calc", "sector")
-                  .limit(700).get_scanner_data())
-        df["tl_hacim"] = df["close"] * df["average_volume_30d_calc"]
-        likit = df[df["tl_hacim"] >= UNIVERSE_MIN_TL_VOLUME]
-        tickers = [str(t) for t in likit["name"] if t and str(t).isalpha()]
+                  .limit(1500 if market == "US" else 700).get_scanner_data())
+        df["_hacim"] = df["close"] * df["average_volume_30d_calc"]
+        likit = df[df["_hacim"] >= cfg["min_vol"]]
+        tickers = [str(t) for t in likit["name"] if _valid_ticker(str(t), market)]
         sectors = {}
         for _, r in df.iterrows():
             t, sec = str(r.get("name") or ""), r.get("sector")
             if t and isinstance(sec, str):
-                sectors[t] = _TV_SECTOR_TR.get(sec, sec)
-        # Eski liste + portföy pozisyonları her koşulda dahil
-        merged = list(dict.fromkeys(tickers + BIST_SCAN_UNIVERSE))
+                # US sektör adları İngilizce kalır (TR haritası yalnız BIST için)
+                sectors[t] = sec if market == "US" else _TV_SECTOR_TR.get(sec, sec)
+        merged = list(dict.fromkeys(tickers + yedek))
         try:
-            ports = PortfolioManager.active_portfolios()
+            ports = PortfolioManager.active_portfolios(market=market)
             pos = PortfolioManager.positions_all([p["id"] for p in ports])
             held = {x["ticker"] for xs in pos.values() for x in xs}
             merged = list(dict.fromkeys(merged + sorted(held)))
         except Exception:
             pass
-        _UNIVERSE_CACHE.update({"date": today, "tickers": merged, "sectors": sectors})
-        log.info("Dinamik evren: %d hisse (esik %dM TL)", len(merged), UNIVERSE_MIN_TL_VOLUME // 10**6)
+        cache.update({"date": today, "tickers": merged, "sectors": sectors})
+        log.info("Dinamik evren (%s): %d hisse (esik %d%s)", market, len(merged),
+                 cfg["min_vol"] // 10**6, cfg["birim"])
         return merged
     except Exception as exc:
-        log.warning("Dinamik evren alınamadı, statik listeye düşülüyor: %s", exc)
-        return BIST_SCAN_UNIVERSE
+        log.warning("Dinamik evren (%s) alınamadı, statik listeye düşülüyor: %s", market, exc)
+        return yedek
 
 # 7A. PORTFOLIO SCANNER & SMART PORTFOLIO BUILDER
 
@@ -2312,10 +2346,16 @@ class PortfolioScanner:
     CACHE_HRS = 6   # 6 saatten yeni scan sonucu varsa yeniden çekme
 
     @staticmethod
-    def _init_table():
+    def _scan_table(market: str = "BIST") -> str:
+        """Piyasa başına ayrı tarama önbelleği — biri diğerinin tazeliğini ezmesin."""
+        return "portfolio_scan_us" if market == "US" else "portfolio_scan"
+
+    @staticmethod
+    def _init_table(market: str = "BIST"):
+        _tbl = PortfolioScanner._scan_table(market)
         with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS portfolio_scan (
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_tbl} (
                     ticker TEXT PRIMARY KEY,
                     scan_date TEXT,
                     score REAL,
@@ -2346,35 +2386,36 @@ class PortfolioScanner:
             conn.commit()
 
     @staticmethod
-    def scan_all(force: bool = False, progress_cb=None) -> list:
+    def scan_all(force: bool = False, progress_cb=None, market: str = "BIST") -> list:
         """
-        Tüm BIST_SCAN_UNIVERSE hisselerini tara.
+        Seçilen piyasanın tüm tarama evrenini tara (BIST veya US).
         progress_cb(ticker, idx, total) → UI progress güncellemesi için
         Sonuç: List[StockScanResult]
         """
-        PortfolioScanner._init_table()
+        PortfolioScanner._init_table(market)
+        _tbl = PortfolioScanner._scan_table(market)
 
         # Cache kontrolü — tablo varsa ve verisi tazeyse direkt dön
         if not force:
-            cached = PortfolioScanner._load_cache()
+            cached = PortfolioScanner._load_cache(market)
             if cached:
                 return cached
 
         # Yeni tarama yapılacak — eski veriyi temizle
         try:
             with sqlite3.connect(DB_PATH) as conn:
-                conn.execute("DELETE FROM portfolio_scan")
+                conn.execute(f"DELETE FROM {_tbl}")
                 conn.commit()
         except Exception:
             pass
 
-        universe = get_scan_universe()   # dinamik likidite-filtreli evren (~500 hisse)
+        universe = get_scan_universe(market)   # dinamik likidite-filtreli evren
         results = []
         total   = len(universe)
 
         # Toplu veri indirme (yfinance batch download — çok daha hızlı)
         # ~500 sembol tek istekte sorun çıkarabilir → 100'lük partiler
-        symbols = [_yf_symbol(t, "BIST") for t in universe]
+        symbols = [_yf_symbol(t, market) for t in universe]
         bulk_parts = []
         try:
             for i in range(0, len(symbols), 100):
@@ -2400,7 +2441,7 @@ class PortfolioScanner:
 
             result = StockScanResult(ticker=ticker)
             try:
-                sym = _yf_symbol(ticker, "BIST")
+                sym = _yf_symbol(ticker, market)
 
                 # Toplu indirmeden al, başarısız olursa tekil çek
                 df = PortfolioScanner._extract_df(bulk, sym, ticker)
@@ -2426,7 +2467,7 @@ class PortfolioScanner:
                 if "Volume" not in df.columns: df["Volume"] = 0.0
 
                 # TechnicalEngine ile tam analiz — stil hisse segmentine göre
-                tech = TechnicalEngine.compute(df, style=_tech_style_for(ticker, "BIST"))
+                tech = TechnicalEngine.compute(df, style=_tech_style_for(ticker, market))
 
                 result.score             = tech.score
                 result.rsi               = tech.rsi
@@ -2467,8 +2508,9 @@ class PortfolioScanner:
 
                 # Hacim kontrolü: ortalama günlük hacim > 1M TL
                 if "Volume" in df.columns:
-                    avg_vol_tl = float((df["Volume"] * df["Close"]).rolling(20).mean().iloc[-1])
-                    result.volume_ok = avg_vol_tl > 1_000_000
+                    _avg_vol = float((df["Volume"] * df["Close"]).rolling(20).mean().iloc[-1])
+                    # US dolar bazli: 1M TL esigi anlamsiz, 5M USD kullan
+                    result.volume_ok = _avg_vol > (5_000_000 if market == "US" else 1_000_000)
 
             except Exception as exc:
                 result.error = str(exc)[:100]
@@ -2477,7 +2519,7 @@ class PortfolioScanner:
             results.append(result)
 
         # SQLite'a kaydet
-        PortfolioScanner._save_cache(results)
+        PortfolioScanner._save_cache(results, market)
         return results
 
     @staticmethod
@@ -2507,12 +2549,13 @@ class PortfolioScanner:
         return None
 
     @staticmethod
-    def _save_cache(results: list):
+    def _save_cache(results: list, market: str = "BIST"):
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        _tbl = PortfolioScanner._scan_table(market)
         with sqlite3.connect(DB_PATH) as conn:
             for r in results:
-                conn.execute("""
-                    INSERT OR REPLACE INTO portfolio_scan
+                conn.execute(f"""
+                    INSERT OR REPLACE INTO {_tbl}
                         (ticker, scan_date, score, rsi, adx, atr_pct, bb_position,
                          week52_pos, obv_trend, golden_cross, price_above_sma200,
                          current_price, volume_ok, data_rows, error, momentum_1m,
@@ -2532,11 +2575,12 @@ class PortfolioScanner:
             conn.commit()
 
     @staticmethod
-    def _load_cache() -> list:
+    def _load_cache(market: str = "BIST") -> list:
+        _tbl = PortfolioScanner._scan_table(market)
         try:
             with sqlite3.connect(DB_PATH) as conn:
-                rows = conn.execute("""
-                    SELECT * FROM portfolio_scan ORDER BY score DESC
+                rows = conn.execute(f"""
+                    SELECT * FROM {_tbl} ORDER BY score DESC
                 """).fetchall()
             if not rows:
                 return []
@@ -3284,7 +3328,8 @@ class PortfolioManager:
                     name TEXT, horizon TEXT, profile TEXT,
                     created_at TEXT, status TEXT DEFAULT 'aktif',
                     regime_at_start TEXT,
-                    kind TEXT DEFAULT 'kullanici'
+                    kind TEXT DEFAULT 'kullanici',
+                    market TEXT DEFAULT 'BIST'
                 )
             """, ()),
             ("""
@@ -3301,13 +3346,19 @@ class PortfolioManager:
                 )
             """, ()),
         ])
-        # Eski tabloya kind kolonu ekle — idempotent: önce var mı diye bak
+        # Eski tabloya eksik kolonları ekle — idempotent: önce var mı diye bak.
+        # market: çok piyasalı PM (BIST/US). Eski satırlar NULL kalır ve
+        # sorgularda COALESCE(market,'BIST') ile BIST sayılır.
         try:
-            cols = _PMDB.execute("SELECT name FROM pragma_table_info('pm_portfolios')")["rows"]
-            if not any(c.get("name") == "kind" for c in cols):
-                _PMDB.execute("ALTER TABLE pm_portfolios ADD COLUMN kind TEXT DEFAULT 'kullanici'")
+            cols = {c.get("name") for c in
+                    _PMDB.execute("SELECT name FROM pragma_table_info('pm_portfolios')")["rows"]}
+            for kolon, tanim in (("kind",   "TEXT DEFAULT 'kullanici'"),
+                                 ("market", "TEXT DEFAULT 'BIST'")):
+                if kolon not in cols:
+                    _PMDB.execute(f"ALTER TABLE pm_portfolios ADD COLUMN {kolon} {tanim}")
+                    log.info("pm_portfolios: %s kolonu eklendi", kolon)
         except Exception as exc:
-            log.warning("pm_portfolios kind migration atlandı: %s", exc)
+            log.warning("pm_portfolios kolon migration atlandı: %s", exc)
         PortfolioManager._initialized = True
         try:
             st.session_state["_pm_db_init"] = True
@@ -3517,13 +3568,13 @@ class PortfolioManager:
 
     @staticmethod
     def save_portfolio(name: str, horizon: str, profile: str, picks: list, regime: str,
-                       kind: str = "kullanici") -> int:
+                       kind: str = "kullanici", market: str = "BIST") -> int:
         PortfolioManager._init_tables()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         res = _PMDB.execute("""
-            INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start, kind)
-            VALUES (?,?,?,?,?,?)
-        """, (name, horizon, profile, now, regime, kind))
+            INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start, kind, market)
+            VALUES (?,?,?,?,?,?,?)
+        """, (name, horizon, profile, now, regime, kind, market))
         pid = res["lastrowid"]
         stmts = [("""
             INSERT OR REPLACE INTO pm_positions (pid, ticker, entry_price, weight, stop_price, target_price)
@@ -3550,14 +3601,24 @@ class PortfolioManager:
             return 0.0
 
     @staticmethod
-    def active_portfolios() -> list:
+    def active_portfolios(market: str = None) -> list:
+        """market=None → tüm piyasalar (geri uyumluluk), 'BIST'/'US' → filtreli.
+        Eski kayıtlarda market NULL'dur; onlar BIST sayılır."""
         PortfolioManager._init_tables()
+        if market:
+            return _PMDB.execute(
+                "SELECT * FROM pm_portfolios WHERE status='aktif' "
+                "AND COALESCE(market,'BIST')=? ORDER BY created_at DESC", (market,))["rows"]
         return _PMDB.execute(
             "SELECT * FROM pm_portfolios WHERE status='aktif' ORDER BY created_at DESC")["rows"]
 
     @staticmethod
-    def all_portfolios() -> list:
+    def all_portfolios(market: str = None) -> list:
         PortfolioManager._init_tables()
+        if market:
+            return _PMDB.execute(
+                "SELECT * FROM pm_portfolios WHERE COALESCE(market,'BIST')=? "
+                "ORDER BY created_at DESC", (market,))["rows"]
         return _PMDB.execute("SELECT * FROM pm_portfolios ORDER BY created_at DESC")["rows"]
 
     @staticmethod
