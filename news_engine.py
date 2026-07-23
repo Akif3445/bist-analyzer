@@ -1887,18 +1887,21 @@ def render_news_panel(result: NewsAnalysisResult):
             f"{'BERT: ' if use_bert else ''}{sent_label} {conf:.0f}%</span>"
         )
 
+        # Dış RSS içeriği unsafe_allow_html ile çiziliyor → başlık/kaynak
+        # escape edilir, link yalnız http(s) şemasıyla verilir (XSS önlemi)
+        from html import escape as _esc
         st.markdown(
             f"{emoji} {mat_badge}{dup_badge}{kap_badge}"
-            f"**{item.get('title', '')}**{bert_badge}  \n"
+            f"**{_esc(str(item.get('title', '')))}**{bert_badge}  \n"
             f"<span style='font-size:11px;color:#94a3b8'>"
-            f"{tier_label} {item.get('source','')} · {pub}"
+            f"{tier_label} {_esc(str(item.get('source', '')))} · {pub}"
             f"</span>",
             unsafe_allow_html=True,
         )
-        url = item.get("url", "")
-        if url:
+        url = str(item.get("url", ""))
+        if url.startswith(("http://", "https://")):
             st.markdown(
-                f"<a href='{url}' target='_blank' "
+                f"<a href='{_esc(url, quote=True)}' target='_blank' "
                 f"style='font-size:11px;color:#60a5fa'>Read →</a>",
                 unsafe_allow_html=True,
             )

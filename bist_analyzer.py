@@ -5992,10 +5992,16 @@ def render_dashboard_page(ui_lang):
         st.markdown("### Ekonomi Haberleri" if ui_lang == "TR" else "### Economy News")
         news_items = fetch_economy_news()
         if news_items:
+            from html import escape as _esc
             for item in news_items:
+                # Dış RSS içeriği HTML'e gömülüyor → XSS'e karşı escape;
+                # javascript: vb. şemalar çizilmez
+                _lnk = str(item.get("link", ""))
+                if not _lnk.startswith(("http://", "https://")):
+                    continue
                 st.markdown(
                     f"<div style='background:#efe9db; padding:10px; border-radius:8px; margin-bottom:8px; border-left:4px solid #27509e;'>"
-                    f"<a href='{item['link']}' target='_blank' style='text-decoration:none; color:#1a1712; font-size:14px;'>{item['title']}</a>"
+                    f"<a href='{_esc(_lnk, quote=True)}' target='_blank' style='text-decoration:none; color:#1a1712; font-size:14px;'>{_esc(str(item.get('title', '')))}</a>"
                     f"</div>",
                     unsafe_allow_html=True
                 )
