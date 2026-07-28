@@ -3457,6 +3457,14 @@ class PortfolioManager:
                 )
             """, ()),
             ("""
+                CREATE TABLE IF NOT EXISTS pm_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pid INTEGER, tarih TEXT, ticker TEXT, aksiyon TEXT,
+                    agirlik_once REAL, agirlik_sonra REAL, fiyat REAL,
+                    maliyet_pct REAL, gerekce TEXT
+                )
+            """, ()),
+            ("""
                 CREATE TABLE IF NOT EXISTS pm_nav (
                     pid INTEGER, date TEXT, nav REAL, xu100_close REAL,
                     PRIMARY KEY (pid, date)
@@ -3469,11 +3477,24 @@ class PortfolioManager:
         try:
             cols = {c.get("name") for c in
                     _PMDB.execute("SELECT name FROM pragma_table_info('pm_portfolios')")["rows"]}
-            for kolon, tanim in (("kind",   "TEXT DEFAULT 'kullanici'"),
-                                 ("market", "TEXT DEFAULT 'BIST'")):
+            for kolon, tanim in (("kind",         "TEXT DEFAULT 'kullanici'"),
+                                 ("market",       "TEXT DEFAULT 'BIST'"),
+                                 # Aktif yönetim (2026-07-24): NAV artık zincirleme —
+                                 # rebalans anında NAV sabitlenir, sonrası oradan devam eder.
+                                 ("nav_base",     "REAL DEFAULT 100"),
+                                 ("rebalanced_at", "TEXT"),
+                                 ("managed",      "INTEGER DEFAULT 0")):
                 if kolon not in cols:
                     _PMDB.execute(f"ALTER TABLE pm_portfolios ADD COLUMN {kolon} {tanim}")
                     log.info("pm_portfolios: %s kolonu eklendi", kolon)
+            # pm_positions: zirve takibi (takip eden stop) + açılış tarihi (min tutma)
+            _pcols = {c.get("name") for c in
+                      _PMDB.execute("SELECT name FROM pragma_table_info('pm_positions')")["rows"]}
+            for kolon, tanim in (("peak_price", "REAL DEFAULT 0"),
+                                 ("opened_at",  "TEXT")):
+                if kolon not in _pcols:
+                    _PMDB.execute(f"ALTER TABLE pm_positions ADD COLUMN {kolon} {tanim}")
+                    log.info("pm_positions: %s kolonu eklendi", kolon)
         except Exception as exc:
             log.warning("pm_portfolios kolon migration atlandı: %s", exc)
         PortfolioManager._initialized = True
@@ -3726,6 +3747,24 @@ class PortfolioManager:
         return pid
 
     @staticmethod
+    def _nav_factor(pos: list, price: dict) -> float:
+        """Son rebalanstan bu yana portföy değer çarpanı (1.0 = değişim yok).
+
+        Ağırlıklar 100'ü tamamlamak zorunda DEĞİL — kalan nakittir ve nakit
+        getirisi 0'dır (çarpan 1.0). Fiyatı çekilemeyen pozisyon da 1.0 sayılır
+        (renormalize etmek yerine; böylece tek bir eksik fiyat NAV'ı zıplatmaz).
+        """
+        toplam_w = sum(float(x.get("weight") or 0) for x in pos)
+        deger = 0.0
+        for x in pos:
+            w = float(x.get("weight") or 0)
+            e = float(x.get("entry_price") or 0)
+            p_ = price.get(x["ticker"])
+            deger += w * ((p_ / e) if (p_ and e > 0) else 1.0)
+        nakit_w = max(0.0, 100.0 - toplam_w)
+        return (deger + nakit_w) / 100.0
+
+    @staticmethod
     def _xu100_close(market: str = "BIST") -> float:
         """Portföyün piyasasının benchmark endeks kapanışı (BIST→XU100, US→S&P500)."""
         try:
@@ -3803,13 +3842,13 @@ class PortfolioManager:
             stmts = []
             for p in ports:
                 pos = pos_map[p["id"]]
-                nav, w_used = 0.0, 0.0
-                for x in pos:
-                    if x["ticker"] in price and x["entry_price"] > 0:
-                        nav += x["weight"] * (price[x["ticker"]] / x["entry_price"])
-                        w_used += x["weight"]
+                # Zincirleme NAV: rebalans anında sabitlenen taban × o günden
+                # bu yana çarpan. Rebalans hiç olmadıysa taban 100 ve sonuç
+                # eski formülle birebir aynıdır (ağırlıklar 100 toplarken).
+                _taban = float(p.get("nav_base") or 100.0)
+                w_used = sum(float(x.get("weight") or 0) for x in pos)
                 if w_used > 0:
-                    nav = nav / w_used * 100.0
+                    nav = _taban * PortfolioManager._nav_factor(pos, price)
                     stmts.append(("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
                                   (p["id"], today, round(nav, 2), xu)))
             if stmts:
@@ -4319,6 +4358,344 @@ class PortfolioManager:
             suggestions.append({"tip": "EKLE (aday)", "ticker": r.ticker,
                                 "neden": f"Skor {r.score:.0f}, SMA200 üstünde — çıkarılanın yerine değerlendirilebilir"})
         return suggestions
+
+
+def _gerekce_kes(g: str, n: int = 180) -> str:
+    """Gerekçe metnini DB için makul uzunlukta tut."""
+    return (g or "")[:n]
+
+
+class PortfolioDoctor:
+    """Günlük portföy yönetimi — gerçek bir portföy yöneticisinin sabah rutini.
+
+    Neden ayrı bir katman: PortfolioManager portföyü KURAR, bu sınıf onu zaman
+    içinde YÖNETİR. İkisi ayrı sorular: "hangi hisseler?" ve "ne zaman çık,
+    ne zaman buda, ne zaman nakitte bekle?".
+
+    Tasarım ilkeleri (kullanıcı kararı 2026-07-24, "Dengeli" profil):
+    - Savunma önce gelir: stop/trailing/skor çıkışları işlem bütçesine TAKILMAZ.
+      Riski kesmek her zaman serbesttir, fırsat kovalamak sınırlıdır.
+    - Nakit bir pozisyondur. Uygun aday yoksa ağırlık nakitte bekler; ağırlıkların
+      100'ü doldurma zorunluluğu yoktur.
+    - Kazananı erken kesme: hedefte pozisyonun 1/3'ü satılır, kalan koşar
+      (analyze-stops kalibrasyonu sert hedef-satışın momentumu öldürdüğünü
+      göstermişti).
+    - Disiplin katmanı savrulmayı önler: min tutma süresi, satış sonrası bekleme,
+      günlük ihtiyari işlem tavanı, her işlemde maliyet.
+    - Her aksiyon gerekçesiyle pm_trades'e yazılır (denetim izi + sunum kanıtı).
+    """
+
+    # "Dengeli — kurumsal standart" parametreleri
+    KURAL = {
+        "trailing_pct":    15.0,   # zirveden bu kadar geri verirse çık
+        "skor_cikis":      43,     # SAT bölgesi
+        "takas_farki":     12,     # aday, en zayıf hisseden bu kadar iyiyse takas
+        "min_tutma_gun":   5,      # stop hariç, bu süreden önce satma
+        "bekleme_gun":     10,     # sattığını bu süre geri alma
+        "gunluk_islem":    2,      # ihtiyari (alım/takas) işlem tavanı
+        "max_pozisyon":    30.0,   # tek pozisyon ağırlık tavanı %
+        "kismi_kar_pay":   1.0 / 3,
+        "dusus_freni":     15.0,   # portföy zirveden %X düşerse yeni alım yok
+        "min_aday_skor":   57,     # AL bandı altına alım yapma
+    }
+    # İşlem maliyeti (komisyon + spread), tek yönlü %
+    MALIYET = {"BIST": 0.20, "US": 0.10}
+
+    @staticmethod
+    def _son_satis_gunu(pid: int, ticker: str) -> int:
+        """Bu hisse bu portföyde en son kaç gün önce satıldı? (yoksa 9999)"""
+        rows = _PMDB.execute(
+            "SELECT tarih FROM pm_trades WHERE pid=? AND ticker=? AND aksiyon LIKE 'SAT%' "
+            "ORDER BY tarih DESC LIMIT 1", (pid, ticker))["rows"]
+        if not rows:
+            return 9999
+        try:
+            return (datetime.now() - datetime.strptime(rows[0]["tarih"][:10], "%Y-%m-%d")).days
+        except Exception:
+            return 9999
+
+    @staticmethod
+    def _gun_farki(tarih_str: str) -> int:
+        try:
+            return (datetime.now() - datetime.strptime((tarih_str or "")[:10], "%Y-%m-%d")).days
+        except Exception:
+            return 9999
+
+    @staticmethod
+    def daily_manage(market: str = "BIST", dry_run: bool = False) -> list:
+        """Yönetilen portföyleri günlük gözden geçirir ve gerekli işlemleri uygular.
+
+        dry_run=True → hiçbir şey yazılmaz, sadece kararlar döner (test/önizleme).
+        Dönüş: [{"pid","portfoy","aksiyonlar":[...]}]
+        """
+        PortfolioManager._init_tables()
+        ports = [p for p in PortfolioManager.active_portfolios(market=market)
+                 if int(p.get("managed") or 0) == 1]
+        if not ports:
+            return []
+
+        scan = {r.ticker: r for r in PortfolioScanner.scan_all(market=market)
+                if not r.error and r.current_price > 0}
+        if not scan:
+            log.warning("PortfolioDoctor: %s tarama verisi yok, yönetim atlandı", market)
+            return []
+        regime = compute_market_regime(market)
+        ayi = regime.get("regime") == "Ayı"
+        maliyet = PortfolioDoctor.MALIYET.get(market, 0.20)
+        pos_map = PortfolioManager.positions_all([p["id"] for p in ports])
+        navs = PortfolioManager.nav_histories([p["id"] for p in ports])
+        bugun = datetime.now().strftime("%Y-%m-%d")
+        rapor = []
+
+        for p in ports:
+            pid = p["id"]
+            pos = list(pos_map.get(pid, []))
+            if not pos:
+                continue
+            prof = PortfolioManager.PROFILES.get(p.get("profile") or "Dengeli",
+                                                 PortfolioManager.PROFILES["Dengeli"])
+            fiyat = {x["ticker"]: scan[x["ticker"]].current_price
+                     for x in pos if x["ticker"] in scan}
+            aksiyonlar = []          # (ticker, aksiyon, yeni_agirlik, gerekce)
+            islem_butcesi = PortfolioDoctor.KURAL["gunluk_islem"]
+
+            # --- 0) Zirve fiyat güncelle (takip eden stop için) ---
+            zirve_guncel = {}
+            for x in pos:
+                f = fiyat.get(x["ticker"])
+                eski_zirve = float(x.get("peak_price") or 0) or float(x["entry_price"])
+                if f and f > eski_zirve:
+                    zirve_guncel[x["ticker"]] = f
+                x["_zirve"] = max(eski_zirve, f or 0)
+
+            # --- Portföy düşüş freni ---
+            nav_df = navs.get(pid, pd.DataFrame())
+            dd = 0.0
+            if len(nav_df) >= 2:
+                seri = nav_df["nav"].astype(float)
+                dd = float((seri.iloc[-1] / seri.cummax().iloc[-1] - 1) * 100)
+            fren = dd <= -PortfolioDoctor.KURAL["dusus_freni"]
+
+            # --- 1) ÇIKIŞLAR (savunma — işlem bütçesine takılmaz) ---
+            kalan = []
+            for x in pos:
+                t = x["ticker"]
+                r = scan.get(t)
+                f = fiyat.get(t)
+                yas = PortfolioDoctor._gun_farki(x.get("opened_at") or p.get("created_at"))
+                if f is None or r is None:
+                    kalan.append(x)
+                    continue
+                stop = float(x.get("stop_price") or 0)
+                zirve = x["_zirve"]
+                trail = zirve * (1 - PortfolioDoctor.KURAL["trailing_pct"] / 100.0)
+
+                if stop > 0 and f <= stop:
+                    aksiyonlar.append((t, "SAT", 0.0,
+                                       f"Stop kesildi ({f:.2f} ≤ {stop:.2f}) — zarar kesildi"))
+                    continue
+                if zirve > 0 and f <= trail and f > stop:
+                    aksiyonlar.append((t, "SAT", 0.0,
+                                       f"Takip eden stop: zirveden %{(f/zirve-1)*100:.1f} geri "
+                                       f"verdi ({zirve:.2f}→{f:.2f}) — kâr korundu"))
+                    continue
+                if r.score < PortfolioDoctor.KURAL["skor_cikis"]:
+                    if yas >= PortfolioDoctor.KURAL["min_tutma_gun"]:
+                        aksiyonlar.append((t, "SAT", 0.0,
+                                           f"Skor {r.score:.0f} (SAT bölgesi) — tez bozuldu"))
+                        continue
+                    else:
+                        aksiyonlar.append((t, "BEKLE", float(x["weight"]),
+                                           f"Skor {r.score:.0f} zayıf ama pozisyon {yas} günlük "
+                                           f"(min {PortfolioDoctor.KURAL['min_tutma_gun']}) — savrulma önlendi"))
+                kalan.append(x)
+
+            # --- 2-3) AĞIRLIK KARARI — pozisyon başına TEK hedef ağırlık.
+            # Kısmi kâr alma ve yoğunlaşma budaması AYNI pozisyona ayrı ayrı
+            # uygulanırsa ikincisi birincisini geri alır (ve nakit yanlış hesaplanır);
+            # bu yüzden önce nihai ağırlık bulunur, sonra tek aksiyon üretilir.
+            satilan = {t for t, a, _, _ in aksiyonlar if a == "SAT"}
+            tavan = PortfolioDoctor.KURAL["max_pozisyon"]
+            hedef_w = {}
+            for x in kalan:
+                t = x["ticker"]
+                if t in satilan:
+                    continue
+                w0 = float(x["weight"])
+                w = w0
+                nedenler = []
+                f = fiyat.get(t)
+                hedef = float(x.get("target_price") or 0)
+                if f and hedef > 0 and f >= hedef and w >= 6.0:
+                    w = round(w * (1 - PortfolioDoctor.KURAL["kismi_kar_pay"]), 1)
+                    nedenler.append(f"hedefe ulaşıldı ({f:.2f} ≥ {hedef:.2f}), 1/3 kâr alındı")
+                if w > tavan:
+                    w = tavan
+                    nedenler.append(f"ağırlık tavanı %{tavan:.0f} (yoğunlaşma sınırı)")
+                hedef_w[t] = w
+                if w0 - w >= 0.5:
+                    aksiyonlar.append((t, "AZALT", w,
+                                       f"%{w0:.0f} → %{w:.0f}: " + " · ".join(nedenler)))
+
+            # --- 4) NAKİT DEĞERLENDİRME / TAKAS (ihtiyari — bütçeli) ---
+            nakit = max(0.0, 100.0 - sum(hedef_w.values()))
+
+            tutulan = {x["ticker"] for x in kalan if x["ticker"] not in satilan}
+            sektor_say = {}
+            for t in tutulan:
+                sektor_say[_sector_of(t)] = sektor_say.get(_sector_of(t), 0) + 1
+
+            if ayi:
+                if nakit > 1:
+                    aksiyonlar.append(("-", "NAKİT", round(nakit, 1),
+                                       f"Ayı rejimi ({regime['score']}/7) — yeni alım yok, "
+                                       f"%{nakit:.0f} nakitte bekliyor"))
+            elif fren:
+                if nakit > 1:
+                    aksiyonlar.append(("-", "NAKİT", round(nakit, 1),
+                                       f"Portföy zirveden %{abs(dd):.1f} düştü (fren) — "
+                                       f"yeni alım durduruldu, %{nakit:.0f} nakit"))
+            elif nakit >= 8.0:
+                # Aday havuzu: portföyde olmayan, skoru yüksek, trendi sağlam
+                adaylar = sorted(
+                    [r for r in scan.values()
+                     if r.ticker not in tutulan
+                     and r.score >= PortfolioDoctor.KURAL["min_aday_skor"]
+                     and r.price_above_sma200 and r.volume_ok
+                     and r.atr_pct <= prof["max_atr"]
+                     and PortfolioDoctor._son_satis_gunu(pid, r.ticker)
+                         >= PortfolioDoctor.KURAL["bekleme_gun"]],
+                    key=lambda r: r.score, reverse=True)
+                for r in adaylar:
+                    if islem_butcesi <= 0 or nakit < 8.0:
+                        break
+                    sec = _sector_of(r.ticker)
+                    if prof["sector_cap"] > 0 and sektor_say.get(sec, 0) >= prof["sector_cap"]:
+                        continue
+                    _dogal = 100.0 / max(1, prof["max_pos"])   # profilin doğal ağırlığı
+                    w_yeni = round(min(nakit, tavan, _dogal), 1)
+                    aksiyonlar.append((r.ticker, "AL", w_yeni,
+                                       f"Skor {r.score:.0f}, SMA200 üstü, {sec} — "
+                                       f"boştaki %{w_yeni:.0f} nakit değerlendirildi"))
+                    nakit -= w_yeni
+                    sektor_say[sec] = sektor_say.get(sec, 0) + 1
+                    islem_butcesi -= 1
+
+                # Takas: en zayıf tutulan vs en iyi aday
+                if islem_butcesi > 0 and tutulan and adaylar:
+                    zayif = min((x for x in kalan if x["ticker"] in tutulan),
+                                key=lambda x: scan[x["ticker"]].score
+                                if x["ticker"] in scan else 100, default=None)
+                    if zayif is not None and zayif["ticker"] in scan:
+                        z_skor = scan[zayif["ticker"]].score
+                        z_yas = PortfolioDoctor._gun_farki(
+                            zayif.get("opened_at") or p.get("created_at"))
+                        en_iyi = next((r for r in adaylar
+                                       if r.ticker not in [a[0] for a in aksiyonlar]), None)
+                        if (en_iyi is not None
+                                and en_iyi.score - z_skor >= PortfolioDoctor.KURAL["takas_farki"]
+                                and z_yas >= PortfolioDoctor.KURAL["min_tutma_gun"]):
+                            w = float(zayif["weight"])
+                            aksiyonlar.append((zayif["ticker"], "SAT", 0.0,
+                                               f"Takas: skor {z_skor:.0f} → {en_iyi.ticker} "
+                                               f"{en_iyi.score:.0f} ({en_iyi.score-z_skor:.0f} puan iyi)"))
+                            aksiyonlar.append((en_iyi.ticker, "AL", round(w, 1),
+                                               f"Takas: {zayif['ticker']} yerine (skor {en_iyi.score:.0f})"))
+                            islem_butcesi -= 1
+
+            if not aksiyonlar:
+                rapor.append({"pid": pid, "portfoy": p["name"], "aksiyonlar": []})
+                continue
+
+            if not dry_run:
+                PortfolioDoctor._uygula(p, pos, aksiyonlar, fiyat, zirve_guncel,
+                                        maliyet, bugun, scan)
+            rapor.append({"pid": pid, "portfoy": p["name"],
+                          "aksiyonlar": [{"ticker": t, "aksiyon": a, "agirlik": w, "gerekce": g}
+                                         for t, a, w, g in aksiyonlar]})
+        return rapor
+
+    @staticmethod
+    def _uygula(p: dict, pos: list, aksiyonlar: list, fiyat: dict,
+                zirve_guncel: dict, maliyet_pct: float, bugun: str, scan: dict = None):
+        """Kararları veritabanına yazar: NAV zincirlenir, pozisyonlar güncellenir,
+        her işlem gerekçesiyle pm_trades'e kaydedilir."""
+        pid = p["id"]
+        # 1) Rebalans ANINDAKİ NAV'ı sabitle (zincirleme muhasebe)
+        taban = float(p.get("nav_base") or 100.0)
+        yeni_taban = taban * PortfolioManager._nav_factor(pos, fiyat)
+
+        stmts = []
+        mevcut = {x["ticker"]: x for x in pos}
+        islenen_w = 0.0   # maliyet için el değiştiren ağırlık
+
+        for t, aksiyon, yeni_w, gerekce in aksiyonlar:
+            if aksiyon in ("BEKLE", "NAKİT"):
+                stmts.append(("INSERT INTO pm_trades (pid, tarih, ticker, aksiyon, agirlik_once, "
+                              "agirlik_sonra, fiyat, maliyet_pct, gerekce) VALUES (?,?,?,?,?,?,?,?,?)",
+                              (pid, bugun, t, aksiyon,
+                               float(mevcut.get(t, {}).get("weight") or 0), yeni_w,
+                               float(fiyat.get(t) or 0), 0.0, _gerekce_kes(gerekce))))
+                continue
+            onceki_w = float(mevcut.get(t, {}).get("weight") or 0)
+            # Yeni alınan hisse `fiyat` sözlüğünde YOKTUR (o sözlük mevcut
+            # pozisyonlardan kurulur) — tarama önbelleğinden çözülür, yoksa
+            # giriş fiyatı 0 yazılır ve pozisyon bozulur.
+            f = float(fiyat.get(t) or 0)
+            if f <= 0 and scan and t in scan:
+                f = float(scan[t].current_price or 0)
+            islenen_w += abs(yeni_w - onceki_w)
+
+            if aksiyon == "SAT" or yeni_w <= 0:
+                stmts.append(("DELETE FROM pm_positions WHERE pid=? AND ticker=?", (pid, t)))
+            elif aksiyon == "AL":
+                if f <= 0:
+                    log.warning("PortfolioDoctor: %s fiyatı çözülemedi, alım atlandı", t)
+                    continue
+                r = (scan or {}).get(t)
+                atr = (r.atr_pct if r else 3.0) * f / 100.0
+                h = (p.get("horizon") or "orta")
+                stop = round(f - PortfolioManager.STOP_MULTS.get(h, 3.5) * atr, 2)
+                hedef = round(f + PortfolioManager.TARGET_MULTS.get(h, 6.0) * atr, 2)
+                stmts.append(("INSERT OR REPLACE INTO pm_positions (pid, ticker, entry_price, "
+                              "weight, stop_price, target_price, peak_price, opened_at) "
+                              "VALUES (?,?,?,?,?,?,?,?)",
+                              (pid, t, f, yeni_w, stop, hedef, f, bugun)))
+            else:   # AZALT — ağırlık küçülür, pozisyon kalır
+                stmts.append(("UPDATE pm_positions SET weight=? WHERE pid=? AND ticker=?",
+                              (yeni_w, pid, t)))
+
+            stmts.append(("INSERT INTO pm_trades (pid, tarih, ticker, aksiyon, agirlik_once, "
+                          "agirlik_sonra, fiyat, maliyet_pct, gerekce) VALUES (?,?,?,?,?,?,?,?,?)",
+                          (pid, bugun, t, aksiyon, onceki_w, yeni_w, f,
+                           maliyet_pct, _gerekce_kes(gerekce))))
+
+        # 2) Kalan pozisyonların giriş fiyatını BUGÜNE sıfırla (zincirleme muhasebe:
+        #    getiri artık yeni tabandan ölçülür) + zirveleri güncelle
+        silinen = {t for t, a, w, _ in aksiyonlar if a == "SAT" or (a != "BEKLE" and w <= 0)}
+        for x in pos:
+            t = x["ticker"]
+            if t in silinen or t not in fiyat:
+                continue
+            z = max(float(x.get("peak_price") or 0), zirve_guncel.get(t, 0), fiyat[t])
+            stmts.append(("UPDATE pm_positions SET entry_price=?, peak_price=?, "
+                          "opened_at=COALESCE(opened_at, ?) WHERE pid=? AND ticker=?",
+                          (fiyat[t], z, (p.get("created_at") or bugun)[:10], pid, t)))
+
+        # 3) İşlem maliyetini NAV'a yansıt (sürtünmesiz NAV yanıltıcı olurdu)
+        maliyet_etkisi = maliyet_pct / 100.0 * (islenen_w / 100.0)
+        yeni_taban *= (1 - maliyet_etkisi)
+        stmts.append(("UPDATE pm_portfolios SET nav_base=?, rebalanced_at=? WHERE id=?",
+                      (round(yeni_taban, 4), bugun, pid)))
+
+        for i in range(0, len(stmts), 40):
+            _PMDB.execute_batch(stmts[i:i + 40])
+
+    @staticmethod
+    def trade_log(pid: int, limit: int = 50) -> list:
+        return _PMDB.execute(
+            "SELECT tarih, ticker, aksiyon, agirlik_once, agirlik_sonra, fiyat, gerekce "
+            "FROM pm_trades WHERE pid=? ORDER BY id DESC LIMIT ?", (pid, limit))["rows"]
 
 
 class TimeMachineEngine:
