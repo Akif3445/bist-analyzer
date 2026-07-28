@@ -3310,7 +3310,7 @@ _LOGO_COL_CFG = {"Logo": st.column_config.ImageColumn("", width="small")}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _price_snapshot(tickers: tuple) -> dict:
+def _price_snapshot(tickers: tuple, market: str = "BIST") -> dict:
     """Pozisyon tabloları için güncel fiyat + günlük/aylık değişim (5 dk cache).
 
     Dönüş: {ticker: {"son": float, "gun_pct": float, "ay_pct": float}}
@@ -3319,12 +3319,12 @@ def _price_snapshot(tickers: tuple) -> dict:
     if not tickers:
         return out
     try:
-        syms = [t + ".IS" for t in tickers]
+        syms = [_yf_symbol(t, market) for t in tickers]
         bulk = yf.download(syms, period="2mo", interval="1d",
                            auto_adjust=True, progress=False, group_by="ticker")
         for t in tickers:
             try:
-                s = t + ".IS"
+                s = _yf_symbol(t, market)
                 cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
                 if len(cl) < 2:
                     continue
@@ -3340,13 +3340,14 @@ def _price_snapshot(tickers: tuple) -> dict:
     return out
 
 
-def _render_position_table(pos: list):
-    """Pozisyon tablosu: logo + güncel fiyat + günlük/aylık/girişten değişim (renkli)."""
+def _render_position_table(pos: list, market: str = "BIST"):
+    """Pozisyon tablosu: logo + güncel fiyat + günlük/aylık/girişten değişim (renkli).
+    Ağırlıklar 100'ü doldurmuyorsa kalan NAKİT olarak ayrı satırda gösterilir."""
     if not pos:
         st.info("Pozisyon kaydı yok.")
         return
     t = _theme()
-    snap = _price_snapshot(tuple(sorted({x["ticker"] for x in pos})))
+    snap = _price_snapshot(tuple(sorted({x["ticker"] for x in pos})), market)
     rows = []
     for x in pos:
         s = snap.get(x["ticker"], {})
@@ -3365,6 +3366,12 @@ def _render_position_table(pos: list):
             "Stop": x["stop_price"],
             "Hedef": x["target_price"],
         })
+    _nakit = round(100.0 - sum(float(x.get("weight") or 0) for x in pos), 1)
+    if _nakit >= 0.5:
+        rows.append({"Logo": _logo_url("NAKIT"), "Hisse": "NAKİT", "Sektör": "—",
+                     "Giriş": None, "Güncel": None, "Girişten %": None,
+                     "Günlük %": None, "Aylık %": None,
+                     "Ağırlık %": _nakit, "Stop": None, "Hedef": None})
     df = pd.DataFrame(rows)
 
     def _renk(v):
@@ -3728,10 +3735,12 @@ class PortfolioManager:
                        kind: str = "kullanici", market: str = "BIST") -> int:
         PortfolioManager._init_tables()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        _managed = 1 if kind == "kullanici" else 0
         res = _PMDB.execute("""
-            INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start, kind, market)
-            VALUES (?,?,?,?,?,?,?)
-        """, (name, horizon, profile, now, regime, kind, market))
+            INSERT INTO pm_portfolios (name, horizon, profile, created_at, regime_at_start,
+                                       kind, market, managed, nav_base)
+            VALUES (?,?,?,?,?,?,?,?,100)
+        """, (name, horizon, profile, now, regime, kind, market, _managed))
         pid = res["lastrowid"]
         stmts = [("""
             INSERT OR REPLACE INTO pm_positions (pid, ticker, entry_price, weight, stop_price, target_price)
@@ -3747,20 +3756,31 @@ class PortfolioManager:
         return pid
 
     @staticmethod
-    def _nav_factor(pos: list, price: dict) -> float:
+    def _nav_factor(pos: list, price: dict, nakit_modu: bool = True) -> float:
         """Son rebalanstan bu yana portföy değer çarpanı (1.0 = değişim yok).
 
-        Ağırlıklar 100'ü tamamlamak zorunda DEĞİL — kalan nakittir ve nakit
-        getirisi 0'dır (çarpan 1.0). Fiyatı çekilemeyen pozisyon da 1.0 sayılır
-        (renormalize etmek yerine; böylece tek bir eksik fiyat NAV'ı zıplatmaz).
+        nakit_modu=True  → ağırlıkların 100'e tamamlamayan kısmı NAKİTTİR
+                           (getirisi 0). Yönetilen/rebalans görmüş portföyler.
+        nakit_modu=False → eski davranış: toplam ağırlığa göre normalize edilir.
+                           Hiç rebalans görmemiş ESKİ portföyler için şart:
+                           onların ağırlıkları nakit ifade etmiyordu (örn. tek
+                           pozisyonlu %30'luk W30 gölgesi tam yatırımlı sayılırdı)
+                           ve moda geçmek NAV serisinde kopukluk yaratırdı.
+
+        Fiyatı çekilemeyen pozisyon 1.0 sayılır — tek bir eksik fiyat NAV'ı
+        zıplatmasın diye.
         """
         toplam_w = sum(float(x.get("weight") or 0) for x in pos)
+        if toplam_w <= 0:
+            return 1.0
         deger = 0.0
         for x in pos:
             w = float(x.get("weight") or 0)
             e = float(x.get("entry_price") or 0)
             p_ = price.get(x["ticker"])
             deger += w * ((p_ / e) if (p_ and e > 0) else 1.0)
+        if not nakit_modu:
+            return deger / toplam_w
         nakit_w = max(0.0, 100.0 - toplam_w)
         return (deger + nakit_w) / 100.0
 
@@ -3846,9 +3866,11 @@ class PortfolioManager:
                 # bu yana çarpan. Rebalans hiç olmadıysa taban 100 ve sonuç
                 # eski formülle birebir aynıdır (ağırlıklar 100 toplarken).
                 _taban = float(p.get("nav_base") or 100.0)
+                # Nakit modu yalnız rebalans görmüş (yönetilen) portföyler için
+                _nakit_modu = bool(p.get("rebalanced_at"))
                 w_used = sum(float(x.get("weight") or 0) for x in pos)
                 if w_used > 0:
-                    nav = _taban * PortfolioManager._nav_factor(pos, price)
+                    nav = _taban * PortfolioManager._nav_factor(pos, price, _nakit_modu)
                     stmts.append(("INSERT OR REPLACE INTO pm_nav (pid, date, nav, xu100_close) VALUES (?,?,?,?)",
                                   (p["id"], today, round(nav, 2), xu)))
             if stmts:
@@ -4183,6 +4205,17 @@ class PortfolioManager:
                         f"{_etiket}Gölge {horizon}/{profile} {week}",
                         horizon, profile, picks, regime.get("regime", "?"),
                         kind="golge", market=market)
+                    created += 1
+                    # PARALEL "YÖNETİLEN" KOHORT (2026-07-24): aynı seçimle
+                    # başlar ama günlük aktif yönetilir. Pasif gölge dokunulmadan
+                    # kalır — böylece "seçim iyi mi?" ve "yönetim değer katıyor
+                    # mu?" soruları BİRBİRİNDEN BAĞIMSIZ ölçülür. Aynı gün, aynı
+                    # fiyatlarla başladıkları için fark net yönetim katkısıdır.
+                    _ypid = PortfolioManager.save_portfolio(
+                        f"{_etiket}Yönetilen {horizon}/{profile} {week}",
+                        horizon, profile, picks, regime.get("regime", "?"),
+                        kind="golge", market=market)
+                    _PMDB.execute("UPDATE pm_portfolios SET managed=1 WHERE id=?", (_ypid,))
                     created += 1
                 except Exception as exc:
                     log.warning("Gölge portföy oluşturma hatası (%s/%s): %s", horizon, profile, exc)
@@ -4623,7 +4656,10 @@ class PortfolioDoctor:
         pid = p["id"]
         # 1) Rebalans ANINDAKİ NAV'ı sabitle (zincirleme muhasebe)
         taban = float(p.get("nav_base") or 100.0)
-        yeni_taban = taban * PortfolioManager._nav_factor(pos, fiyat)
+        # Rebalans ANINDAKİ değer, portföyün O ANA KADARKİ moduyla hesaplanır;
+        # bu andan sonra nakit modu geçerli olur (geçiş kopukluk yaratmasın).
+        yeni_taban = taban * PortfolioManager._nav_factor(
+            pos, fiyat, nakit_modu=bool(p.get("rebalanced_at")))
 
         stmts = []
         mevcut = {x["ticker"]: x for x in pos}
@@ -11201,7 +11237,27 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
                     chart = nav_df.set_index("date")[["nav"]].rename(columns={"nav": "Portföy (100 baz)"})
                     st.line_chart(chart, height=200)
 
-                _render_position_table(_poss_all.get(p["id"], []))
+                _render_position_table(_poss_all.get(p["id"], []), market)
+
+                # İŞLEM DEFTERİ — sistemin ne yaptığı ve NEDEN yaptığı.
+                # Otomatik yönetimde en kritik şeffaflık katmanı: kullanıcı
+                # portföyünü sistemin değiştirdiğini gerekçesiyle görmeli.
+                if int(p.get("managed") or 0) == 1:
+                    _log = PortfolioDoctor.trade_log(p["id"], limit=25)
+                    _bas = f"🤖 Otomatik yönetim açık — {len(_log)} işlem" if _log                            else "🤖 Otomatik yönetim açık — henüz işlem yok"
+                    with st.expander(_bas, expanded=False):
+                        if _log:
+                            _tl = pd.DataFrame([{
+                                "Tarih": r["tarih"], "Hisse": r["ticker"],
+                                "Aksiyon": r["aksiyon"],
+                                "Ağırlık": f"%{r['agirlik_once']:.0f} → %{r['agirlik_sonra']:.0f}",
+                                "Fiyat": round(r["fiyat"], 2) if r["fiyat"] else None,
+                                "Gerekçe": r["gerekce"],
+                            } for r in _log])
+                            st.dataframe(_tl, use_container_width=True, hide_index=True)
+                        st.caption("Her gün kapanış sonrası: stop/takip-eden-stop kontrolü, "
+                                   "hedefte 1/3 kâr alma, ağırlık budama, nakit değerlendirme. "
+                                   "Ayı rejimi veya %15 düşüşte yeni alım durur.")
 
                 rc1, rc2 = st.columns(2)
                 with rc1:

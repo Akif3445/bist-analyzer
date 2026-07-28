@@ -2,8 +2,12 @@ name: daily-robot
 
 on:
   schedule:
-    # Hafta içi 15:40 UTC = 18:40 TR (BIST kapanışı 18:00'den sonra)
+    # Hafta içi 15:40 UTC = 18:40 TR — BIST kapanışından (18:00) sonra.
     - cron: "40 15 * * 1-5"
+    # 21:30 UTC = US kapanışından (20:00 UTC / 16:00 ET) sonra. Yönetim turu
+    # US kararlarını KAPANIŞ fiyatıyla verir; 15:40 turu US seansı açıkken
+    # koşuyor ve o an yarım günün fiyatını görüyordu.
+    - cron: "30 21 * * 1-5"
   workflow_dispatch: {}   # elle tetikleme (Actions sekmesinden "Run workflow")
 
 # En az yetki: robot yalnız kodu okur, Turso'ya yazar. GITHUB_TOKEN'ın repo
@@ -31,4 +35,7 @@ jobs:
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          # Geç tur (21:30 UTC) yalnız US tarafını yönetir; BIST işleri
+          # akşam turunda zaten yapıldı, tekrarlamak gereksiz yük.
+          ROBOT_ONLY_MARKET: ${{ github.event.schedule == '30 21 * * 1-5' && 'US' || '' }}
         run: python daily_robot.py

@@ -15,6 +15,7 @@ geçici diskine yazmak veri kaybı demektir.
 Elle çalıştırma: python daily_robot.py
 """
 
+import os
 import sys
 import warnings
 from datetime import datetime
@@ -26,6 +27,12 @@ import bist_analyzer as ba  # noqa: E402
 
 def main() -> int:
     print(f"=== Günlük Robot | {datetime.now().strftime('%Y-%m-%d %H:%M')} ===")
+    # Geç tur (US kapanışı sonrası) yalnız US'ü yönetir — BIST işleri akşam
+    # turunda yapıldı. Boşsa tam tur koşulur.
+    _only = (os.getenv("ROBOT_ONLY_MARKET") or "").strip().upper()
+    _piyasalar = (_only,) if _only in ("BIST", "US") else ("BIST", "US")
+    if _only:
+        print(f"    (kısıtlı tur: yalnız {_only})")
 
     if not ba._PMDB.is_cloud():
         print("HATA: Turso yapılandırılmamış (TURSO_DATABASE_URL / TURSO_AUTH_TOKEN).")
@@ -51,7 +58,7 @@ def main() -> int:
     # Gölge + kontrol setleri — her piyasa için ayrı (BIST ve US bağımsız
     # kohortlar biriktirir; biri hata verse diğeri koşmaya devam etmeli)
     week = datetime.now().strftime("%G-W%V")
-    for _mkt in ("BIST", "US"):
+    for _mkt in (_piyasalar if not _only else ()):
         try:
             rows = ba._PMDB.execute(
                 "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' "
@@ -86,9 +93,30 @@ def main() -> int:
     except Exception as exc:
         print(f"      Arşivleme hatası: {exc}")
 
+    # 2.9) GÜNLÜK PORTFÖY YÖNETİMİ — yönetilen portföyleri gözden geçirir,
+    # gerekli çıkış/budama/alım işlemlerini uygular (gerekçeleriyle kaydeder).
+    # NOT: US seansı 15:40 UTC'de HENÜZ AÇIK — US kararları o anki fiyatla
+    # verilir. Kapanış sonrası tur için workflow'a ayrı bir geç koşu eklendi.
+    for _mkt in _piyasalar:
+        try:
+            _rapor = ba.PortfolioDoctor.daily_manage(_mkt)
+            _isl = sum(len(r["aksiyonlar"]) for r in _rapor)
+            if not _rapor:
+                print(f"[2.9]  [{_mkt}] Yönetilen portföy yok")
+                continue
+            print(f"[2.9]  [{_mkt}] {len(_rapor)} portföy incelendi, {_isl} aksiyon")
+            for r in _rapor:
+                for a in r["aksiyonlar"]:
+                    print(f"        {r['portfoy'][:28]:28} | {a['aksiyon']:6} "
+                          f"{a['ticker']:7} %{a['agirlik']:.0f} — {a['gerekce'][:60]}")
+        except Exception as exc:
+            print(f"[2.9]  [{_mkt}] Yönetim hatası: {exc}")
+
     # 3) Risk alarmları
     try:
-        alerts = ba.PortfolioManager.check_risk_alerts()
+        alerts = []
+        for _m in _piyasalar:
+            alerts.extend(ba.PortfolioManager.check_risk_alerts(_m))
         print(f"[3/4] Risk kontrolü: {len(alerts)} yeni alarm")
         for a in alerts:
             print(f"      {a}")
