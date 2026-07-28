@@ -71,6 +71,18 @@ Daily order of operations in `daily_manage(market)`: **exits first and unbudgete
 
 Robot runs the management pass for both markets. `.github/workflows/daily-robot.yml` has a **second cron at 21:30 UTC** (after the US close) with `ROBOT_ONLY_MARKET=US`, because the 15:40 UTC run happens mid-session for US and would decide on half-day prices.
 
+### Rule audit + editor-approved parameters (2026-07-28)
+
+`PortfolioAudit` runs in the robot every day, measures whether the management rules are actually working, writes to `pm_audit`, and **changes nothing on its own**. Metrics: **stop accuracy** (did a stopped-out stock keep falling? if it rebounded the stop was too tight), **swap accuracy** (did the replacement beat what was sold?), **cost burden** (commission paid ÷ gross NAV movement), **managed−passive spread** (the parallel cohorts — the actual question), and average cash. Exit/swap events only count once ≥5 days old.
+
+**Why this is an audit and not an optimizer.** The user asked for a mechanism that continuously steers toward what works. That exact thing is dangerous: with 10 rule parameters, 6 years of history and only *weeks* of live data, a continuous self-tuner fits noise, chases whatever regime just ended, and destroys the ability to say "these rules produced this result" — which is the presentation's whole claim. So the design splits: **audit is continuous and automatic; parameter changes are proposals, gated, and rare.** Every finding is hard-gated on a minimum sample (`PortfolioAudit.MIN_ORNEK`, e.g. 8 stop events) — below that the metric is still recorded but produces no proposal.
+
+**Parameter overrides.** `PortfolioDoctor.kural(key)` reads `pm_params` first and falls back to the `KURAL` dict in code, so code values remain the documented defaults and any change is reversible. Writing an override goes through `kural_ayarla`, and the UI button is behind `_writes_locked()` / `_guard_write()` — **only the unlocked editor can change a parameter** (user decision 2026-07-28). Each change stores date + reason, so "when did I change what, on what evidence" is answerable.
+
+UI cost is deliberately near zero: one line in the Portfolio Manager (`🩺 Yönetim denetimi — sağlıklı`), which expands only when there is a finding; the parameter table appears only if overrides exist.
+
+**Open item:** proposals are currently derived from *live* audit evidence with fixed thresholds. The stronger version is a historical sweep of the 4 high-leverage parameters (`trailing_pct`, `takas_farki`, `dusus_freni`, `max_pozisyon`) on `pipeline_backtest.py`'s point-in-time replay. The discipline parameters (`min_tutma_gun`, `bekleme_gun`, `gunluk_islem`) are deliberately **not** optimization targets — they are anti-churn constraints, not free variables.
+
 ### Signal Tracker
 
 Every signal the app generates gets logged and its forward return is checked at 1/3/7/14/30 days (`check_pending_signals`, called once per session in `run_app()`). This is what "Sinyal Takip" pages display — it's live production tracking, not backtesting.

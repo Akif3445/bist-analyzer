@@ -112,6 +112,22 @@ def main() -> int:
         except Exception as exc:
             print(f"[2.9]  [{_mkt}] Yönetim hatası: {exc}")
 
+    # 2.95) YÖNETİM DENETİMİ — kuralların işe yarayıp yaramadığını ölçer,
+    # hiçbir şeyi değiştirmez. Eşik aşılır VE örnek yeterliyse öneri üretir;
+    # uygulamak editör onayına bağlıdır (bkz. CLAUDE.md > Denetim).
+    for _mkt in _piyasalar:
+        try:
+            _d = ba.PortfolioAudit.run(_mkt)
+            _m = _d["metrikler"]
+            if _m:
+                print(f"[2.95] [{_mkt}] Denetim: " + " | ".join(
+                    f"{k}={v[0]:.2f}(n={v[1]})" for k, v in _m.items()))
+            for _b in _d["bulgular"]:
+                print(f"       ⚠️ {_b['mesaj'][:110]}")
+                print(f"          öneri: {_b['parametre']} {_b['mevcut']} → {_b['onerilen']}")
+        except Exception as exc:
+            print(f"[2.95] [{_mkt}] Denetim hatası: {exc}")
+
     # 3) Risk alarmları
     try:
         alerts = []

@@ -4434,6 +4434,48 @@ class PortfolioDoctor:
     # İşlem maliyeti (komisyon + spread), tek yönlü %
     MALIYET = {"BIST": 0.20, "US": 0.10}
 
+    # Parametre override önbelleği — pm_params'taki editör onaylı değerler
+    _param_cache = {"tarih": None, "degerler": {}}
+
+    @staticmethod
+    def kural(anahtar: str):
+        """Kural değeri: editör onaylı override varsa o, yoksa koddaki varsayılan.
+
+        Override'lar pm_params'ta durur ve YALNIZ editör anahtarıyla değişir
+        (bkz. _guard_write). Kod değerleri hiç silinmez — geri dönüş her zaman
+        mümkün ve her değişiklik tarihiyle kayıtlıdır.
+        """
+        bugun = datetime.now().strftime("%Y-%m-%d")
+        c = PortfolioDoctor._param_cache
+        if c["tarih"] != bugun:
+            try:
+                rows = _PMDB.execute("SELECT anahtar, deger FROM pm_params")["rows"]
+                c["degerler"] = {r["anahtar"]: float(r["deger"]) for r in rows}
+            except Exception:
+                c["degerler"] = {}
+            c["tarih"] = bugun
+        if anahtar in c["degerler"]:
+            v = c["degerler"][anahtar]
+            # Tam sayı olması gereken parametreler
+            if anahtar in ("skor_cikis", "min_tutma_gun", "bekleme_gun",
+                           "gunluk_islem", "min_aday_skor"):
+                return int(v)
+            return v
+        return PortfolioDoctor.KURAL[anahtar]
+
+    @staticmethod
+    def kural_ayarla(anahtar: str, deger: float, gerekce: str = "") -> bool:
+        """Parametre override yaz. ÇAĞIRAN _guard_write() ile korumalı olmalı."""
+        if anahtar not in PortfolioDoctor.KURAL:
+            return False
+        PortfolioAudit._init_tables()
+        _PMDB.execute(
+            "INSERT OR REPLACE INTO pm_params (anahtar, deger, guncellendi, gerekce) "
+            "VALUES (?,?,?,?)",
+            (anahtar, float(deger), datetime.now().strftime("%Y-%m-%d %H:%M"), gerekce[:200]))
+        PortfolioDoctor._param_cache["tarih"] = None   # önbelleği düşür
+        return True
+
     @staticmethod
     def _son_satis_gunu(pid: int, ticker: str) -> int:
         """Bu hisse bu portföyde en son kaç gün önce satıldı? (yoksa 9999)"""
@@ -4490,7 +4532,7 @@ class PortfolioDoctor:
             fiyat = {x["ticker"]: scan[x["ticker"]].current_price
                      for x in pos if x["ticker"] in scan}
             aksiyonlar = []          # (ticker, aksiyon, yeni_agirlik, gerekce)
-            islem_butcesi = PortfolioDoctor.KURAL["gunluk_islem"]
+            islem_butcesi = PortfolioDoctor.kural("gunluk_islem")
 
             # --- 0) Zirve fiyat güncelle (takip eden stop için) ---
             zirve_guncel = {}
@@ -4507,7 +4549,7 @@ class PortfolioDoctor:
             if len(nav_df) >= 2:
                 seri = nav_df["nav"].astype(float)
                 dd = float((seri.iloc[-1] / seri.cummax().iloc[-1] - 1) * 100)
-            fren = dd <= -PortfolioDoctor.KURAL["dusus_freni"]
+            fren = dd <= -PortfolioDoctor.kural("dusus_freni")
 
             # --- 1) ÇIKIŞLAR (savunma — işlem bütçesine takılmaz) ---
             kalan = []
@@ -4521,7 +4563,7 @@ class PortfolioDoctor:
                     continue
                 stop = float(x.get("stop_price") or 0)
                 zirve = x["_zirve"]
-                trail = zirve * (1 - PortfolioDoctor.KURAL["trailing_pct"] / 100.0)
+                trail = zirve * (1 - PortfolioDoctor.kural("trailing_pct") / 100.0)
 
                 if stop > 0 and f <= stop:
                     aksiyonlar.append((t, "SAT", 0.0,
@@ -4532,8 +4574,8 @@ class PortfolioDoctor:
                                        f"Takip eden stop: zirveden %{(f/zirve-1)*100:.1f} geri "
                                        f"verdi ({zirve:.2f}→{f:.2f}) — kâr korundu"))
                     continue
-                if r.score < PortfolioDoctor.KURAL["skor_cikis"]:
-                    if yas >= PortfolioDoctor.KURAL["min_tutma_gun"]:
+                if r.score < PortfolioDoctor.kural("skor_cikis"):
+                    if yas >= PortfolioDoctor.kural("min_tutma_gun"):
                         aksiyonlar.append((t, "SAT", 0.0,
                                            f"Skor {r.score:.0f} (SAT bölgesi) — tez bozuldu"))
                         continue
@@ -4548,7 +4590,7 @@ class PortfolioDoctor:
             # uygulanırsa ikincisi birincisini geri alır (ve nakit yanlış hesaplanır);
             # bu yüzden önce nihai ağırlık bulunur, sonra tek aksiyon üretilir.
             satilan = {t for t, a, _, _ in aksiyonlar if a == "SAT"}
-            tavan = PortfolioDoctor.KURAL["max_pozisyon"]
+            tavan = PortfolioDoctor.kural("max_pozisyon")
             hedef_w = {}
             for x in kalan:
                 t = x["ticker"]
@@ -4560,7 +4602,7 @@ class PortfolioDoctor:
                 f = fiyat.get(t)
                 hedef = float(x.get("target_price") or 0)
                 if f and hedef > 0 and f >= hedef and w >= 6.0:
-                    w = round(w * (1 - PortfolioDoctor.KURAL["kismi_kar_pay"]), 1)
+                    w = round(w * (1 - PortfolioDoctor.kural("kismi_kar_pay")), 1)
                     nedenler.append(f"hedefe ulaşıldı ({f:.2f} ≥ {hedef:.2f}), 1/3 kâr alındı")
                 if w > tavan:
                     w = tavan
@@ -4593,11 +4635,11 @@ class PortfolioDoctor:
                 adaylar = sorted(
                     [r for r in scan.values()
                      if r.ticker not in tutulan
-                     and r.score >= PortfolioDoctor.KURAL["min_aday_skor"]
+                     and r.score >= PortfolioDoctor.kural("min_aday_skor")
                      and r.price_above_sma200 and r.volume_ok
                      and r.atr_pct <= prof["max_atr"]
                      and PortfolioDoctor._son_satis_gunu(pid, r.ticker)
-                         >= PortfolioDoctor.KURAL["bekleme_gun"]],
+                         >= PortfolioDoctor.kural("bekleme_gun")],
                     key=lambda r: r.score, reverse=True)
                 for r in adaylar:
                     if islem_butcesi <= 0 or nakit < 8.0:
@@ -4626,8 +4668,8 @@ class PortfolioDoctor:
                         en_iyi = next((r for r in adaylar
                                        if r.ticker not in [a[0] for a in aksiyonlar]), None)
                         if (en_iyi is not None
-                                and en_iyi.score - z_skor >= PortfolioDoctor.KURAL["takas_farki"]
-                                and z_yas >= PortfolioDoctor.KURAL["min_tutma_gun"]):
+                                and en_iyi.score - z_skor >= PortfolioDoctor.kural("takas_farki")
+                                and z_yas >= PortfolioDoctor.kural("min_tutma_gun")):
                             w = float(zayif["weight"])
                             aksiyonlar.append((zayif["ticker"], "SAT", 0.0,
                                                f"Takas: skor {z_skor:.0f} → {en_iyi.ticker} "
@@ -4732,6 +4774,231 @@ class PortfolioDoctor:
         return _PMDB.execute(
             "SELECT tarih, ticker, aksiyon, agirlik_once, agirlik_sonra, fiyat, gerekce "
             "FROM pm_trades WHERE pid=? ORDER BY id DESC LIMIT ?", (pid, limit))["rows"]
+
+
+class PortfolioAudit:
+    """Yönetim kurallarının denetimi — arka planda ölçer, HİÇBİR ŞEYİ DEĞİŞTİRMEZ.
+
+    Gerçek bir fonun risk/uyum birimi ne yapıyorsa o: kuralların işe yarayıp
+    yaramadığını ölçer, eşik aşılırsa bayrak kaldırır. Parametre değişimi bu
+    katmanın işi DEĞİLDİR — öneri üretir, uygulamayı editör onaylar
+    (`_guard_write`). Sebebi bilimsel: sürekli kendi kendini optimize eden bir
+    sistem gürültüye uyum sağlar (overfitting) ve "şu kurallarla şu sonucu
+    aldım" cümlesini kurulamaz hale getirir.
+
+    KRİTİK: her bulgu MİNİMUM ÖRNEK sayısına bağlıdır. Elimizde haftalarca
+    veri var; 3 stop olayına bakıp "stoplar dar" demek istatistik değil,
+    gürültü okumaktır. Örnek yetersizse metrik hesaplanır ama bulgu üretilmez.
+    """
+
+    # Bulgu üretmek için gereken en az örnek sayısı
+    MIN_ORNEK = {"stop_isabet": 8, "takas_isabet": 5,
+                 "maliyet_yuku": 10, "yonetilen_fark": 6}
+    # Eşikler — aşılırsa (ve örnek yeterliyse) öneri üretilir
+    ESIK = {
+        "stop_isabet_alt":   0.40,   # stopların %40'ından azı doğruysa stop dar
+        "maliyet_yuku_ust":  0.20,   # maliyet brüt getirinin %20'sinden fazlaysa
+        "yonetilen_fark_alt": -1.0,  # yönetim pasiften %1'den fazla geridyse
+    }
+
+    @staticmethod
+    def _init_tables():
+        _PMDB.execute_batch([
+            ("""CREATE TABLE IF NOT EXISTS pm_audit (
+                    tarih TEXT, metrik TEXT, deger REAL, ornek INTEGER, detay TEXT,
+                    PRIMARY KEY (tarih, metrik)
+                )""", ()),
+            ("""CREATE TABLE IF NOT EXISTS pm_params (
+                    anahtar TEXT PRIMARY KEY, deger REAL,
+                    guncellendi TEXT, gerekce TEXT
+                )""", ()),
+        ])
+
+    @staticmethod
+    def run(market: str = "BIST") -> dict:
+        """Günlük denetim. Dönüş: {metrik: (deger, ornek, detay)} + bulgular."""
+        PortfolioAudit._init_tables()
+        bugun = datetime.now().strftime("%Y-%m-%d")
+        try:
+            scan = {r.ticker: r.current_price
+                    for r in PortfolioScanner.scan_all(market=market)
+                    if not r.error and r.current_price > 0}
+        except Exception:
+            scan = {}
+        if not scan:
+            return {"metrikler": {}, "bulgular": []}
+
+        pidler = [p["id"] for p in PortfolioManager.active_portfolios(market=market)
+                  if int(p.get("managed") or 0) == 1]
+        metrikler = {}
+
+        # --- 1) STOP İSABETİ: stopla çıktığım hisse sonra düşmeye devam etti mi?
+        # Doğru stop = çıkıştan sonra fiyat DAHA AŞAĞIDA. Toparladıysa stop dardı.
+        if pidler:
+            _ph = ",".join("?" * len(pidler))
+            cikislar = _PMDB.execute(
+                f"SELECT ticker, fiyat, tarih, gerekce FROM pm_trades "
+                f"WHERE pid IN ({_ph}) AND aksiyon='SAT' AND fiyat > 0 "
+                f"AND (gerekce LIKE '%Stop%' OR gerekce LIKE '%Takip eden%')",
+                tuple(pidler))["rows"]
+        else:
+            cikislar = []
+        # En az 5 gün geçmiş olaylar (hemen sonrasına bakmak anlamsız)
+        olgun = [c for c in cikislar
+                 if PortfolioDoctor._gun_farki(c["tarih"]) >= 5 and c["ticker"] in scan]
+        if olgun:
+            dogru = sum(1 for c in olgun if scan[c["ticker"]] <= float(c["fiyat"]))
+            metrikler["stop_isabet"] = (dogru / len(olgun), len(olgun),
+                                        f"{dogru}/{len(olgun)} çıkışta fiyat daha aşağıda")
+
+        # --- 2) TAKAS İSABETİ: aldığım, sattığımı geçti mi?
+        if pidler:
+            _ph = ",".join("?" * len(pidler))
+            takaslar = _PMDB.execute(
+                f"SELECT pid, tarih, ticker, aksiyon, fiyat FROM pm_trades "
+                f"WHERE pid IN ({_ph}) AND gerekce LIKE 'Takas%' AND fiyat > 0 "
+                f"ORDER BY tarih, pid", tuple(pidler))["rows"]
+        else:
+            takaslar = []
+        ciftler, gecici = [], {}
+        for tr in takaslar:
+            k = (tr["pid"], tr["tarih"])
+            gecici.setdefault(k, {})[tr["aksiyon"]] = tr
+        for k, v in gecici.items():
+            if "SAT" in v and "AL" in v and PortfolioDoctor._gun_farki(k[1]) >= 5:
+                s, a = v["SAT"], v["AL"]
+                if s["ticker"] in scan and a["ticker"] in scan:
+                    eski_get = scan[s["ticker"]] / float(s["fiyat"]) - 1
+                    yeni_get = scan[a["ticker"]] / float(a["fiyat"]) - 1
+                    ciftler.append(yeni_get - eski_get)
+        if ciftler:
+            iyi = sum(1 for x in ciftler if x > 0)
+            metrikler["takas_isabet"] = (iyi / len(ciftler), len(ciftler),
+                                         f"{iyi}/{len(ciftler)} takasta yeni hisse önde "
+                                         f"(ort. fark %{np.mean(ciftler)*100:+.1f})")
+
+        # --- 3) MALİYET YÜKÜ: ödenen komisyon / brüt getiri
+        if pidler:
+            _ph = ",".join("?" * len(pidler))
+            tr_all = _PMDB.execute(
+                f"SELECT maliyet_pct, agirlik_once, agirlik_sonra FROM pm_trades "
+                f"WHERE pid IN ({_ph}) AND maliyet_pct > 0", tuple(pidler))["rows"]
+            maliyet_puan = sum(
+                float(t["maliyet_pct"]) / 100.0
+                * abs(float(t["agirlik_sonra"]) - float(t["agirlik_once"])) / 100.0 * 100.0
+                for t in tr_all)
+            navs = PortfolioManager.nav_histories(pidler)
+            brut = 0.0
+            for pid in pidler:
+                df = navs.get(pid, pd.DataFrame())
+                if len(df) >= 2:
+                    brut += abs(float(df["nav"].iloc[-1]) - float(df["nav"].iloc[0]))
+            if tr_all and brut > 0.5:
+                metrikler["maliyet_yuku"] = (maliyet_puan / brut, len(tr_all),
+                                             f"{maliyet_puan:.2f} puan maliyet / "
+                                             f"{brut:.1f} puan brüt hareket")
+
+        # --- 4) YÖNETİLEN vs PASİF: paralel kohortların farkı (asıl soru)
+        cift_nav = []
+        tum = PortfolioManager.active_portfolios(market=market)
+        pasifler = {p["name"].replace("Gölge ", ""): p for p in tum
+                    if p.get("kind") == "golge" and "Gölge " in p["name"]}
+        yonetilenler = {p["name"].replace("Yönetilen ", ""): p for p in tum
+                        if "Yönetilen " in p["name"]}
+        ortak = set(pasifler) & set(yonetilenler)
+        if ortak:
+            navs2 = PortfolioManager.nav_histories(
+                [pasifler[k]["id"] for k in ortak] + [yonetilenler[k]["id"] for k in ortak])
+            for k in ortak:
+                dp = navs2.get(pasifler[k]["id"], pd.DataFrame())
+                dy = navs2.get(yonetilenler[k]["id"], pd.DataFrame())
+                if len(dp) >= 2 and len(dy) >= 2:
+                    cift_nav.append(float(dy["nav"].iloc[-1]) - float(dp["nav"].iloc[-1]))
+        if cift_nav:
+            metrikler["yonetilen_fark"] = (float(np.mean(cift_nav)), len(cift_nav),
+                                           f"{len(cift_nav)} kohort çiftinde ort. "
+                                           f"{np.mean(cift_nav):+.2f} NAV puanı fark")
+
+        # --- 5) NAKİT ORANI (bilgi amaçlı, bulgu üretmez)
+        if pidler:
+            poss = PortfolioManager.positions_all(pidler)
+            oranlar = [max(0.0, 100.0 - sum(float(x.get("weight") or 0) for x in poss.get(i, [])))
+                       for i in pidler if poss.get(i)]
+            if oranlar:
+                metrikler["nakit_orani"] = (float(np.mean(oranlar)), len(oranlar),
+                                            f"{len(oranlar)} portföyde ort. "
+                                            f"%{np.mean(oranlar):.0f} nakit")
+
+        # --- Kaydet
+        stmts = [("INSERT OR REPLACE INTO pm_audit (tarih, metrik, deger, ornek, detay) "
+                  "VALUES (?,?,?,?,?)",
+                  (bugun, f"{market}:{k}", round(v[0], 4), v[1], v[2][:180]))
+                 for k, v in metrikler.items()]
+        if stmts:
+            _PMDB.execute_batch(stmts)
+
+        return {"metrikler": metrikler,
+                "bulgular": PortfolioAudit._bulgular(metrikler)}
+
+    @staticmethod
+    def _bulgular(metrikler: dict) -> list:
+        """Eşiği aşan VE yeterli örneği olan metrikler → parametre önerisi.
+
+        Örnek yetersizse bulgu ÜRETİLMEZ — az veriyle parametre oynatmak,
+        gürültüyü kural sanmaktır.
+        """
+        out = []
+        E, N = PortfolioAudit.ESIK, PortfolioAudit.MIN_ORNEK
+
+        m = metrikler.get("stop_isabet")
+        if m and m[1] >= N["stop_isabet"] and m[0] < E["stop_isabet_alt"]:
+            out.append({
+                "metrik": "stop_isabet",
+                "mesaj": f"Stopların yalnız %{m[0]*100:.0f}'ı doğru çıktı ({m[2]}). "
+                         f"Stoplar fazla dar olabilir — hisseler çıkıştan sonra toparlıyor.",
+                "parametre": "trailing_pct",
+                "mevcut": PortfolioDoctor.kural("trailing_pct"),
+                "onerilen": round(PortfolioDoctor.kural("trailing_pct") + 5, 1),
+                "kanit": m[2],
+            })
+
+        m = metrikler.get("maliyet_yuku")
+        if m and m[1] >= N["maliyet_yuku"] and m[0] > E["maliyet_yuku_ust"]:
+            out.append({
+                "metrik": "maliyet_yuku",
+                "mesaj": f"İşlem maliyeti brüt hareketin %{m[0]*100:.0f}'ı ({m[2]}). "
+                         f"Sistem fazla işlem yapıyor.",
+                "parametre": "gunluk_islem",
+                "mevcut": PortfolioDoctor.kural("gunluk_islem"),
+                "onerilen": max(1, PortfolioDoctor.kural("gunluk_islem") - 1),
+                "kanit": m[2],
+            })
+
+        m = metrikler.get("yonetilen_fark")
+        if m and m[1] >= N["yonetilen_fark"] and m[0] < E["yonetilen_fark_alt"]:
+            out.append({
+                "metrik": "yonetilen_fark",
+                "mesaj": f"Yönetilen kohortlar pasiften {abs(m[0]):.1f} puan GERİDE ({m[2]}). "
+                         f"Aktif yönetim şu ana kadar değer katmıyor — takas eşiği "
+                         f"yükseltilip işlem azaltılabilir.",
+                "parametre": "takas_farki",
+                "mevcut": PortfolioDoctor.kural("takas_farki"),
+                "onerilen": round(PortfolioDoctor.kural("takas_farki") + 4, 1),
+                "kanit": m[2],
+            })
+        return out
+
+    @staticmethod
+    def son_durum(market: str = "BIST") -> dict:
+        """En son denetim sonucu (UI için — tek satırlık özet)."""
+        rows = _PMDB.execute(
+            "SELECT metrik, deger, ornek, detay, tarih FROM pm_audit "
+            "WHERE metrik LIKE ? ORDER BY tarih DESC LIMIT 12", (f"{market}:%",))["rows"]
+        if not rows:
+            return {}
+        son_tarih = rows[0]["tarih"]
+        return {r["metrik"].split(":", 1)[1]: (r["deger"], r["ornek"], r["detay"])
+                for r in rows if r["tarih"] == son_tarih}
 
 
 class TimeMachineEngine:
@@ -11365,6 +11632,65 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
             if _nav is not None and len(_nav) >= 2:
                 st.line_chart(_nav.set_index("date")[["nav"]]
                               .rename(columns={"nav": "Değer (100 baz)"}), height=180)
+
+        # ── YÖNETİM DENETİMİ ── tek satır özet; detay yalnız istenirse açılır.
+        # Parametre değişikliği YALNIZ editör anahtarıyla (_guard_write).
+        try:
+            _ad = PortfolioAudit.son_durum(market)
+            if _ad:
+                _blg = PortfolioAudit._bulgular(_ad)
+                _bas = (f"🩺 Yönetim denetimi — {len(_blg)} bulgu, onay bekliyor"
+                        if _blg else "🩺 Yönetim denetimi — sağlıklı")
+                with st.expander(_bas, expanded=bool(_blg)):
+                    _sat = []
+                    for _k, (_d, _n, _det) in _ad.items():
+                        _ad_tr = {"stop_isabet": "Stop isabeti",
+                                  "takas_isabet": "Takas isabeti",
+                                  "maliyet_yuku": "Maliyet yükü",
+                                  "yonetilen_fark": "Yönetilen − Pasif",
+                                  "nakit_orani": "Ortalama nakit"}.get(_k, _k)
+                        _fmt = (f"%{_d*100:.0f}" if _k in ("stop_isabet", "takas_isabet",
+                                                           "maliyet_yuku")
+                                else f"{_d:+.2f} puan" if _k == "yonetilen_fark"
+                                else f"%{_d:.0f}")
+                        _sat.append({"Ölçüm": _ad_tr, "Değer": _fmt,
+                                     "Örnek": _n, "Detay": _det})
+                    st.dataframe(pd.DataFrame(_sat), use_container_width=True, hide_index=True)
+                    if not _blg:
+                        st.caption("Eşiği aşan ölçüm yok. Not: bir bulgu ancak yeterli "
+                                   "örnek biriktiğinde üretilir — az veriyle parametre "
+                                   "oynatmak gürültüyü kural sanmaktır.")
+                    for _b in _blg:
+                        st.warning(_b["mesaj"])
+                        _c1, _c2 = st.columns([3, 1])
+                        _c1.markdown(f"**Öneri:** `{_b['parametre']}` "
+                                     f"{_b['mevcut']} → **{_b['onerilen']}**<br>"
+                                     f"<span style='font-size:12px;color:{_theme()['muted']}'>"
+                                     f"Kanıt: {html.escape(str(_b['kanit']))}</span>",
+                                     unsafe_allow_html=True)
+                        if _writes_locked():
+                            _c2.caption("🔒 Editör girişi gerekli")
+                        elif _c2.button("Uygula", key=f"par_{_b['parametre']}",
+                                        use_container_width=True) and _guard_write():
+                            PortfolioDoctor.kural_ayarla(
+                                _b["parametre"], _b["onerilen"],
+                                f"Denetim önerisi: {_b['kanit']}")
+                            st.success(f"{_b['parametre']} = {_b['onerilen']} kaydedildi.")
+                            st.rerun()
+                    # Aktif override'lar
+                    try:
+                        _ov = _PMDB.execute("SELECT anahtar, deger, guncellendi, gerekce "
+                                            "FROM pm_params ORDER BY guncellendi DESC")["rows"]
+                    except Exception:
+                        _ov = []
+                    if _ov:
+                        st.caption("Editör onaylı parametre değişiklikleri:")
+                        st.dataframe(pd.DataFrame([
+                            {"Parametre": o["anahtar"], "Değer": o["deger"],
+                             "Tarih": o["guncellendi"], "Gerekçe": o["gerekce"]}
+                            for o in _ov]), use_container_width=True, hide_index=True)
+        except Exception as _exc:
+            log.warning("Denetim paneli hatası: %s", _exc)
 
         score_df = PortfolioManager.shadow_scoreboard()
         if not score_df.empty:
