@@ -2621,6 +2621,32 @@ class PortfolioScanner:
             conn.commit()
 
     @staticmethod
+    def load_any(market: str = "BIST") -> tuple:
+        """Tazelik gözetmeksizin önbelleği oku → (sonuçlar, yaş_saat).
+
+        _load_cache tazelik eşiğini (6 saat) uygular ve bayat veride BOŞ döner;
+        bu, karar veren yollar için doğru ama GÖSTERİM için yanlıştı: robot
+        18:40'ta tarıyor, önbellek 00:40'ta bayatlıyor ve Kokpit günün büyük
+        kısmında "veri yok" diyordu. Halbuki veri var, sadece eski — yaşını
+        yazıp göstermek hiç göstermemekten iyidir.
+        """
+        _tbl = PortfolioScanner._scan_table(market)
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                rows = conn.execute(f"SELECT * FROM {_tbl} ORDER BY score DESC").fetchall()
+            if not rows:
+                return [], None
+            yas = None
+            try:
+                yas = (datetime.now() - datetime.strptime(
+                    rows[0][1], "%Y-%m-%d %H:%M")).total_seconds() / 3600
+            except Exception:
+                pass
+            return PortfolioScanner._rows_to_results(rows), yas
+        except Exception:
+            return [], None
+
+    @staticmethod
     def _load_cache(market: str = "BIST") -> list:
         _tbl = PortfolioScanner._scan_table(market)
         try:
@@ -2638,7 +2664,15 @@ class PortfolioScanner:
                     return []
             except Exception:
                 return []
-            results = []
+            return PortfolioScanner._rows_to_results(rows)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _rows_to_results(rows: list) -> list:
+        """DB satırlarını StockScanResult listesine çevirir."""
+        results = []
+        try:
             for row in rows:
                 r = StockScanResult(
                     ticker=row[0], score=row[2] or 0, rsi=row[3] or 50,
@@ -3950,7 +3984,8 @@ class PortfolioManager:
         return out
 
     @staticmethod
-    def intraday_navs(ports: list, poss: dict, navs: dict, days: int = 8) -> tuple:
+    def intraday_navs(ports: list, poss: dict, navs: dict, days: int = 8,
+                      market: str = "BIST") -> tuple:
         """Saatlik NAV yeniden inşası — grafikler 'dümdüz' kalmasın diye.
 
         pm_nav günde 1 nokta tutar; burada pozisyonlardan (giriş fiyatı +
@@ -3962,7 +3997,9 @@ class PortfolioManager:
         if not tickers:
             return {}, pd.Series(dtype=float)
         try:
-            syms = [t + ".IS" for t in tickers] + ["XU100.IS"]
+            _idx = _default_index(market)
+            _sym2tic = {_yf_symbol(t, market): t for t in tickers}
+            syms = list(_sym2tic) + [_idx]
             bulk = yf.download(syms, period=f"{days}d", interval="60m",
                                auto_adjust=True, progress=False, group_by="ticker")
             price = {}
@@ -3970,18 +4007,21 @@ class PortfolioManager:
                 try:
                     cl = bulk[s]["Close"].dropna() if isinstance(bulk.columns, pd.MultiIndex) else bulk["Close"].dropna()
                     if len(cl):
-                        price[s[:-3] if s.endswith(".IS") else s] = cl
+                        price[_sym2tic.get(s, s)] = cl
                 except Exception:
                     continue
-            xu = price.pop("XU100", pd.Series(dtype=float))
+            xu = price.pop(_idx, pd.Series(dtype=float))
             out = {}
             for p in ports:
                 pos = poss.get(p["id"], [])
                 if not pos:
                     continue
                 created = pd.Timestamp(p["created_at"][:10])
-                nav0_rows = navs.get(p["id"])
-                base = float(nav0_rows["nav"].iloc[0]) if nav0_rows is not None and len(nav0_rows) else 100.0
+                # Zincirleme NAV ile tutarlı taban: rebalans olduysa nav_base,
+                # olmadıysa 100. Eskiden ilk NAV noktası kullanılıyordu; rebalans
+                # sonrası giriş fiyatları sıfırlandığı için o çift sayım yapardı.
+                base = float(p.get("nav_base") or 100.0)
+                _nakit_modu = bool(p.get("rebalanced_at"))
                 seri, w_top = None, 0.0
                 for x in pos:
                     cl = price.get(x["ticker"])
@@ -3992,7 +4032,12 @@ class PortfolioManager:
                     w_top += x["weight"]
                 if seri is None or w_top <= 0:
                     continue
-                seri = (seri / w_top * base).dropna()
+                # Nakit modunda ağırlıklar 100'ü doldurmaz; kalan nakittir
+                # (getirisi 0). Renormalize etmek nakdi hisseymiş gibi sayardı.
+                if _nakit_modu:
+                    seri = ((seri + max(0.0, 100.0 - w_top)) / 100.0 * base).dropna()
+                else:
+                    seri = (seri / w_top * base).dropna()
                 seri = seri[seri.index.tz_localize(None) >= created] if seri.index.tz else seri[seri.index >= created]
                 if len(seri) >= 2:
                     out[p["id"]] = seri
@@ -4339,11 +4384,20 @@ class PortfolioManager:
         return archived
 
     @staticmethod
-    def shadow_scoreboard() -> pd.DataFrame:
-        """Kombinasyon karnesi: tüm gölge portföylerin (aktif+arşiv) ortalama
-        nominal/reel/XU100-göreli getirisi, vade×profil bazında."""
+    def shadow_scoreboard(market: str = "BIST") -> pd.DataFrame:
+        """Kombinasyon karnesi: gölge portföylerin ortalama getirisi,
+        vade × profil × YÖNETİM bazında.
+
+        İki ayrım ŞART:
+        - PİYASA: BIST ve US farklı para birimi/endeks; aynı ortalamada
+          toplanırlarsa satır anlamsızlaşır.
+        - YÖNETİM: "Yönetilen" kohortlar da kind='golge' olarak kaydediliyor;
+          pasiflerle aynı ortalamaya karışırlarsa "seçim iyi mi?" sorusunun
+          kanıtı kirlenir — deneyi ayrı tutmanın tüm amacı buydu.
+        """
         rows = []
-        _golge = [p for p in PortfolioManager.all_portfolios() if p.get("kind") == "golge"]
+        _golge = [p for p in PortfolioManager.all_portfolios(market=market)
+                  if p.get("kind") == "golge"]
         _perfs = PortfolioManager.performances(_golge)
         _navs  = PortfolioManager.nav_histories([p["id"] for p in _golge])
         for p in _golge:
@@ -4352,13 +4406,15 @@ class PortfolioManager:
                 continue
             _rm = PortfolioManager.risk_metrics(_navs.get(p["id"], pd.DataFrame()))
             rows.append({"Vade": p["horizon"], "Profil": p["profile"],
+                         "Yönetim": ("Yönetilen" if int(p.get("managed") or 0) == 1
+                                     else "Pasif"),
                          "nominal": perf["nominal"], "reel": perf["reel"],
                          "xu": perf["xu100_rel"], "gun": perf["gun"],
                          "sharpe": _rm["sharpe"], "maxdd": _rm["maxdd"]})
         if not rows:
             return pd.DataFrame()
         df = pd.DataFrame(rows)
-        agg = (df.groupby(["Vade", "Profil"])
+        agg = (df.groupby(["Vade", "Profil", "Yönetim"])
                  .agg(Portfoy=("nominal", "size"),
                       Ort_Nominal=("nominal", "mean"),
                       Ort_Reel=("reel", "mean"),
@@ -4367,7 +4423,8 @@ class PortfolioManager:
                       Ort_MaxDD=("maxdd", "mean"),
                       Ort_Gun=("gun", "mean"))
                  .round(2).reset_index())
-        return agg.sort_values("Ort_Reel", ascending=False)
+        _sirala = "Ort_Reel" if agg["Ort_Reel"].notna().any() else "Ort_Nominal"
+        return agg.sort_values(_sirala, ascending=False)
 
     # AKTİF REBALANS
 
@@ -11196,8 +11253,10 @@ def render_kokpit_page(ui_lang, market: str = "BIST"):
     with col_sol:
         st.markdown("### Günün Sinyalleri")
         try:
-            scan = PortfolioScanner._load_cache(market) or []
-            iyi = sorted([r for r in scan if not r.error and r.data_rows >= 100],
+            # Bayat da olsa göster (yaşını yazarak) — robot 18:40'ta tarıyor,
+            # 6 saatlik tazelik eşiği Kokpit'i günün çoğunda boş bırakıyordu.
+            scan, _yas = PortfolioScanner.load_any(market)
+            iyi = sorted([r for r in (scan or []) if not r.error and r.data_rows >= 100],
                          key=lambda r: r.score, reverse=True)
             if iyi:
                 for r in iyi[:4] + iyi[-2:]:
@@ -11213,9 +11272,14 @@ def render_kokpit_page(ui_lang, market: str = "BIST"):
                         f"<span style='font-family:Inter,sans-serif;font-size:11.5px;font-weight:600;"
                         f"color:{renk}'>{sig} · {r.score:.0f}</span></div>",
                         unsafe_allow_html=True)
+                _tazelik = ("" if _yas is None else
+                            " · veriler taze" if _yas < 6 else
+                            f" · son tarama {_yas:.0f} saat önce" if _yas < 48 else
+                            f" · son tarama {_yas/24:.0f} gün önce ⚠️")
                 st.caption(f"En güçlü 4 + en zayıf 2. Tam liste: "
                            f"{'US Listesi' if market == 'US' else 'BIST Listesi'} · "
-                           f"Derin analiz: {'US Analiz' if market == 'US' else 'Hisse Analizi'}.")
+                           f"Derin analiz: {'US Analiz' if market == 'US' else 'Hisse Analizi'}"
+                           f"{_tazelik}.")
             else:
                 st.info("Henüz tarama verisi yok — Portföy Yöneticisi'nde 'Tara ve Portföy Öner' çalıştırınca burası dolar.")
         except Exception as exc:
@@ -11486,7 +11550,8 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
         _saatlik = {}
         _xu_saat = pd.Series(dtype=float)
         if range_label == "1 Hafta":
-            _saatlik, _xu_saat = PortfolioManager.intraday_navs(_chart_ports, _poss_all, _navs_all)
+            _saatlik, _xu_saat = PortfolioManager.intraday_navs(
+                _chart_ports, _poss_all, _navs_all, market=market)
         for p in _chart_ports:
             _m = _pm_meta(p["horizon"], p["profile"])
             is_shadow = p.get("kind") == "golge"
@@ -11787,7 +11852,7 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
         except Exception as _exc:
             log.warning("Denetim paneli hatası: %s", _exc)
 
-        score_df = PortfolioManager.shadow_scoreboard()
+        score_df = PortfolioManager.shadow_scoreboard(market)
         if not score_df.empty:
             st.markdown("#### " + ("Kombinasyon Karnesi (tüm gölge geçmişi)"
                                       if ui_lang == "TR" else "Combination Scoreboard"))
