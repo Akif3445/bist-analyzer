@@ -2526,16 +2526,25 @@ class PortfolioScanner:
                 result.bb_squeeze        = tech.bb_squeeze
                 result.stoch_oversold    = tech.stoch_oversold
 
-                # Momentum hesapla
-                close = df["Close"]
-                if len(close) >= 22:
-                    result.momentum_1m = float(
-                        round((close.iloc[-1] / close.iloc[-22] - 1) * 100, 2)
-                    )
-                if len(close) >= 64:
-                    result.momentum_3m = float(
-                        round((close.iloc[-1] / close.iloc[-64] - 1) * 100, 2)
-                    )
+                # Momentum hesapla — NaN/0 payda koruması ŞART.
+                # Toplu indirmede tek bir eksik gün NaN bırakabiliyor; NaN
+                # buradan sızarsa sektör medyanını zehirler (tek NaN tüm
+                # sektörü NaN yapar), skorlamada karşılaştırmaları bozar ve
+                # yalnız TAZE taramada görünür (DB'ye NULL yazılıp 0 okunduğu
+                # için cache'ten gelince sorun görünmez).
+                close = df["Close"].dropna()
+
+                def _mom(seri, geri: int):
+                    if len(seri) <= geri:
+                        return 0.0
+                    p0, p1 = float(seri.iloc[-1]), float(seri.iloc[-geri - 1])
+                    if not np.isfinite(p0) or not np.isfinite(p1) or p1 <= 0:
+                        return 0.0
+                    v = (p0 / p1 - 1) * 100
+                    return round(float(v), 2) if np.isfinite(v) else 0.0
+
+                result.momentum_1m = _mom(close, 21)
+                result.momentum_3m = _mom(close, 63)
 
                 # Volume ratio (son 5 gün / 20 gün ort)
                 if "Volume" in df.columns and len(df) >= 20:
@@ -4918,6 +4927,56 @@ class PortfolioAudit:
             metrikler["yonetilen_fark"] = (float(np.mean(cift_nav)), len(cift_nav),
                                            f"{len(cift_nav)} kohort çiftinde ort. "
                                            f"{np.mean(cift_nav):+.2f} NAV puanı fark")
+
+        # --- 4b) GİRİŞ ZAMANLAMASI: yükselişten ÖNCE mi SONRA mı alıyoruz?
+        # Momentum sistemi tanımı gereği yükselmiş hisseyi alır; asıl soru
+        # girişten SONRA devam edip etmediğidir. İkisi de ölçülür:
+        #   giris_oncesi_mom = alım anında hissenin son 1 aylık getirisi
+        #   giris_sonrasi_XXg = alımdan sonraki getiri (asıl kanıt)
+        try:
+            _gir = _PMDB.execute(
+                "SELECT s.ticker, p.created_at FROM pm_portfolios p "
+                "JOIN pm_positions s ON s.pid = p.id "
+                "WHERE COALESCE(p.market,'BIST')=?", (market,))["rows"]
+            _cift = sorted({(g["ticker"], (g["created_at"] or "")[:10]) for g in _gir})
+            # En az 10 işlem günü olgunlaşmış girişler
+            # 5 işlem günü ileri pencere: girişler henüz yeni, 10-20 günlük
+            # pencere veri biriktikçe anlamlı olur. Ufuk kısa olduğu için bu
+            # metrik YÖN gösterir, kanıt değildir (kalibrasyon 30 günde ölçer).
+            _ILERI = 5
+            _olgun = [c for c in _cift
+                      if 7 <= PortfolioDoctor._gun_farki(c[1]) <= 400 and c[0] in scan]
+            if len(_olgun) >= 10:
+                _syms = sorted({c[0] for c in _olgun})
+                _bulk = yf.download([_yf_symbol(t, market) for t in _syms],
+                                    period="1y", interval="1d", auto_adjust=True,
+                                    progress=False, group_by="ticker")
+                _onc, _son = [], []
+                for _t, _d in _olgun:
+                    try:
+                        _cl = _bulk[_yf_symbol(_t, market)]["Close"].dropna()
+                        _cl.index = pd.to_datetime(_cl.index).tz_localize(None)
+                        _i = _cl.index.searchsorted(pd.Timestamp(_d))
+                        if _i < 21 or _i + _ILERI >= len(_cl):
+                            continue
+                        _p0 = float(_cl.iloc[_i])
+                        _a = (_p0 / float(_cl.iloc[_i - 21]) - 1) * 100
+                        _b = (float(_cl.iloc[_i + _ILERI]) / _p0 - 1) * 100
+                        if np.isfinite(_a) and np.isfinite(_b):
+                            _onc.append(_a); _son.append(_b)
+                    except Exception:
+                        continue
+                if len(_son) >= 10:
+                    metrikler["giris_oncesi_mom"] = (
+                        float(np.mean(_onc)), len(_onc),
+                        f"alım anında hisseler son 1 ayda ort. %{np.mean(_onc):+.1f}")
+                    _poz = sum(1 for x in _son if x > 0)
+                    metrikler["giris_sonrasi_5g"] = (
+                        float(np.mean(_son)), len(_son),
+                        f"{_poz}/{len(_son)} giriş sonrası {_ILERI} günde yükseldi "
+                        f"(ort. %{np.mean(_son):+.1f}) — kısa ufuk, yön göstergesi")
+        except Exception as _e:
+            log.warning("Giriş zamanlaması ölçülemedi: %s", _e)
 
         # --- 5) NAKİT ORANI (bilgi amaçlı, bulgu üretmez)
         if pidler:
@@ -11648,9 +11707,13 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
                                   "takas_isabet": "Takas isabeti",
                                   "maliyet_yuku": "Maliyet yükü",
                                   "yonetilen_fark": "Yönetilen − Pasif",
-                                  "nakit_orani": "Ortalama nakit"}.get(_k, _k)
-                        _fmt = (f"%{_d*100:.0f}" if _k in ("stop_isabet", "takas_isabet",
-                                                           "maliyet_yuku")
+                                  "nakit_orani": "Ortalama nakit",
+                                  "giris_oncesi_mom": "Alım anı: önceki 1 ay",
+                                  "giris_sonrasi_5g": "Alım sonrası 5 gün"}.get(_k, _k)
+                        _fmt = (f"%{_d:+.1f}" if _k in ("giris_oncesi_mom",
+                                                        "giris_sonrasi_5g")
+                                else f"%{_d*100:.0f}" if _k in ("stop_isabet", "takas_isabet",
+                                                                "maliyet_yuku")
                                 else f"{_d:+.2f} puan" if _k == "yonetilen_fark"
                                 else f"%{_d:.0f}")
                         _sat.append({"Ölçüm": _ad_tr, "Değer": _fmt,
@@ -11724,11 +11787,17 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
             for sec, rs in rows.items():
                 if len(rs) < 2:
                     continue
+                # nanmedian: kaynakta korunuyor ama tek bir bozuk kayıt tüm
+                # sektörü NaN yapmasın diye ikinci savunma katmanı
+                _m1 = [r.momentum_1m for r in rs if np.isfinite(r.momentum_1m)]
+                _m3 = [r.momentum_3m for r in rs if np.isfinite(r.momentum_3m)]
+                if not _m1 or not _m3:
+                    continue
                 sec_stats.append({
                     "Sektör": sec,
                     "Hisse": len(rs),
-                    "1A Mom %": round(float(np.median([r.momentum_1m for r in rs])), 1),
-                    "3A Mom %": round(float(np.median([r.momentum_3m for r in rs])), 1),
+                    "1A Mom %": round(float(np.median(_m1)), 1),
+                    "3A Mom %": round(float(np.median(_m3)), 1),
                     "Ort. Skor": round(np.mean([r.score for r in rs]), 1),
                     "SMA200 Üstü %": round(np.mean([r.price_above_sma200 for r in rs]) * 100, 0),
                 })
