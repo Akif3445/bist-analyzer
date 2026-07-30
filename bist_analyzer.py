@@ -11704,13 +11704,35 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
         # Parametre değişikliği YALNIZ editör anahtarıyla (_guard_write).
         try:
             _ad = PortfolioAudit.son_durum(market)
-            if _ad:
-                _blg = PortfolioAudit._bulgular(_ad)
-                _bas = (f"🩺 Yönetim denetimi — {len(_blg)} bulgu, onay bekliyor"
+            _blg = PortfolioAudit._bulgular(_ad) if _ad else []
+            # Tarihsel taramadan gelen öneriler BAŞLIKTAN ÖNCE yüklenmeli —
+            # yoksa başlık "sağlıklı" der, panel kapalı kalır ve bekleyen
+            # öneriler görünmez (2026-07-30 hatası).
+            try:
+                _bt = _PMDB.execute(
+                    "SELECT parametre, mevcut, onerilen, kanit, tarih "
+                    "FROM pm_param_oneri ORDER BY tarih DESC")["rows"]
+            except Exception:
+                _bt = []
+            for _o in _bt:
+                try:
+                    if abs(float(PortfolioDoctor.kural(_o["parametre"]))
+                           - float(_o["onerilen"])) < 1e-6:
+                        continue      # zaten uygulanmış
+                except Exception:
+                    pass
+                _blg.append({"metrik": "backtest",
+                             "mesaj": f"Tarihsel tarama önerisi ({_o['tarih']}): "
+                                      f"`{_o['parametre']}` parametresi",
+                             "parametre": _o["parametre"],
+                             "mevcut": _o["mevcut"], "onerilen": _o["onerilen"],
+                             "kanit": _o["kanit"]})
+            if _ad or _blg:
+                _bas = (f"🩺 Yönetim denetimi — ⚠️ {len(_blg)} ÖNERİ ONAY BEKLİYOR"
                         if _blg else "🩺 Yönetim denetimi — sağlıklı")
                 with st.expander(_bas, expanded=bool(_blg)):
                     _sat = []
-                    for _k, (_d, _n, _det) in _ad.items():
+                    for _k, (_d, _n, _det) in (_ad or {}).items():
                         _ad_tr = {"stop_isabet": "Stop isabeti",
                                   "takas_isabet": "Takas isabeti",
                                   "maliyet_yuku": "Maliyet yükü",
@@ -11726,28 +11748,13 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
                                 else f"%{_d:.0f}")
                         _sat.append({"Ölçüm": _ad_tr, "Değer": _fmt,
                                      "Örnek": _n, "Detay": _det})
-                    st.dataframe(pd.DataFrame(_sat), use_container_width=True, hide_index=True)
+                    if _sat:
+                        st.dataframe(pd.DataFrame(_sat), use_container_width=True,
+                                     hide_index=True)
                     if not _blg:
                         st.caption("Eşiği aşan ölçüm yok. Not: bir bulgu ancak yeterli "
                                    "örnek biriktiğinde üretilir — az veriyle parametre "
                                    "oynatmak gürültüyü kural sanmaktır.")
-                    # Tarihsel taramadan gelen öneriler (pipeline_backtest sweep)
-                    try:
-                        _bt = _PMDB.execute(
-                            "SELECT parametre, mevcut, onerilen, kanit, tarih "
-                            "FROM pm_param_oneri ORDER BY tarih DESC")["rows"]
-                    except Exception:
-                        _bt = []
-                    for _o in _bt:
-                        if abs(float(PortfolioDoctor.kural(_o["parametre"]))
-                               - float(_o["onerilen"])) < 1e-6:
-                            continue      # zaten uygulanmış
-                        _blg.append({"metrik": "backtest",
-                                     "mesaj": f"Tarihsel tarama önerisi ({_o['tarih']}): "
-                                              f"{_o['parametre']}",
-                                     "parametre": _o["parametre"],
-                                     "mevcut": _o["mevcut"], "onerilen": _o["onerilen"],
-                                     "kanit": _o["kanit"]})
                     for _b in _blg:
                         st.warning(_b["mesaj"])
                         _c1, _c2 = st.columns([3, 1])
