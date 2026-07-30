@@ -1,174 +1,162 @@
 # BIST Smart Investment Assistant
 
-A comprehensive stock analysis platform for Borsa Istanbul (BIST) and US markets. The system combines technical analysis, news sentiment analysis, and valuation metrics to generate investment signals with a 0-100 composite scoring model.
+A stock analysis and portfolio management platform for Borsa Istanbul (BIST) and US markets. It scores stocks 0–100 by combining technical analysis, news sentiment, analyst upside and valuation — then proposes portfolios, manages them daily, and measures whether any of it actually works.
 
 Live demo: [bist-analyzer.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app)
 
----
-
-## Overview
-
-This platform provides automated stock analysis by processing multiple data sources simultaneously. It fetches real-time price data, analyzes news sentiment from 20+ Turkish and English sources, and computes technical indicators to produce a unified buy/sell signal for each stock.
-
-The system covers 80+ BIST stocks and 50+ US stocks. All analysis runs client-side through Streamlit, with SQLite used for local caching and portfolio persistence.
+> **Not investment advice.** This is a research and educational project. See [Disclaimer](#disclaimer).
 
 ---
 
-## System Architecture
+## What makes this different
 
-The application consists of two main modules:
+Most stock screeners tell you what to buy. The harder question is *whether the thing telling you works at all* — and that is where most of the effort here went:
 
-**bist_analyzer.py** — Core application (~8500 lines). Contains all scoring engines, page renderers, database operations, backtesting logic, and the Streamlit UI.
-
-**news_engine.py** — News sentiment engine (~1600 lines). Handles RSS fetching from 20+ sources, hybrid sentiment classification (BERT + keyword-based), source credibility weighting, and speculation filtering.
+- **Weights are calibrated, not guessed.** Component weights come from measured cross-sectional Information Coefficients (Grinold–Kahn) on point-in-time historical panels, not intuition.
+- **Scientific control groups.** Every week the system saves its own picks as shadow portfolios *and* two controls: a random-draw portfolio and an equal-weight passive index basket. If the system cannot beat luck and passivity, it has no edge.
+- **Management is measured separately from selection.** Each weekly cohort is saved twice — once passive, once actively managed from identical picks and prices. The difference *is* the management contribution.
+- **Out-of-sample validation.** Rule parameters are chosen on one period and tested on another that never participated in the choice. Half the proposals produced by in-sample optimisation were exposed as noise-fitting and discarded.
+- **Real returns, not nominal.** In a high-inflation economy nominal returns are close to meaningless, so performance is reported against ENAG inflation as well as the index.
+- **Known biases are documented, not hidden.** Survivorship, bull-market sampling, in-sample selection and the gap between the backtest and the deployed system are all written down.
 
 ---
 
-## Scoring Model
+## Architecture
 
-Each stock receives a composite score from 0 to 100, calculated from four components:
+| File | Lines | Role |
+|---|---|---|
+| `bist_analyzer.py` | ~12,600 | Everything: data fetching, scoring engines, portfolio manager, daily management, audit, database, backtesting, and every Streamlit page |
+| `news_engine.py` | ~1,950 | Standalone news sentiment engine (no dependency back on the main file) |
+| `weight_calibration.py` | ~690 | Research tool: builds point-in-time panels and computes ICs to ground the scoring weights |
+| `pipeline_backtest.py` | ~650 | Full-pipeline historical simulation, management-rule sweep, out-of-sample validation |
+| `daily_robot.py` | ~240 | Autonomous daily maintenance (runs on GitHub Actions) |
+| `tools/pmdb_admin.py` | ~90 | Bounded database maintenance commands |
+
+### Core engines
+
+`PortfolioScanner` scans the dynamic universe → `PortfolioManager` proposes portfolios by horizon × investor profile → `PortfolioDoctor` manages them daily → `PortfolioAudit` measures whether the rules are working.
+
+The universe is dynamic and liquidity-filtered, refreshed daily: roughly 500 BIST names above a TL volume threshold, and roughly 1,400 US names above $50M daily dollar volume.
+
+---
+
+## Scoring model
 
 | Component | Weight | Source |
-|-----------|--------|--------|
-| Technical Score | 35% | SMA, RSI, MACD, Bollinger, Stochastic, OBV, ADX |
-| News Sentiment | 35% | 20+ RSS sources, weighted by source credibility |
-| Upside Potential | 20% | Analyst target price vs. current price |
-| Valuation | 10% | P/E, P/B ratios relative to sector averages |
+|---|---|---|
+| Technical | 45% | SMA, RSI, MACD, Bollinger, Stochastic, OBV, ADX, 52-week position |
+| News sentiment | 25% | Tier-weighted RSS sources + KAP disclosures |
+| Upside potential | 20% | Analyst consensus target vs. current price |
+| Valuation | 10% | P/E, P/B relative to sector averages |
 
-When analyst target prices are unavailable, the weight is redistributed to Technical and Sentiment components. The same applies when fundamental data is missing.
+Weights were rebalanced from 35/35/20/10 in July 2026 after calibration showed news sentiment had weak predictive power. When target prices or fundamentals are missing, their weight is redistributed rather than left as a gap.
 
-### Signal Thresholds
+**Signal bands:** 72+ Strong Buy · 57–71 Buy · 43–56 Neutral · 30–42 Sell · <30 Strong Sell
 
-| Score Range | Signal | Meaning |
-|-------------|--------|---------|
-| 72 - 100 | GUCLU AL (Strong Buy) | Multiple indicators aligned positively |
-| 57 - 71 | AL (Buy) | Majority of indicators positive |
-| 43 - 56 | NOTR (Neutral) | Mixed signals, no clear direction |
-| 30 - 42 | SAT (Sell) | Majority of indicators negative |
-| 0 - 29 | GUCLU SAT (Strong Sell) | Multiple indicators aligned negatively |
+### The technical style is regime-dependent
+
+The original contrarian scoring (rewarding oversold RSI, low Bollinger position, distance from 52-week highs) measured **zero predictive power** on BIST. The market is in a momentum regime: high RSI and high 52-week position predicted *higher* forward returns (t > 3, stable across sub-periods). Both the live and backtest scoring paths now use the momentum style.
+
+A segment-based hybrid was tried and rejected — mixing scales corrupts cross-sectional ranking, dropping IC from +0.045 to +0.012.
 
 ---
 
-## Technical Indicators
+## Portfolio Manager
 
-The TechnicalEngine computes the following indicators from OHLCV data:
+Proposes portfolios from a scan of the full universe, by **horizon** (short / medium / long) × **investor profile** (Cautious / Balanced / Aggressive), with sector caps, correlation filtering (>0.85 is "the same bet"), ATR-inverse position sizing and a maximum single-position weight.
 
-- **SMA 50/200**: Trend direction, golden/death cross detection
-- **RSI (14)**: Momentum, overbought/oversold levels
-- **MACD (12, 26, 9)**: Signal line crossovers, histogram divergence
-- **Bollinger Bands (20, 2 sigma)**: Volatility and mean reversion
-- **Stochastic Oscillator (14, 3)**: Momentum confirmation
-- **OBV (On-Balance Volume)**: Volume-price divergence
-- **ADX (14)**: Trend strength filter (multiplier applied when ADX > 25)
-- **ATR (14)**: Volatility measurement for risk calculations
-- **52-Week Position**: Current price relative to yearly range
+- **Market regime gate.** BIST: XU100 trend + BIST-30 breadth + currency pressure. US: S&P 500 trend + breadth + VIX as a *level*. A dollar portfolio has no currency risk, it has a volatility regime.
+- **Minimum diversification guard.** If fewer than three stocks pass the filters, no portfolio is built. A single stock at 100% weight is concentration, not caution.
+- **Performance ledger.** Daily NAV per portfolio, reported nominal + ENAG-real + index-relative, with institutional metrics (Sharpe, Sortino, max drawdown, Information Ratio).
 
-Each indicator group contributes a sub-score to the total technical score (max 100). The ADX acts as a multiplier rather than a direct contributor — strong trends amplify existing signals.
+### Daily active management
 
----
+`PortfolioDoctor` runs every weekday after the close and behaves like a real portfolio manager:
 
-## News Sentiment Engine
+1. **Exits first, and unbudgeted** — stop breach, trailing stop, thesis break (score collapse). Cutting risk is never rate-limited; only opportunity-chasing is.
+2. **One consolidated weight decision per position** — partial profit-take at target, then the concentration cap.
+3. **Cash deployment and swaps** — gated by a drawdown brake and the bear-regime gate.
 
-The sentiment engine uses a three-layer classification approach:
+Cash is a real position: when nothing qualifies, weight waits in cash at 0% return. Discipline constraints (minimum holding period, cooldown after selling, daily trade cap) prevent churn, and **transaction costs are charged to NAV** — a frictionless NAV would overstate active management.
 
-**Layer 1 — Strong Pattern Override**: Regex patterns for definitive financial events (e.g., "rekor kar acikladi", "iflas basvurusu"). These bypass all other layers.
-
-**Layer 2 — BERT Model**: When available, uses `savasy/bert-base-turkish-sentiment-cased` for Turkish language understanding. Predictions with confidence >= 70% are accepted directly.
-
-**Layer 3 — Weighted Keywords**: 120+ positive and 98+ negative financial terms with severity weights (1x normal, 2x strong, 3x critical). Falls back to this when BERT is unavailable or uncertain.
-
-### Source Credibility
-
-News sources are categorized into three tiers:
-
-| Tier | Weight | Sources |
-|------|--------|---------|
-| Tier 1 (3x) | Highest | Bloomberg HT, NTV Ekonomi, Haberturk |
-| Tier 2 (2x) | Standard | Hurriyet, Dunya Gazetesi, Investing.com TR, CNN Turk |
-| Tier 3 (1x) | Supplementary | Google News, Bing News, Yahoo Finance |
-
-Additional factors that affect the final news score:
-- **Recency**: News from the last 2 days gets 1.5x weight, 7+ day old news gets 0.7x
-- **Official terms**: KAP disclosures, financial reports, and corporate actions receive confidence bonuses
-- **Duplicate detection**: Same news from multiple sources increases confidence
-- **Speculation filter**: Social media language, pump/dump terms, and unverified claims are excluded
+Every action is written to an audit trail with its reason. `PortfolioAudit` then measures whether the rules work — stop accuracy, swap accuracy, cost burden, cash drag, and the managed-minus-passive spread — and proposes parameter changes only when a finding clears a minimum sample size. Applying a change requires the editor key; the system never retunes itself, because a continuous self-optimiser with ten parameters and weeks of live data fits noise.
 
 ---
 
-## Backtesting
+## Evidence and validation
 
-The BacktestEngine supports five strategy modes:
+### Calibration findings
 
-| Mode | Description |
-|------|-------------|
-| Swing | Short-term trades, 5-20 day holding period |
-| Trend | Follows established trends using SMA crossovers |
-| Universal | Balanced approach combining swing and trend signals |
-| Investor | Long-term positions with wider stop-losses |
-| Buy & Hold | Benchmark comparison, no active trading |
+| Market | Finding |
+|---|---|
+| BIST | Momentum IC **+0.045 (t = 2.8)**, stable across sub-periods. Strongest single signal: 52-week position. |
+| US mega-cap | Momentum IC +0.0065 (t = 0.53) — **no edge** in the world's most efficient segment. |
+| US mid-cap | Momentum IC **+0.0212 (t = 2.06)**, stable. The edge lives where analyst coverage thins out. |
+| US, regime-split | In a bull regime US IC reaches **+0.053 (t = 6.0)**; in a bear regime the momentum score is significantly **inverted** (t = −3.24). Short-horizon proposals are blocked accordingly. |
 
-Backtests use point-in-time (PIT) data to avoid look-ahead bias. Each test point only uses data available at that historical moment.
+### Full-pipeline backtest
 
----
+Today's portfolio construction replayed point-in-time over five years, monthly rebalanced, with turnover costs charged:
 
-## Signal Tracker
+| | Nominal | **Real (ENAG)** | Sharpe | Max drawdown |
+|---|---|---|---|---|
+| Actively managed | +4083% | **+10.9% CAGR** | 3.33 | −25.8% |
+| Unmanaged | +3642% | +8.4% CAGR | 2.14 | −48.4% |
+| XU100 index | +863% | **−17.3% CAGR** | — | — |
 
-The Signal Tracker records every buy/sell signal the system generates and monitors price movement afterward. Signals are tracked across five time periods: 1 day, 3 days, 7 days, 14 days, and 30 days.
+Inflation over the same window was 25×, which is exactly why nominal figures must never be quoted alone.
 
-The tracker shows:
-- Daily, weekly, and monthly signal views
-- Per-period return percentages for each signal
-- Overall accuracy statistics
-- Signal distribution and performance breakdown
+### Out-of-sample validation
 
-Both BIST and US market signals are tracked independently.
+Parameters are chosen on the first 60% of an 8-year window (which includes the 2018 currency crisis and the 2020 crash) and tested on the last 40%, which never participates in the choice. Of four proposals produced by in-sample optimisation, **two were rejected** because they performed materially worse out of sample.
 
----
+### Known limitations
 
-## Time Machine
-
-The Time Machine module runs full historical simulations asking "what if we applied today's strategy in the past?" It supports six portfolio styles:
-
-- Aggressive, Defensive, Momentum, Value, Stable, and Custom
-
-Each simulation picks stocks using the scoring model at each historical point, then tracks portfolio performance forward with realistic entry/exit logic.
+- The backtest exercises only the **technical core**; news and analyst inputs cannot be reconstructed historically, so it is not the deployed 45/25/20/10 system.
+- The universe is today's liquid list, so delisted companies are absent (survivorship bias).
+- The five-year window is a bull market, where insurance such as stops can only look like cost.
+- No slippage model; costs are a flat percentage.
+- Live tracking is measured in weeks, not years. Distinguishing skill from luck at a realistic Sharpe takes **years**, not weeks.
 
 ---
 
 ## Pages
 
-### BIST Market (8 pages)
-1. **Piyasa Ozeti** — Market overview with macro indicators (USD/TL, EUR/TL, Gold, BIST100) and today's signals summary
-2. **BIST Listesi** — Full scan of 80+ stocks sorted by score
-3. **Hisse Analizi** — Deep analysis for a single stock with all indicators
-4. **Portfolyum** — Personal portfolio tracker with P&L
-5. **Backtest** — Historical strategy testing
-6. **Sistem Portfolyleri** — Pre-built smart portfolios
-7. **Zaman Makinesi** — Historical "what if" simulations
-8. **Sinyal Takip** — Signal accuracy tracker
+Both markets have the same seven-page shape. The US pages are the same render functions parameterised on market, not duplicates.
 
-### US Market (7 pages)
-1. **US Analiz** — Single stock analysis for US equities
-2. **US Backtest** — Backtesting for US stocks
-3. **US Stock List** — US stock scanner
-4. **US Portfolios** — US smart portfolios
-5. **Portfolyum** — Shared portfolio page
-6. **Zaman Makinesi** — Shared time machine
-7. **US Sinyal Takip** — US signal tracker
+**Kokpit** (default landing — market regime, macro strip, today's signals, system status) · **Portfolio Manager** · **Stock List** · **Stock Analysis** · **My Portfolio** · **Backtest** · **Signal Tracker**
+
+Two themes (light "Gazete", dark "Obsidyen"). Market is deep-linkable via `?piyasa=US`, theme via `?tema=`.
+
+The **Signal Tracker** logs every signal the system generates and checks its forward return at 1/3/7/14/30 days — live production tracking, not backtesting.
 
 ---
 
-## Tech Stack
+## Automation
 
-| Component | Technology |
-|-----------|-----------|
-| Frontend | Streamlit |
-| Data | yfinance |
-| News | feedparser, requests (20+ RSS sources) |
-| Sentiment | BERT (optional), keyword-based (default) |
-| Database | SQLite |
-| Charts | Plotly |
-| Deployment | Streamlit Cloud |
+`daily_robot.py` runs on GitHub Actions twice on weekdays — after the BIST close and again after the US close, since deciding on US positions mid-session would use half-day prices. Each run:
+
+1. Updates NAV for every active portfolio (per market)
+2. Refreshes weekly shadow and control cohorts
+3. Runs daily portfolio management
+4. Runs the rule audit
+5. Checks risk alerts
+6. Records the market regime
+7. Handles monthly calibration and inflation-data reminders
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| UI | Streamlit + Plotly |
+| Price data | yfinance |
+| Universe & analyst targets | TradingView screener |
+| News | feedparser (20+ RSS sources), borsapy for KAP disclosures |
+| Sentiment | Turkish BERT (optional) with keyword fallback |
+| Storage | Turso (libSQL over HTTP) with local SQLite fallback |
+| Automation | GitHub Actions |
 
 ---
 
@@ -178,54 +166,55 @@ Each simulation picks stocks using the scoring model at each historical point, t
 git clone https://github.com/Akif3445/bist-analyzer.git
 cd bist-analyzer
 pip install -r requirements.txt
-```
-
-Create a `.env` file:
-```
-ANTHROPIC_API_KEY=your-key-here
-```
-
-Run:
-```bash
 streamlit run bist_analyzer.py
 ```
 
-For BERT sentiment (optional, requires ~2GB additional):
+Dependencies are pinned to exact versions as a supply-chain measure — CI installs them with a database write token in the environment, so an unpinned hijacked release could exfiltrate it. Bump versions deliberately, not automatically.
+
+Optional `.env`:
+
+```
+ANTHROPIC_API_KEY=...      # AI-generated Turkish summaries
+TURSO_DATABASE_URL=...     # cloud persistence; falls back to local SQLite
+TURSO_AUTH_TOKEN=...
+APP_EDIT_KEY=...           # write protection (see below)
+```
+
+Optional Turkish BERT sentiment (~2 GB, not in requirements because Streamlit Cloud's free tier is RAM-constrained):
+
 ```bash
 pip install transformers torch
 ```
-The application automatically falls back to keyword-based sentiment when BERT is not installed.
+
+### Research tools
+
+```bash
+python weight_calibration.py build-tech      # build the point-in-time panel
+python weight_calibration.py analyze         # IC analysis + suggested weights
+python pipeline_backtest.py run 5            # full-pipeline simulation
+python pipeline_backtest.py sweep 5          # management-rule sweep
+python pipeline_backtest.py validate 8       # out-of-sample validation
+python tools/pmdb_admin.py enag-list         # database maintenance
+```
 
 ---
 
-## Configuration
+## Security
 
-The `.streamlit/config.toml` file contains theme and server settings. The application uses a dark theme by default.
+The public demo runs with database write credentials and Streamlit has no built-in auth. If `APP_EDIT_KEY` is set, every UI write action — saving portfolios, editing the inflation table, changing rule parameters — requires unlocking via the sidebar; reads stay public. With the key unset (local development) writes are unguarded and behaviour is unchanged.
 
-Secrets can be configured through:
-1. `.env` file (local development)
-2. Streamlit Cloud secrets panel (production)
+External RSS content rendered as HTML is escaped and link schemes are checked. SQL is parameterised throughout. The daily robot runs with least privilege (`contents: read`).
 
-The application reads secrets using `st.secrets` first, falling back to `os.getenv`.
-
----
-
-## Data Sources
-
-**Price Data**: Yahoo Finance via yfinance library. Supports all BIST and major US exchange tickers.
-
-**News Sources (Turkish)**: Bloomberg HT, NTV Ekonomi, Haberturk, Hurriyet, Milliyet, Sabah, Dunya Gazetesi, Investing.com TR, Finans Gundem, Ekonomim, Para Analiz, Foreks, CNN Turk Ekonomi, Google News TR
-
-**News Sources (English)**: Google News EN, Bing News, Yahoo Finance, Yahoo Finance RSS
+**Do not enter real personal holdings into the public demo** — the write guard prevents pollution, not disclosure.
 
 ---
 
 ## Disclaimer
 
-This software is for informational and educational purposes only. It does not constitute financial advice. All investment decisions carry risk. Past performance does not guarantee future results. Always do your own research before making investment decisions.
+For informational and educational purposes only. This is not financial advice, and nothing here is a recommendation to buy or sell any security. All investment decisions carry risk, past performance does not guarantee future results, and the live evidence for this system currently spans weeks — far too short to establish skill. Do your own research.
 
 ---
 
 ## License
 
-This project is proprietary. All rights reserved.
+Proprietary. All rights reserved.

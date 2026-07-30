@@ -1,174 +1,162 @@
-# BIST Akilli Yatirim Asistani
+# BIST Akıllı Yatırım Asistanı
 
-Borsa Istanbul (BIST) ve ABD piyasalari icin kapsamli bir hisse analiz platformu. Sistem; teknik analiz, haber duyarlilik analizi ve degerleme metriklerini birlestirerek 0-100 araliginda bir bileşik skor uzerinden yatirim sinyalleri uretir.
+Borsa İstanbul (BIST) ve ABD piyasaları için hisse analizi ve portföy yönetimi platformu. Hisseleri teknik analiz, haber duyarlılığı, analist primi ve değerlemeyi birleştirerek 0–100 arası puanlar; ardından portföy önerir, onları günlük yönetir ve **bunların gerçekten işe yarayıp yaramadığını ölçer.**
 
-Canli demo: [bist-analyzer.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app)
+Canlı demo: [bist-analyzer.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app)
 
----
-
-## Genel Bakis
-
-Platform, birden fazla veri kaynagini es zamanli isleyerek otomatik hisse analizi yapar. Anlik fiyat verisi ceker, 20'den fazla Turkce ve Ingilizce kaynaktan haber duyarlilik analizi yapar ve teknik gostergeleri hesaplayarak her hisse icin birlesik bir al/sat sinyali uretir.
-
-Sistem 80'den fazla BIST hissesini ve 50'den fazla ABD hissesini kapsar. Tum analizler Streamlit uzerinden istemci tarafinda calisir, yerel onbellekleme ve portfoy kaliciligi icin SQLite kullanilir.
+> **Yatırım tavsiyesi değildir.** Bu bir araştırma ve eğitim projesidir. Bkz. [Sorumluluk reddi](#sorumluluk-reddi).
 
 ---
 
-## Sistem Mimarisi
+## Bu projeyi farklı kılan ne
 
-Uygulama iki ana modulden olusur:
+Çoğu hisse tarayıcı size ne alacağınızı söyler. Asıl zor soru, *size söyleyen şeyin çalışıp çalışmadığıdır* — emeğin büyük kısmı oraya gitti:
 
-**bist_analyzer.py** — Ana uygulama (~8500 satir). Tum skorlama motorlari, sayfa goruntuleyicileri, veritabani islemleri, geriye donuk test mantigi ve Streamlit arayuzunu icerir.
-
-**news_engine.py** — Haber duyarlilik motoru (~1600 satir). 20'den fazla kaynaktan RSS cekmeyi, hibrit duyarlilik siniflandirmasini (BERT + anahtar kelime tabanli), kaynak guvenilirlik agirliklandirmasini ve spekulasyon filtrelemeyi yonetir.
-
----
-
-## Skorlama Modeli
-
-Her hisse dort bilesenden hesaplanan 0 ile 100 arasinda bir bileşik skor alir:
-
-| Bilesen | Agirlik | Kaynak |
-|---------|---------|--------|
-| Teknik Skor | %35 | SMA, RSI, MACD, Bollinger, Stochastic, OBV, ADX |
-| Haber Duyarliligi | %35 | 20+ RSS kaynak, kaynak guvenilirligine gore agirlikli |
-| Yukselis Potansiyeli | %20 | Analist hedef fiyati ile mevcut fiyat karsilastirmasi |
-| Degerleme | %10 | F/K, PD/DD oranlari sektor ortalamarina gore |
-
-Analist hedef fiyati bulunmadiginda agirlik Teknik ve Duyarlilik bilesenlerine yeniden dagitilir. Temel veri eksik oldugunda da ayni durum gecerlidir.
-
-### Sinyal Esikleri
-
-| Skor Araligi | Sinyal | Anlami |
-|--------------|--------|--------|
-| 72 - 100 | GUCLU AL | Birden fazla gosterge olumlu yonde hizali |
-| 57 - 71 | AL | Gostergelerin cogunlugu olumlu |
-| 43 - 56 | NOTR | Karisik sinyaller, net bir yon yok |
-| 30 - 42 | SAT | Gostergelerin cogunlugu olumsuz |
-| 0 - 29 | GUCLU SAT | Birden fazla gosterge olumsuz yonde hizali |
+- **Ağırlıklar tahmin değil, kalibrasyon.** Bileşen ağırlıkları, geçmişin her noktasında hesaplanmış kesitsel Bilgi Katsayısı (Information Coefficient, Grinold–Kahn) ölçümlerinden geliyor.
+- **Bilimsel kontrol grupları.** Sistem her hafta kendi seçimlerini gölge portföy olarak kaydeder — yanına iki kontrol grubu koyar: rastgele kura ile seçilmiş portföy ve eşit ağırlıklı pasif endeks sepeti. Sistem şansı ve pasifliği yenemiyorsa ortada bir üstünlük yoktur.
+- **Yönetim, seçimden ayrı ölçülür.** Her haftalık kohort iki kez kaydedilir: biri pasif, diğeri aynı hisseler ve aynı fiyatlarla başlayıp aktif yönetilen. Aradaki fark **tam olarak yönetimin katkısıdır.**
+- **Örneklem-dışı doğrulama.** Kural parametreleri bir dönemde seçilir, seçime hiç katılmayan başka bir dönemde sınanır. İç-örneklem optimizasyonunun ürettiği önerilerin yarısı bu testte gürültü çıkıp elendi.
+- **Nominal değil, reel getiri.** Yüksek enflasyonlu bir ekonomide nominal getiri neredeyse anlamsızdır; performans ENAG enflasyonuna ve endekse göre raporlanır.
+- **Bilinen yanlılıklar gizlenmez, yazılır.** Hayatta kalma yanlılığı, boğa piyasası örneklemi, iç-örneklem seçimi ve backtest ile canlı sistem arasındaki fark açıkça belgelenmiştir.
 
 ---
 
-## Teknik Gostergeler
+## Mimari
 
-TechnicalEngine, OHLCV verisinden asagidaki gostergeleri hesaplar:
+| Dosya | Satır | Görev |
+|---|---|---|
+| `bist_analyzer.py` | ~12.600 | Her şey: veri çekme, skorlama motorları, portföy yöneticisi, günlük yönetim, denetim, veritabanı, backtest ve tüm Streamlit sayfaları |
+| `news_engine.py` | ~1.950 | Bağımsız haber duyarlılık motoru (ana dosyaya geri bağımlılığı yok) |
+| `weight_calibration.py` | ~690 | Araştırma aracı: point-in-time paneller kurar, skorlama ağırlıklarını verilendirmek için IC hesaplar |
+| `pipeline_backtest.py` | ~650 | Tam-hat tarihsel simülasyon, yönetim kuralı taraması, örneklem-dışı doğrulama |
+| `daily_robot.py` | ~240 | Otonom günlük bakım (GitHub Actions üzerinde çalışır) |
+| `tools/pmdb_admin.py` | ~90 | Sınırlandırılmış veritabanı bakım komutları |
 
-- **SMA 50/200**: Trend yonu, altin/olum caprazlama tespiti
-- **RSI (14)**: Momentum, asiri alim/asiri satim seviyeleri
-- **MACD (12, 26, 9)**: Sinyal cizgisi caprazlamalari, histogram sapmalari
-- **Bollinger Bantlari (20, 2 sigma)**: Volatilite ve ortalamaya donus
-- **Stochastic Osilatoru (14, 3)**: Momentum teyidi
-- **OBV (Denge Hacmi)**: Hacim-fiyat sapmalari
-- **ADX (14)**: Trend gucu filtresi (ADX > 25 oldugunda carpan uygulanir)
-- **ATR (14)**: Risk hesaplamalari icin volatilite olcumu
-- **52 Haftalik Pozisyon**: Mevcut fiyatin yillik araliga gore konumu
+### Çekirdek motorlar
 
-Her gosterge grubu toplam teknik skora bir alt skor katkisi yapar (maks 100). ADX dogrudan katkida bulunmak yerine carpan gorevi gorur — guclu trendler mevcut sinyalleri buyutur.
+`PortfolioScanner` dinamik evreni tarar → `PortfolioManager` vade × yatırımcı profiline göre portföy önerir → `PortfolioDoctor` onları günlük yönetir → `PortfolioAudit` kuralların işe yarayıp yaramadığını ölçer.
 
----
-
-## Haber Duyarlilik Motoru
-
-Duyarlilik motoru uc katmanli bir siniflandirma yaklasimi kullanir:
-
-**Katman 1 — Guclu Kalip Gecersiz Kilma**: Kesin finansal olaylar icin regex kaliplari (orn. "rekor kar acikladi", "iflas basvurusu"). Bunlar diger tum katmanlari atlar.
-
-**Katman 2 — BERT Modeli**: Mevcut oldugunda, Turkce dil anlayisi icin `savasy/bert-base-turkish-sentiment-cased` modelini kullanir. Guveni >= %70 olan tahminler dogrudan kabul edilir.
-
-**Katman 3 — Agirlikli Anahtar Kelimeler**: Siddet agirliklari olan (1x normal, 2x guclu, 3x kritik) 120'den fazla olumlu ve 98'den fazla olumsuz finansal terim. BERT kullanilamaz veya belirsiz oldugunda buna geri doner.
-
-### Kaynak Guvenilirligi
-
-Haber kaynaklari uc katmana ayrilir:
-
-| Katman | Agirlik | Kaynaklar |
-|--------|---------|-----------|
-| Katman 1 (3x) | En yuksek | Bloomberg HT, NTV Ekonomi, Haberturk |
-| Katman 2 (2x) | Standart | Hurriyet, Dunya Gazetesi, Investing.com TR, CNN Turk |
-| Katman 3 (1x) | Ek kaynak | Google News, Bing News, Yahoo Finance |
-
-Nihai haber skorunu etkileyen ek faktorler:
-- **Guncellik**: Son 2 gunun haberleri 1.5x agirlik alir, 7+ gunluk haberler 0.7x
-- **Resmi terimler**: KAP bildirimleri, finansal raporlar ve kurumsal eylemler guven bonusu alir
-- **Mukerrer tespit**: Birden fazla kaynaktan gelen ayni haber guveni artirir
-- **Spekulasyon filtresi**: Sosyal medya dili, manipulasyon terimleri ve dogrulanmamis iddialar haric tutulur
+Evren dinamiktir ve likidite filtrelidir, günlük yenilenir: TL hacim eşiğini geçen ~500 BIST hissesi ve günlük 50M$ üzeri işlem gören ~1.400 ABD hissesi.
 
 ---
 
-## Geriye Donuk Test (Backtest)
+## Skorlama modeli
 
-BacktestEngine bes strateji modunu destekler:
+| Bileşen | Ağırlık | Kaynak |
+|---|---|---|
+| Teknik | %45 | SMA, RSI, MACD, Bollinger, Stochastic, OBV, ADX, 52 hafta pozisyonu |
+| Haber duyarlılığı | %25 | Kademeli ağırlıklı RSS kaynakları + KAP bildirimleri |
+| Yükseliş potansiyeli | %20 | Analist konsensüs hedefi ile güncel fiyat farkı |
+| Değerleme | %10 | Sektör ortalamalarına göre F/K, PD/DD |
 
-| Mod | Aciklama |
-|-----|----------|
-| Swing | Kisa vadeli islemler, 5-20 gun tutma suresi |
-| Trend | SMA caprazlamalari kullanarak yerlesik trendleri takip eder |
-| Universal | Swing ve trend sinyallerini birlestiren dengeli yaklasim |
-| Investor | Genis zarar-kes seviyeleriyle uzun vadeli pozisyonlar |
-| Buy & Hold | Karsilastirma icin kiyaslama, aktif islem yok |
+Ağırlıklar Temmuz 2026'da 35/35/20/10'dan güncellendi — kalibrasyon, haber duyarlılığının öngörü gücünün zayıf olduğunu gösterdi. Hedef fiyat veya temel veri yoksa o ağırlık boşta bırakılmaz, diğer bileşenlere dağıtılır.
 
-Geriye donuk testler ileriye bakma sapmasini onlemek icin zaman noktasi (PIT) verisi kullanir. Her test noktasi yalnizca o tarihsel anda mevcut olan verileri kullanir.
+**Sinyal bantları:** 72+ Güçlü Al · 57–71 Al · 43–56 Nötr · 30–42 Sat · <30 Güçlü Sat
 
----
+### Teknik stil rejime bağlı
 
-## Sinyal Takip
+Orijinal kontrarian skorlama (aşırı satım RSI'ı, düşük Bollinger konumu, 52 hafta zirvesinden uzaklığı ödüllendiren) BIST'te **sıfır öngörü gücü** ölçtü. Piyasa momentum rejiminde: yüksek RSI ve yüksek 52 hafta pozisyonu *daha yüksek* ileri getiri öngördü (t > 3, alt dönemlerde tutarlı). Hem canlı hem backtest skorlama yolları artık momentum stilini kullanıyor.
 
-Sinyal Takip modulu, sistemin urettigi her al/sat sinyalini kaydeder ve ardindan fiyat hareketini izler. Sinyaller bes zaman diliminde takip edilir: 1 gun, 3 gun, 7 gun, 14 gun ve 30 gun.
-
-Goruntulenebilen veriler:
-- Gunluk, haftalik ve aylik sinyal goruntuleri
-- Her sinyal icin donem bazli getiri yuzdeleri
-- Genel dogruluk istatistikleri
-- Sinyal dagilimi ve performans dokumleri
-
-Hem BIST hem de ABD piyasasi sinyalleri bagimsiz olarak takip edilir.
+Segment bazlı melez bir yaklaşım denendi ve **reddedildi** — farklı cetvelleri karıştırmak kesitsel sıralamayı bozuyor, IC +0.045'ten +0.012'ye düşüyor.
 
 ---
 
-## Zaman Makinesi
+## Portföy Yöneticisi
 
-Zaman Makinesi modulu "bugunun stratejisini gecmiste uygulasaydik ne olurdu?" sorusunu yanitlayan tam tarihsel simulasyonlar calistirir. Alti portfoy stilini destekler:
+Tüm evrenin taramasından, **vade** (kısa / orta / uzun) × **yatırımcı profili** (Temkinli / Dengeli / Agresif) matrisine göre portföy önerir. Sektör limiti, korelasyon eleme (>0.85 "aynı bahis" sayılır), ATR-ters-orantılı ağırlıklandırma ve tek pozisyon tavanı uygulanır.
 
-- Agresif, Defansif, Momentum, Deger, Istikrarli ve Ozel
+- **Piyasa rejimi kapısı.** BIST: XU100 trendi + BIST-30 genişliği + kur baskısı. ABD: S&P 500 trendi + genişlik + **seviye olarak** VIX. Dolar bazlı portföyde kur riski yoktur, oynaklık rejimi vardır.
+- **Minimum çeşitlendirme koruması.** Filtrelerden üçten az hisse geçerse portföy kurulmaz. Tek hisseye %100 ağırlık temkinlilik değil, konsantrasyondur.
+- **Performans defteri.** Portföy başına günlük NAV; nominal + ENAG-reel + endekse göreli raporlanır, kurumsal metriklerle (Sharpe, Sortino, maksimum düşüş, Bilgi Oranı).
 
-Her simulasyon, her tarihsel noktada skorlama modelini kullanarak hisse secer, ardindan gercekci giris/cikis mantigiyla portfoy performansini ileriye dogru takip eder.
+### Günlük aktif yönetim
+
+`PortfolioDoctor` her hafta içi kapanıştan sonra çalışır ve gerçek bir portföy yöneticisi gibi davranır:
+
+1. **Önce çıkışlar, bütçesiz** — stop kırılımı, takip eden stop, tez bozulması (skor çöküşü). Riski kesmek asla sınırlanmaz; sınırlanan sadece fırsat kovalamaktır.
+2. **Pozisyon başına tek ağırlık kararı** — hedefte kısmi kâr alma, ardından yoğunlaşma tavanı.
+3. **Nakit değerlendirme ve takas** — düşüş freni ve ayı rejimi kapısıyla sınırlı.
+
+Nakit gerçek bir pozisyondur: uygun aday yoksa ağırlık %0 getiriyle nakitte bekler. Disiplin kuralları (minimum tutma süresi, satış sonrası bekleme, günlük işlem tavanı) savrulmayı önler ve **işlem maliyetleri NAV'a yansıtılır** — sürtünmesiz bir NAV aktif yönetimi olduğundan iyi gösterirdi.
+
+Her aksiyon gerekçesiyle denetim defterine yazılır. `PortfolioAudit` ardından kuralların işleyip işlemediğini ölçer — stop isabeti, takas isabeti, maliyet yükü, nakit maliyeti ve yönetilen-eksi-pasif farkı — ve ancak yeterli örnek biriktiğinde parametre önerisi üretir. Öneriyi uygulamak editör anahtarı gerektirir; sistem kendi kendini yeniden ayarlamaz, çünkü on parametreli ve haftalarca veriye sahip sürekli bir öz-optimizasyon gürültüye uyum sağlar.
+
+---
+
+## Kanıt ve doğrulama
+
+### Kalibrasyon bulguları
+
+| Piyasa | Bulgu |
+|---|---|
+| BIST | Momentum IC **+0.045 (t = 2.8)**, alt dönemlerde tutarlı. En güçlü tekil sinyal: 52 hafta pozisyonu. |
+| ABD mega-cap | Momentum IC +0.0065 (t = 0.53) — dünyanın en verimli segmentinde **üstünlük yok**. |
+| ABD orta ölçek | Momentum IC **+0.0212 (t = 2.06)**, tutarlı. Üstünlük, analist takibinin seyreldiği yerde yaşıyor. |
+| ABD, rejime göre | Boğa rejiminde ABD IC'si **+0.053'e (t = 6.0)** çıkıyor; ayı rejiminde momentum skoru anlamlı biçimde **ters dönüyor** (t = −3.24). Kısa vadeli öneriler buna göre engelleniyor. |
+
+### Tam-hat backtest
+
+Bugünün portföy kurma hattı, beş yıl boyunca point-in-time işletildi; aylık rebalans ve devir maliyeti dahil:
+
+| | Nominal | **Reel (ENAG)** | Sharpe | Maks. düşüş |
+|---|---|---|---|---|
+| Aktif yönetilen | %+4083 | **%+10.9 CAGR** | 3.33 | −%25.8 |
+| Yönetimsiz | %+3642 | %+8.4 CAGR | 2.14 | −%48.4 |
+| XU100 endeksi | %+863 | **−%17.3 CAGR** | — | — |
+
+Aynı dönemde enflasyon **25 kat**tı — nominal rakamların neden asla tek başına söylenmemesi gerektiğinin sebebi tam olarak budur.
+
+### Örneklem-dışı doğrulama
+
+Parametreler 8 yıllık pencerenin (2018 kur krizi ve 2020 çöküşünü içerir) ilk %60'ında seçilir, seçime hiç katılmayan son %40'ında sınanır. İç-örneklem optimizasyonunun ürettiği dört öneriden **ikisi reddedildi** — örneklem dışında belirgin biçimde daha kötü performans gösterdiler.
+
+### Bilinen sınırlar
+
+- Backtest yalnızca **teknik çekirdeği** test eder; haber ve analist verisi geriye dönük üretilemediği için bu, sahadaki 45/25/20/10 sisteminin kendisi değildir.
+- Evren bugünün likit listesidir, borsadan çıkmış şirketler yoktur (hayatta kalma yanlılığı).
+- Beş yıllık pencere bir boğa piyasasıdır; stop gibi sigortalar böyle bir örneklemde sadece maliyet gibi görünür.
+- Kayma (slippage) modellenmemiştir; maliyet sabit yüzdedir.
+- Canlı takip haftalarla ölçülür, yıllarla değil. Gerçekçi bir Sharpe'ta beceriyi şanstan ayırmak **yıllar** alır.
 
 ---
 
 ## Sayfalar
 
-### BIST Piyasasi (8 sayfa)
-1. **Piyasa Ozeti** — Makro gostergeler (USD/TL, EUR/TL, Altin, BIST100) ve bugunun sinyal ozeti
-2. **BIST Listesi** — 80+ hissenin skora gore sirali taramasi
-3. **Hisse Analizi** — Tek bir hisse icin tum gostergelerle derin analiz
-4. **Portfolyum** — Kar/zarar takipli kisisel portfoy
-5. **Backtest** — Tarihsel strateji testi
-6. **Sistem Portfolyleri** — Onceden olusturulmus akilli portfoyler
-7. **Zaman Makinesi** — Tarihsel "ya olsaydi" simulasyonlari
-8. **Sinyal Takip** — Sinyal dogruluk takipçisi
+Her iki piyasa da aynı yedi sayfalık şekle sahiptir. ABD sayfaları kopya değil, piyasaya göre parametrelenmiş aynı fonksiyonlardır.
 
-### ABD Piyasasi (7 sayfa)
-1. **US Analiz** — ABD hisseleri icin tek hisse analizi
-2. **US Backtest** — ABD hisseleri icin geriye donuk test
-3. **US Stock List** — ABD hisse tarayicisi
-4. **US Portfolios** — ABD akilli portfoyleri
-5. **Portfolyum** — Ortak portfoy sayfasi
-6. **Zaman Makinesi** — Ortak zaman makinesi
-7. **US Sinyal Takip** — ABD sinyal takipçisi
+**Kokpit** (varsayılan açılış — piyasa rejimi, makro şerit, günün sinyalleri, sistem durumu) · **Portföy Yöneticisi** · **Hisse Listesi** · **Hisse Analizi** · **Portfolyum** · **Backtest** · **Sinyal Takip**
+
+İki tema (aydınlık "Gazete", karanlık "Obsidyen"). Piyasa `?piyasa=US`, tema `?tema=` ile derin bağlanabilir.
+
+**Sinyal Takip**, sistemin ürettiği her sinyali kaydeder ve 1/3/7/14/30 gün sonraki getirisini ölçer — backtest değil, canlı üretim takibi.
+
+---
+
+## Otomasyon
+
+`daily_robot.py` GitHub Actions üzerinde hafta içi iki kez çalışır — BIST kapanışından sonra ve ABD kapanışından sonra; çünkü ABD pozisyonlarına seans ortasında karar vermek yarım günün fiyatını kullanmak olurdu. Her koşuda:
+
+1. Her aktif portföyün NAV'ını günceller (piyasa başına)
+2. Haftalık gölge ve kontrol kohortlarını tazeler
+3. Günlük portföy yönetimini çalıştırır
+4. Kural denetimini çalıştırır
+5. Risk alarmlarını kontrol eder
+6. Piyasa rejimini kaydeder
+7. Aylık kalibrasyon ve enflasyon verisi hatırlatmalarını yönetir
 
 ---
 
 ## Teknoloji
 
-| Bilesen | Teknoloji |
-|---------|-----------|
-| Arayuz | Streamlit |
-| Veri | yfinance |
-| Haberler | feedparser, requests (20+ RSS kaynak) |
-| Duyarlilik | BERT (opsiyonel), anahtar kelime tabanli (varsayilan) |
-| Veritabani | SQLite |
-| Grafikler | Plotly |
-| Yayin | Streamlit Cloud |
+| Katman | Teknoloji |
+|---|---|
+| Arayüz | Streamlit + Plotly |
+| Fiyat verisi | yfinance |
+| Evren & analist hedefleri | TradingView screener |
+| Haber | feedparser (20+ RSS kaynağı), KAP bildirimleri için borsapy |
+| Duyarlılık | Türkçe BERT (opsiyonel), anahtar kelime yedeği |
+| Depolama | Turso (HTTP üzerinden libSQL), yerel SQLite yedeği |
+| Otomasyon | GitHub Actions |
 
 ---
 
@@ -178,54 +166,55 @@ Her simulasyon, her tarihsel noktada skorlama modelini kullanarak hisse secer, a
 git clone https://github.com/Akif3445/bist-analyzer.git
 cd bist-analyzer
 pip install -r requirements.txt
-```
-
-`.env` dosyasi olusturun:
-```
-ANTHROPIC_API_KEY=anahtariniz
-```
-
-Calistirma:
-```bash
 streamlit run bist_analyzer.py
 ```
 
-BERT duyarlilik icin (opsiyonel, ~2GB ek alan gerektirir):
+Bağımlılıklar tedarik zinciri önlemi olarak tam sürüme sabitlenmiştir — CI, veritabanı yazma anahtarı ortamdayken kurulum yapar; sabitlenmemiş, ele geçirilmiş bir sürüm o anahtarı sızdırabilir. Sürümleri otomatik değil, bilinçli güncelleyin.
+
+Opsiyonel `.env`:
+
+```
+ANTHROPIC_API_KEY=...      # yapay zekâ Türkçe özet
+TURSO_DATABASE_URL=...     # bulut kalıcılık; yoksa yerel SQLite'a düşer
+TURSO_AUTH_TOKEN=...
+APP_EDIT_KEY=...           # yazma koruması (aşağıya bkz.)
+```
+
+Opsiyonel Türkçe BERT duyarlılığı (~2 GB; Streamlit Cloud ücretsiz katmanı RAM kısıtlı olduğu için requirements'ta değil):
+
 ```bash
 pip install transformers torch
 ```
-BERT kurulu olmadiginda uygulama otomatik olarak anahtar kelime tabanli duyarliliga geri doner.
+
+### Araştırma araçları
+
+```bash
+python weight_calibration.py build-tech      # point-in-time panel kur
+python weight_calibration.py analyze         # IC analizi + önerilen ağırlıklar
+python pipeline_backtest.py run 5            # tam-hat simülasyon
+python pipeline_backtest.py sweep 5          # yönetim kuralı taraması
+python pipeline_backtest.py validate 8       # örneklem-dışı doğrulama
+python tools/pmdb_admin.py enag-list         # veritabanı bakımı
+```
 
 ---
 
-## Yapilandirma
+## Güvenlik
 
-`.streamlit/config.toml` dosyasi tema ve sunucu ayarlarini icerir. Uygulama varsayilan olarak koyu tema kullanir.
+Halka açık demo, veritabanı yazma kimlik bilgileriyle çalışır ve Streamlit'in yerleşik kimlik doğrulaması yoktur. `APP_EDIT_KEY` tanımlıysa tüm yazma işlemleri — portföy kaydetme, enflasyon tablosu düzenleme, kural parametresi değiştirme — kenar çubuğundan kilit açmayı gerektirir; okumalar herkese açık kalır. Anahtar tanımlı değilse (yerel geliştirme) yazmalar korumasızdır ve davranış değişmez.
 
-Gizli bilgiler su yollarla yapilandirilabilir:
-1. `.env` dosyasi (yerel gelistirme)
-2. Streamlit Cloud gizli bilgiler paneli (uretim)
+HTML olarak çizilen dış RSS içeriği escape edilir, link şemaları kontrol edilir. SQL baştan sona parametrelidir. Günlük robot en az yetkiyle çalışır (`contents: read`).
 
-Uygulama oncelikle `st.secrets` okur, bulamazsa `os.getenv` kullanir.
+**Halka açık demoya gerçek kişisel pozisyonlarınızı girmeyin** — yazma koruması kirlenmeyi engeller, görünmeyi değil.
 
 ---
 
-## Veri Kaynaklari
+## Sorumluluk reddi
 
-**Fiyat Verisi**: yfinance kutuphanesi araciligiyla Yahoo Finance. Tum BIST ve buyuk ABD borsasi hisselerini destekler.
-
-**Haber Kaynaklari (Turkce)**: Bloomberg HT, NTV Ekonomi, Haberturk, Hurriyet, Milliyet, Sabah, Dunya Gazetesi, Investing.com TR, Finans Gundem, Ekonomim, Para Analiz, Foreks, CNN Turk Ekonomi, Google News TR
-
-**Haber Kaynaklari (Ingilizce)**: Google News EN, Bing News, Yahoo Finance, Yahoo Finance RSS
-
----
-
-## Sorumluluk Reddi
-
-Bu yazilim yalnizca bilgilendirme ve egitim amaciyldir. Finansal tavsiye niteliginde degildir. Tum yatirim kararlari risk tasir. Gecmis performans gelecekteki sonuclari garanti etmez. Yatirim kararlari almadan once her zaman kendi arastirmanizi yapin.
+Yalnızca bilgilendirme ve eğitim amaçlıdır. Yatırım tavsiyesi değildir ve buradaki hiçbir şey herhangi bir menkul kıymeti alma veya satma önerisi değildir. Tüm yatırım kararları risk taşır, geçmiş performans gelecek sonuçları garanti etmez ve bu sistemin canlı kanıtı şu an **haftalarla** ölçülmektedir — beceriyi kanıtlamak için fazlasıyla kısa bir süre. Kendi araştırmanızı yapın.
 
 ---
 
 ## Lisans
 
-Bu proje tescillidir. Tum haklari saklidir.
+Tescilli. Tüm hakları saklıdır.
