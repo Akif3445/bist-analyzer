@@ -22,7 +22,8 @@ Dürüstlük notları (sunumda belirtilecek):
     - Rebalanslar arası stop kontrolü yok (kalibrasyon geniş stopların
       sonuçları az değiştirdiğini gösterdi); ATR stoplar canlıda ek sigorta.
 
-Kullanım: python pipeline_backtest.py run [yil_sayisi=5]
+Kullanım: python pipeline_backtest.py run   [yil_sayisi=5]   # tam simülasyon
+          python pipeline_backtest.py sweep [yil_sayisi=5]   # yönetim kuralı taraması
 """
 
 import sys
@@ -256,9 +257,279 @@ def run(years=5):
     print(f"\npipeline_nav.csv yazıldı ({len(out)} gün) | toplam süre {time.time()-t0:.0f}s")
 
 
+
+
+# YÖNETİM KURALI TARAMASI (2026-07-30)
+#
+# PortfolioDoctor'ın kuralları profesyonel pratikten gelen makul varsayılanlardı
+# ama BIST verisinde ölçülmemişti. Burada aynı point-in-time hattın üstüne
+# GÜNLÜK yönetim katmanı eklenir ve parametreler tek tek süpürülür.
+#
+# Dürüstlük notu: 5-6 yıl tek piyasa demek, parametreler arası küçük farkların
+# GÜRÜLTÜ olduğu demektir. Bu yüzden her sonuç yıl-bazında da kırılır; bir
+# değer ancak çoğu alt dönemde tutarlıysa "iyi" sayılır. Tek bir toplam sayıya
+# bakıp parametre seçmek, tam da kaçınmak istediğimiz aşırı-uyum hatasıdır.
+
+MGMT_VARSAYILAN = {
+    "trailing_pct": 15.0,   # zirveden geri verme toleransı
+    "dusus_freni":  15.0,   # portföy düşüşünde yeni alım freni
+    "max_pozisyon": 30.0,   # tek pozisyon tavanı (oran olarak 0.30)
+    "skor_cikis":   43.0,   # skor bu seviyenin altına düşerse çık
+    "takas_farki":  12.0,   # aday, tutulandan bu kadar iyiyse değiştir
+}
+
+
+def _skor_at(feats, t, date):
+    """t hissesinin `date` tarihindeki point-in-time skoru (yoksa None)."""
+    f = feats.get(t)
+    if f is None:
+        return None
+    ix = f["score"].index.searchsorted(date, side="right") - 1
+    if ix < 0:
+        return None
+    v = float(f["score"].iloc[ix])
+    return v if np.isfinite(v) else None
+
+
+def _walk_managed(weights_by_date, closes, dates, feats, par):
+    """Aylık hedefler + GÜNLÜK yönetim (trailing stop, skor çıkışı, tavan,
+    düşüş freni, takas eşiği). Nakit gerçek pozisyondur (getirisi 0)."""
+    trail = par["trailing_pct"] / 100.0
+    fren  = par["dusus_freni"] / 100.0
+    tavan = par["max_pozisyon"] / 100.0
+    skor_c = par["skor_cikis"]
+    takas  = par["takas_farki"]
+
+    nav = [1.0]
+    cur = {}          # ticker -> {"w": ağırlık, "peak": zirve fiyat}
+    nav_peak = 1.0    # 90 günlük pencere zirvesi olarak güncellenir
+    rebal = sorted(weights_by_date)
+    ri = 0
+    islem_maliyeti_toplam = 0.0
+
+    for i in range(1, len(dates)):
+        d0, d1 = dates[i - 1], dates[i]
+
+        # 1) Günlük getiri + ağırlık kayması (nakit 0 getirir)
+        r = 0.0
+        yeni = {}
+        for t, st in cur.items():
+            cl = closes.get(t)
+            if cl is None:
+                yeni[t] = st
+                continue
+            try:
+                p0, p1 = cl.asof(d0), cl.asof(d1)
+            except Exception:
+                yeni[t] = st
+                continue
+            if not (pd.notna(p0) and pd.notna(p1) and p0 > 0):
+                yeni[t] = st
+                continue
+            g = p1 / p0 - 1
+            r += st["w"] * g
+            yeni[t] = {"w": st["w"] * (1 + g), "peak": max(st["peak"], float(p1))}
+        cur = yeni
+        v = nav[-1] * (1 + r)
+        # 90 günlük pencere zirvesi (tüm zamanlar zirvesi freni kalıcı kilitler)
+        nav_peak = max(nav[-90:] + [v])
+
+        # Ağırlıkları normalize et (toplam = portföy değeri payı)
+        toplam = sum(s["w"] for s in cur.values())
+        if toplam > 1.0 + 1e-9:      # fiyat artışıyla 1'i aşamaz; koruma
+            for s in cur.values():
+                s["w"] /= toplam
+
+        # 2) GÜNLÜK YÖNETİM
+        satilan_w = 0.0
+        for t in list(cur):
+            cl = closes.get(t)
+            if cl is None:
+                continue
+            try:
+                p = cl.asof(d1)
+            except Exception:
+                continue
+            if not (pd.notna(p) and p > 0):
+                continue
+            # a) takip eden stop
+            if cur[t]["peak"] > 0 and float(p) <= cur[t]["peak"] * (1 - trail):
+                satilan_w += cur[t]["w"]; del cur[t]; continue
+            # b) skor çıkışı
+            sk = _skor_at(feats, t, d1)
+            if sk is not None and sk < skor_c:
+                satilan_w += cur[t]["w"]; del cur[t]; continue
+            # c) pozisyon tavanı
+            if cur[t]["w"] > tavan:
+                satilan_w += cur[t]["w"] - tavan
+                cur[t]["w"] = tavan
+        if satilan_w > 0:
+            v *= (1 - COST_RT / 2 * satilan_w)     # tek yön maliyet
+            islem_maliyeti_toplam += COST_RT / 2 * satilan_w
+
+        # 3) Rebalans günü: takas eşiğiyle hedefe yaklaş
+        while ri < len(rebal) and rebal[ri] <= d1:
+            hedef = weights_by_date[rebal[ri]]
+            frende = v < nav_peak * (1 - fren)
+            if frende:
+                # Düşüş freni: yeni alım yok, mevcut korunur
+                ri += 1
+                continue
+            yeni_w = {}
+            for t, w in hedef.items():
+                if t in cur:
+                    yeni_w[t] = w
+                    continue
+                # Tutulanların en zayıfını bul; aday onu takas_farki kadar geçmeli
+                if cur:
+                    zayif = min(cur, key=lambda x: (_skor_at(feats, x, d1) or 0))
+                    z_sk = _skor_at(feats, zayif, d1) or 0
+                    a_sk = _skor_at(feats, t, d1) or 0
+                    if a_sk - z_sk < takas:
+                        continue
+                yeni_w[t] = w
+            # Hedefte olmayan ama tutulanlar: skoru hâlâ iyiyse korunur
+            for t, st in cur.items():
+                if t not in yeni_w:
+                    sk = _skor_at(feats, t, d1)
+                    if sk is not None and sk >= skor_c:
+                        yeni_w[t] = st["w"]
+            top = sum(yeni_w.values())
+            if top > 1.0:
+                yeni_w = {t: w / top for t, w in yeni_w.items()}
+            devir = sum(abs(yeni_w.get(t, 0) - cur.get(t, {}).get("w", 0))
+                        for t in set(yeni_w) | set(cur)) / 2
+            v *= (1 - COST_RT * devir)
+            islem_maliyeti_toplam += COST_RT * devir
+            yeni_cur = {}
+            for t, w in yeni_w.items():
+                pk = cur[t]["peak"] if t in cur else 0.0
+                try:
+                    p = closes[t].asof(d1)
+                    pk = max(pk, float(p) if pd.notna(p) else 0.0)
+                except Exception:
+                    pass
+                yeni_cur[t] = {"w": w, "peak": pk}
+            cur = yeni_cur
+            ri += 1
+
+        nav.append(v)
+
+    s = pd.Series(nav, index=dates)
+    s.attrs["maliyet"] = islem_maliyeti_toplam
+    return s
+
+
+def _ozet(nav):
+    """Toplam getiri, Sharpe, MaxDD."""
+    tot = (nav.iloc[-1] / nav.iloc[0] - 1) * 100
+    dg = nav.pct_change().dropna()
+    sharpe = (dg.mean() / dg.std() * np.sqrt(252)) if dg.std() > 0 else 0.0
+    dd = ((nav / nav.cummax()) - 1).min() * 100
+    return tot, float(sharpe), float(dd)
+
+
+def sweep(years=5):
+    """Yönetim parametrelerini tek tek süpür — her biri için toplam getiri,
+    Sharpe, MaxDD ve YIL BAZINDA tutarlılık."""
+    t0 = time.time()
+    print(f"=== Yönetim Kuralı Taraması | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    universe = get_scan_universe()
+    closes, vols = _download_panel(universe, years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+    print(f"Panel: {len(feats)} hisse ({time.time()-t0:.0f}s)")
+
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    start = xu.index[-1] - pd.DateOffset(years=years)
+    dates = list(xu.index[xu.index >= start])
+    rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
+    rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
+
+    wbd = {}
+    for d in rebal_dates:
+        w = _pick_at(d, feats, ret_panel)
+        if w:
+            wbd[d] = w
+    print(f"Aylık portföy: {len(wbd)}/{len(rebal_dates)} ({time.time()-t0:.0f}s)\n")
+
+    # Referans: yönetimsiz (sadece aylık rebalans) — mevcut sistem
+    nav_base = _walk(wbd, closes, dates)
+    b_tot, b_sh, b_dd = _ozet(nav_base)
+    print(f"{'YÖNETİMSİZ (referans)':<34} getiri %{b_tot:+8.1f} | Sharpe {b_sh:5.2f} | MaxDD %{b_dd:6.1f}\n")
+
+    taranacak = {
+        "trailing_pct": [10, 15, 20, 25, 100],   # 100 = takip eden stop KAPALI
+        "dusus_freni":  [10, 15, 20, 100],       # 100 = fren kapalı
+        "max_pozisyon": [20, 25, 30, 40],
+        "takas_farki":  [0, 6, 12, 20],
+    }
+    sonuclar = {}
+    for par_ad, degerler in taranacak.items():
+        print(f"--- {par_ad} ---")
+        satirlar = []
+        for d in degerler:
+            par = dict(MGMT_VARSAYILAN); par[par_ad] = float(d)
+            nav = _walk_managed(wbd, closes, dates, feats, par)
+            tot, sh, dd = _ozet(nav)
+            # Yıl bazında tutarlılık
+            yil_get = {}
+            for y, grp in nav.groupby(nav.index.year):
+                if len(grp) > 5:
+                    yil_get[y] = (grp.iloc[-1] / grp.iloc[0] - 1) * 100
+            satirlar.append((d, tot, sh, dd, yil_get))
+            isaret = " *" if d == MGMT_VARSAYILAN[par_ad] else ""
+            print(f"  {par_ad}={d:<5} getiri %{tot:+8.1f} | Sharpe {sh:5.2f} | "
+                  f"MaxDD %{dd:6.1f} | maliyet %{nav.attrs['maliyet']*100:.1f}{isaret}")
+        # En iyi ile varsayılan arasındaki fark anlamlı mı?
+        eniyi = max(satirlar, key=lambda x: x[1])
+        varsay = next(x for x in satirlar if x[0] == MGMT_VARSAYILAN[par_ad])
+        fark = eniyi[1] - varsay[1]
+        # Yıl bazında kaç yılda en iyi, varsayılanı geçiyor?
+        yillar = sorted(set(varsay[4]) & set(eniyi[4]))
+        ustun = sum(1 for y in yillar if eniyi[4][y] > varsay[4][y])
+        print(f"  → en iyi {eniyi[0]} (varsayılan {MGMT_VARSAYILAN[par_ad]}), "
+              f"fark %{fark:+.1f}, {ustun}/{len(yillar)} yılda üstün")
+        if fark > 5 and ustun >= max(3, len(yillar) - 1):
+            print(f"  ÖNERİ: {par_ad} {MGMT_VARSAYILAN[par_ad]} → {eniyi[0]} "
+                  f"(fark büyük VE yıllar arası tutarlı)")
+            # Öneriyi kaydet — UYGULAMAZ. Editör onayıyla uygulanır (bkz.
+            # bist_analyzer._guard_write / PortfolioDoctor.kural_ayarla).
+            try:
+                from bist_analyzer import _PMDB as _DB
+                _DB.execute("""CREATE TABLE IF NOT EXISTS pm_param_oneri (
+                        parametre TEXT PRIMARY KEY, mevcut REAL, onerilen REAL,
+                        kanit TEXT, tarih TEXT, kaynak TEXT)""")
+                _DB.execute("INSERT OR REPLACE INTO pm_param_oneri "
+                            "(parametre, mevcut, onerilen, kanit, tarih, kaynak) "
+                            "VALUES (?,?,?,?,?,?)",
+                            (par_ad, float(MGMT_VARSAYILAN[par_ad]), float(eniyi[0]),
+                             f"{years}y tarihsel tarama: getiri farkı %{fark:+.0f}, "
+                             f"{ustun}/{len(yillar)} yılda üstün, Sharpe "
+                             f"{varsay[2]:.2f}→{eniyi[2]:.2f}",
+                             datetime.now().strftime("%Y-%m-%d"), "pipeline_sweep"))
+                print("  (öneri kaydedildi — uygulamak editör onayına bağlı)")
+            except Exception as _e:
+                print(f"  (öneri kaydedilemedi: {_e})")
+        else:
+            print(f"  karar: DEĞİŞTİRME — fark gürültü sınırında "
+                  f"veya yıllar arası tutarsız")
+        sonuclar[par_ad] = satirlar
+        print()
+
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+    return sonuclar
+
 if __name__ == "__main__":
     yrs = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-    if len(sys.argv) > 1 and sys.argv[1] == "run":
+    _cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if _cmd == "run":
         run(yrs)
+    elif _cmd == "sweep":
+        sweep(yrs)
     else:
         print(__doc__)

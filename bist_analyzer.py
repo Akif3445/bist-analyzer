@@ -4553,11 +4553,19 @@ class PortfolioDoctor:
                 x["_zirve"] = max(eski_zirve, f or 0)
 
             # --- Portföy düşüş freni ---
+            # Düşüş, TÜM ZAMANLARIN zirvesine göre değil 90 GÜNLÜK zirveye göre
+            # ölçülür. cummax() kullanıldığında fren KALICI KİLİTLENİYORDU:
+            # alım durur → stoplar satmaya devam eder → nakit birikir → nakit
+            # %0 getirdiği için NAV toparlanamaz → zirve hiç düşmez → sonsuza
+            # kadar frende kalır. Tarihsel tarama (pipeline_backtest sweep) bu
+            # tuzağı yakaladı: fren açıkken 5 yıllık getiri %+3311 → %+102.
             nav_df = navs.get(pid, pd.DataFrame())
             dd = 0.0
             if len(nav_df) >= 2:
                 seri = nav_df["nav"].astype(float)
-                dd = float((seri.iloc[-1] / seri.cummax().iloc[-1] - 1) * 100)
+                _zirve = float(seri.tail(90).max())
+                if _zirve > 0:
+                    dd = float((seri.iloc[-1] / _zirve - 1) * 100)
             fren = dd <= -PortfolioDoctor.kural("dusus_freni")
 
             # --- 1) ÇIKIŞLAR (savunma — işlem bütçesine takılmaz) ---
@@ -11723,6 +11731,23 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
                         st.caption("Eşiği aşan ölçüm yok. Not: bir bulgu ancak yeterli "
                                    "örnek biriktiğinde üretilir — az veriyle parametre "
                                    "oynatmak gürültüyü kural sanmaktır.")
+                    # Tarihsel taramadan gelen öneriler (pipeline_backtest sweep)
+                    try:
+                        _bt = _PMDB.execute(
+                            "SELECT parametre, mevcut, onerilen, kanit, tarih "
+                            "FROM pm_param_oneri ORDER BY tarih DESC")["rows"]
+                    except Exception:
+                        _bt = []
+                    for _o in _bt:
+                        if abs(float(PortfolioDoctor.kural(_o["parametre"]))
+                               - float(_o["onerilen"])) < 1e-6:
+                            continue      # zaten uygulanmış
+                        _blg.append({"metrik": "backtest",
+                                     "mesaj": f"Tarihsel tarama önerisi ({_o['tarih']}): "
+                                              f"{_o['parametre']}",
+                                     "parametre": _o["parametre"],
+                                     "mevcut": _o["mevcut"], "onerilen": _o["onerilen"],
+                                     "kanit": _o["kanit"]})
                     for _b in _blg:
                         st.warning(_b["mesaj"])
                         _c1, _c2 = st.columns([3, 1])

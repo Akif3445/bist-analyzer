@@ -81,7 +81,17 @@ Robot runs the management pass for both markets. `.github/workflows/daily-robot.
 
 UI cost is deliberately near zero: one line in the Portfolio Manager (`🩺 Yönetim denetimi — sağlıklı`), which expands only when there is a finding; the parameter table appears only if overrides exist.
 
-**Open item:** proposals are currently derived from *live* audit evidence with fixed thresholds. The stronger version is a historical sweep of the 4 high-leverage parameters (`trailing_pct`, `takas_farki`, `dusus_freni`, `max_pozisyon`) on `pipeline_backtest.py`'s point-in-time replay. The discipline parameters (`min_tutma_gun`, `bekleme_gun`, `gunluk_islem`) are deliberately **not** optimization targets — they are anti-churn constraints, not free variables.
+### Management-rule sweep (2026-07-30) — `pipeline_backtest.py sweep`
+
+`_walk_managed` replays the daily management layer (trailing stop, score exit, position cap, drawdown brake, swap threshold) over the same point-in-time pipeline, and `sweep` varies one parameter at a time. Acceptance is deliberately strict: a change is only proposed if the return difference exceeds 5% **and** the better value wins in nearly every calendar year. Proposals are written to `pm_param_oneri` and **never applied automatically** — the UI surfaces them next to the live-audit findings behind the same editor gate.
+
+**This sweep immediately paid for itself by finding a serious bug.** The drawdown brake measured drawdown from the **all-time** peak (`cummax`), which made it a permanent trap: once 15% below the peak, buying stopped, stops kept selling into cash, cash returns 0% so NAV could never recover, and the all-time peak never declined — so the portfolio stayed braked forever. Five-year backtest return with the brake on was **+102%** vs **+3311%** with it off. Fixed in both the live engine and the backtest by measuring drawdown from a **90-day rolling peak**, which releases naturally.
+
+**After the fix, active management clearly adds value** (5y, BIST, monthly rebalance): return **+4083% vs +3642%** unmanaged, Sharpe **3.33 vs 2.14**, MaxDD **−25.8% vs −48.4%**. Roughly half the drawdown for a better return — this is the strongest evidence so far that the management layer is worth its cost (which the sim charges at ~12% cumulative turnover cost).
+
+Two proposals passed the gate and await editor approval: `takas_farki` 12→6 (+6466%, 6/6 years) and `max_pozisyon` 30→40 (+90%, 5/6 years). `trailing_pct` scored best when **disabled** (+7344%) but was correctly rejected at 4/6 years — and that rejection is the point: the sample is a 5-year bull market, so any disaster insurance looks like pure cost. Same reasoning as the earlier `analyze-stops` finding. The discipline parameters (`min_tutma_gun`, `bekleme_gun`, `gunluk_islem`) are deliberately **not** swept — they are anti-churn constraints, not free variables.
+
+**Caveats for the presentation:** returns are nominal TL across a high-inflation period, one market, one 5-year window that happens to be a bull market. The live audit (`PortfolioAudit`) is the out-of-sample check that runs forward from here.
 
 ### Signal Tracker
 
