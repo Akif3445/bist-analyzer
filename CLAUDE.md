@@ -91,7 +91,43 @@ UI cost is deliberately near zero: one line in the Portfolio Manager (`🩺 Yön
 
 Two proposals passed the gate and await editor approval: `takas_farki` 12→6 (+6466%, 6/6 years) and `max_pozisyon` 30→40 (+90%, 5/6 years). `trailing_pct` scored best when **disabled** (+7344%) but was correctly rejected at 4/6 years — and that rejection is the point: the sample is a 5-year bull market, so any disaster insurance looks like pure cost. Same reasoning as the earlier `analyze-stops` finding. The discipline parameters (`min_tutma_gun`, `bekleme_gun`, `gunluk_islem`) are deliberately **not** swept — they are anti-churn constraints, not free variables.
 
-**Caveats for the presentation:** returns are nominal TL across a high-inflation period, one market, one 5-year window that happens to be a bull market. The live audit (`PortfolioAudit`) is the out-of-sample check that runs forward from here.
+### Backtest results in REAL terms, and the bias list (2026-07-30)
+
+**Never quote the nominal number alone.** Over the 5-year window (2021-07-30 → 2026-07-30) ENAG cumulative inflation was **25×** (+2398%), so nominal figures are close to meaningless:
+
+| | Nominal | Nominal CAGR | **Real** | **Real CAGR** |
+|---|---|---|---|---|
+| Managed | +4083% | 111% | **+67%** | **+10.9%** |
+| Unmanaged | +3642% | 106% | +50% | +8.4% |
+| XU100 | +863% | 57% | **−61%** | −17.3% |
+
+The defensible sentence is "~11% real CAGR while the index lost 61% in real terms", not "40× in five years". Management contributes ~2.5 points of real CAGR and roughly halves the drawdown (−25.8% vs −48.4%, Sharpe 3.33 vs 2.14).
+
+**Known biases, ranked.** Two are serious:
+
+1. **The backtest tests a DIFFERENT system than the live one.** It uses the technical score only (`BacktestEngine._vectorized_scores`); the live score is 45% technical + 25% news + 20% analyst upside + 10% valuation. News and analyst data cannot be reconstructed historically, so these results describe the **technical core**, not the deployed system. State this explicitly.
+2. **Parameter selection was in-sample** — `sweep` finds the best value on the same data it measures. Addressed by `validate` below.
+3. **Survivorship / universe selection** — the universe is *today's* liquid list, so companies that delisted or shrank are absent (optimistic). Partly mitigated by applying each date's own volume filter.
+4. **Bull-market sample** — the 5-year window is entirely a BIST upswing, where insurance (stops, brakes) can only look like cost. Addressed by using an 8-year window in `validate`, which contains the 2018 TL crisis (−28% drawdown) and the 2020 Covid crash (−32%).
+5. **No slippage model** — cost is a flat percentage; in reality size moves price in small caps, which the universe contains.
+6. **One-factor-at-a-time** — parameter interactions unexplored.
+
+### Out-of-sample validation — `pipeline_backtest.py validate` (2026-07-30)
+
+The answer to "did the system find something real or fit noise?". The window is split: the best parameter is chosen on the **first 60%** (train, 2018-07→2023-05) and then tested on the **last 40%** (test, 2023-05→2026-07), which never participates in the choice.
+
+**Two of four sweep proposals were exposed as noise-fitting:**
+
+| Parameter | Train picks | Test: default | Test: picked | Verdict |
+|---|---|---|---|---|
+| `trailing_pct` 15→10 | 10 | +1309% | **+951%** | rejected |
+| `dusus_freni` 15→10 | 10 | +1309% | **+594%** | rejected |
+| `max_pozisyon` 30→40 | 40 | +1309% | +1382% | validated |
+| `takas_farki` 12→0 | 0 | +1309% | **+3176%** | validated |
+
+`validate` overwrites `pm_param_oneri` with out-of-sample evidence and **deletes** proposals that failed, so the editor only ever sees survivors. Note the direction on `takas_farki` is robust (lower is better, confirmed on both windows) but the exact value is not — the 5-year sweep said 6, the 8-year validation says 0. Prefer the conservative end.
+
+**Remaining honesty gap:** the test period (2023-05→2026-07) is itself mostly bullish, so parameters were validated on a bull holdout. The crisis periods sit in the *training* half. A stricter design would reverse the split or use walk-forward with multiple folds.
 
 ### Signal Tracker
 

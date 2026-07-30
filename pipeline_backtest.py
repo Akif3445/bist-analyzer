@@ -24,6 +24,7 @@ Dürüstlük notları (sunumda belirtilecek):
 
 Kullanım: python pipeline_backtest.py run   [yil_sayisi=5]   # tam simülasyon
           python pipeline_backtest.py sweep [yil_sayisi=5]   # yönetim kuralı taraması
+          python pipeline_backtest.py validate [yil=8]        # örneklem-dışı doğrulama
 """
 
 import sys
@@ -524,6 +525,121 @@ def sweep(years=5):
     print(f"Tamamlandı ({time.time()-t0:.0f}s)")
     return sonuclar
 
+
+
+def validate(years=8):
+    """ÖRNEKLEM-DIŞI DOĞRULAMA — taramanın en büyük zaafını kapatır.
+
+    sweep() en iyi parametreyi TEST ETTİĞİ verinin üstünde bulur (in-sample).
+    Bu, "sistem kendi buldu" iddiasını çürütür: yeterince parametre denenirse
+    her veri setinde bir şey "en iyi" çıkar.
+
+    Burada dönem ikiye bölünür:
+      EĞİTİM (ilk %60)  → en iyi parametre BURADA seçilir
+      TEST   (son %40)  → seçilen değer BURADA sınanır, seçime hiç katılmaz
+
+    Eğitimde seçilen değer testte de varsayılanı geçiyorsa bulgu gerçektir.
+    Geçmiyorsa gürültüye uyum yapılmış demektir ve parametre DEĞİŞTİRİLMEMELİDİR.
+
+    Uzun pencere (varsayılan 8 yıl) bilinçli: 2018 TL krizi ve 2020 Covid
+    çöküşünü içerir, yani stop/fren gibi sigortaların işe yaradığı dönemler
+    örnekleme girer. 5 yıllık pencere sadece boğaydı.
+    """
+    t0 = time.time()
+    print(f"=== Örneklem-Dışı Doğrulama | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    universe = get_scan_universe()
+    closes, vols = _download_panel(universe, years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    start = xu.index[-1] - pd.DateOffset(years=years)
+    dates = list(xu.index[xu.index >= start])
+    kesme = int(len(dates) * 0.60)
+    egitim, test = dates[:kesme], dates[kesme:]
+    print(f"Panel: {len(feats)} hisse | EĞİTİM {egitim[0]:%Y-%m} → {egitim[-1]:%Y-%m} "
+          f"| TEST {test[0]:%Y-%m} → {test[-1]:%Y-%m} ({time.time()-t0:.0f}s)")
+
+    rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
+    rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
+    wbd = {}
+    for d in rebal_dates:
+        w = _pick_at(d, feats, ret_panel)
+        if w:
+            wbd[d] = w
+    w_eg = {d: w for d, w in wbd.items() if d <= egitim[-1]}
+    w_te = {d: w for d, w in wbd.items() if d > egitim[-1]}
+    print(f"Aylık portföy: eğitim {len(w_eg)}, test {len(w_te)}")
+
+
+    taranacak = {
+        "trailing_pct": [10, 15, 20, 25, 100],
+        "dusus_freni":  [10, 15, 20, 100],
+        "max_pozisyon": [20, 25, 30, 40],
+        "takas_farki":  [0, 6, 12, 20],
+    }
+    print(f"{'parametre':<14} {'varsayılan':>10} {'eğitimde en iyi':>16} "
+          f"{'TESTTE varsayılan':>18} {'TESTTE seçilen':>15}   karar")
+    print("-" * 96)
+    onaylanan = {}
+    for par_ad, degerler in taranacak.items():
+        # 1) EĞİTİMDE seç
+        en_iyi, en_iyi_get = None, -1e18
+        for d in degerler:
+            par = dict(MGMT_VARSAYILAN); par[par_ad] = float(d)
+            g = _ozet(_walk_managed(w_eg, closes, egitim, feats, par))[0]
+            if g > en_iyi_get:
+                en_iyi, en_iyi_get = d, g
+        # 2) TESTTE sına (seçime katılmayan dönem)
+        par_v = dict(MGMT_VARSAYILAN)
+        par_s = dict(MGMT_VARSAYILAN); par_s[par_ad] = float(en_iyi)
+        t_v = _ozet(_walk_managed(w_te, closes, test, feats, par_v))[0]
+        t_s = _ozet(_walk_managed(w_te, closes, test, feats, par_s))[0]
+        gecti = (en_iyi != MGMT_VARSAYILAN[par_ad]) and (t_s > t_v)
+        karar = "DOĞRULANDI" if gecti else (
+            "varsayılan zaten en iyi" if en_iyi == MGMT_VARSAYILAN[par_ad]
+            else "REDDEDİLDİ (testte tutmadı)")
+        print(f"{par_ad:<14} {MGMT_VARSAYILAN[par_ad]:>10} {en_iyi:>16} "
+              f"{t_v:>17.1f}% {t_s:>14.1f}%   {karar}")
+        if gecti:
+            onaylanan[par_ad] = en_iyi
+        # Öneri kaydını örneklem-dışı kanıtla güncelle / doğrulanmayanı SİL.
+        # sweep() in-sample seçer; nihai söz bu doğrulamanındır.
+        try:
+            from bist_analyzer import _PMDB as _DB
+            _DB.execute("""CREATE TABLE IF NOT EXISTS pm_param_oneri (
+                    parametre TEXT PRIMARY KEY, mevcut REAL, onerilen REAL,
+                    kanit TEXT, tarih TEXT, kaynak TEXT)""")
+            if gecti:
+                _DB.execute("INSERT OR REPLACE INTO pm_param_oneri "
+                            "(parametre, mevcut, onerilen, kanit, tarih, kaynak) "
+                            "VALUES (?,?,?,?,?,?)",
+                            (par_ad, float(MGMT_VARSAYILAN[par_ad]), float(en_iyi),
+                             f"ÖRNEKLEM-DIŞI DOĞRULANDI ({years}y): eğitim "
+                             f"{egitim[0]:%Y-%m}–{egitim[-1]:%Y-%m} seçti, test "
+                             f"{test[0]:%Y-%m}–{test[-1]:%Y-%m} onayladı "
+                             f"(%{t_v:.0f} → %{t_s:.0f})",
+                             datetime.now().strftime("%Y-%m-%d"), "validate_oos"))
+            else:
+                _DB.execute("DELETE FROM pm_param_oneri WHERE parametre=? AND kaynak!=?",
+                            (par_ad, "validate_oos"))
+        except Exception:
+            pass
+
+    print()
+    if onaylanan:
+        print("Örneklem-dışı DOĞRULANAN öneriler:", onaylanan)
+    else:
+        print("Hiçbir parametre değişikliği örneklem-dışı doğrulanmadı —")
+        print("sweep'in bulduğu farklar bu pencerede gürültüye uyum çıktı.")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+    return onaylanan
+
+
 if __name__ == "__main__":
     yrs = int(sys.argv[2]) if len(sys.argv) > 2 else 5
     _cmd = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -531,5 +647,7 @@ if __name__ == "__main__":
         run(yrs)
     elif _cmd == "sweep":
         sweep(yrs)
+    elif _cmd == "validate":
+        validate(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     else:
         print(__doc__)
