@@ -11131,6 +11131,44 @@ _TR_AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
 _TR_GUNLER = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
 
+# TCMB politika faizi — koddaki değer YEDEKTİR, canlı değer siteden çekilir.
+# PPK yılda ~8 kez toplanır, yani bu sayı nadiren değişir; sitenin formatı
+# bozulursa buradaki değer kullanılmaya devam eder (ENAG'dan alınan ders:
+# dış kaynak sessizce boş dönerse ekran boş kalmasın).
+TCMB_POLITIKA_FAIZI_YEDEK = 37.0
+
+
+@st.cache_data(ttl=21600, show_spinner=False)   # 6 saat — gün içinde değişmez
+def _tcmb_politika_faizi() -> tuple:
+    """TCMB politika faizi (1 hafta vadeli repo). Dönüş: (oran, kaynak).
+
+    TCMB ana sayfasındaki PPK karar metninden ayrıştırılır — kalıp çok
+    istikrarlı: "politika faizi olan bir hafta vadeli repo ihale faiz oranının
+    yüzde XX'de sabit tutulmasına/indirilmesine/yükseltilmesine".
+    EVDS API'si anahtar istediği için tercih edilmedi.
+
+    Değer 0-100 bandı dışındaysa REDDEDİLİR — bozuk ayrıştırma ekrana
+    saçma bir sayı yazmasın.
+    """
+    try:
+        import re as _re
+        r = requests.get("https://www.tcmb.gov.tr/", timeout=15,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200:
+            t = _re.sub(r"<[^>]+>", " ", r.text).replace("&rsquo;", "'")
+            t = _re.sub(r"\s+", " ", t)
+            for kalip in (r"politika faizi[^.]{0,120}?y[üu]zde\s*(\d{1,3}(?:[,.]\d{1,2})?)",
+                          r"bir hafta vadeli repo[^.]{0,120}?y[üu]zde\s*(\d{1,3}(?:[,.]\d{1,2})?)"):
+                m = _re.search(kalip, t, _re.I)
+                if m:
+                    v = float(m.group(1).replace(",", "."))
+                    if 0 < v < 100:
+                        return v, "tcmb"
+    except Exception as exc:
+        log.warning("TCMB politika faizi alınamadı: %s", exc)
+    return TCMB_POLITIKA_FAIZI_YEDEK, "yedek"
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def _kokpit_macro(market: str = "BIST") -> list:
     """Kokpit makro şeridi (+günlük %).
@@ -11145,6 +11183,10 @@ def _kokpit_macro(market: str = "BIST") -> list:
         semboller = [("USDTRY=X", "USD/TL", "₺{:.2f}"), ("EURTRY=X", "EUR/TL", "₺{:.2f}"),
                      ("GC=F", "Altın (ons)", "${:,.0f}"), ("XU100.IS", "BIST 100", "{:,.0f}")]
     out = []
+    if market != "US":
+        _f, _kaynak = _tcmb_politika_faizi()
+        out.append(("TCMB Faizi", f"%{_f:.0f}",
+                    "politika faizi" if _kaynak == "tcmb" else "son bilinen"))
     try:
         bulk = yf.download([s for s, _, _ in semboller], period="5d", interval="1d",
                            auto_adjust=True, progress=False, group_by="ticker")
