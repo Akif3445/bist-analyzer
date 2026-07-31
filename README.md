@@ -100,8 +100,8 @@ Today's portfolio construction replayed point-in-time over five years, monthly r
 
 | | Nominal | **Real (ENAG)** | Sharpe | Max drawdown |
 |---|---|---|---|---|
-| Actively managed | +4083% | **+10.9% CAGR** | 3.33 | −25.8% |
-| Unmanaged | +3642% | +8.4% CAGR | 2.14 | −48.4% |
+| Actively managed | +4083% | **+10.9% CAGR** | 0.70 | −25.8% |
+| Unmanaged | +3642% | +8.4% CAGR | 0.60 | −48.4% |
 | XU100 index | +863% | **−17.3% CAGR** | — | — |
 
 Inflation over the same window was 25×, which is exactly why nominal figures must never be quoted alone.

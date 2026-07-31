@@ -179,7 +179,7 @@ def _stats(nav, xu, label):
     reel_cagr = ((1 + reel / 100) ** (1 / yrs) - 1) * 100
     xu_tot = (xu.iloc[-1] / xu.iloc[0] - 1) * 100
     dd = ((nav / nav.cummax()) - 1).min() * 100
-    dr = nav.pct_change().dropna()
+    dr = _reel_seri(nav).pct_change().dropna()      # Sharpe REEL getiriden
     sharpe = dr.mean() / dr.std() * np.sqrt(252) if dr.std() > 0 else 0
     print(f"{label:<24} nominal %{tot:>8.0f} | CAGR %{cagr:>5.1f} | ENAG-reel %{reel:>7.1f} "
           f"(yıllık %{reel_cagr:>+5.1f}) | vsXU100 {tot-xu_tot:>+7.0f}p | MaxDD %{dd:>5.1f} | Sharpe {sharpe:.2f}")
@@ -421,10 +421,29 @@ def _walk_managed(weights_by_date, closes, dates, feats, par):
     return s
 
 
+def _reel_seri(nav):
+    """NAV serisini ENAG ile reelleştirir (Sharpe için ŞART)."""
+    try:
+        from bist_analyzer import InflationEngine as _IE
+        d0 = nav.index[0].strftime("%Y-%m-%d"); d1 = nav.index[-1].strftime("%Y-%m-%d")
+        defl = _IE.deflator(d0, d1)
+        n = max(1, (nav.index[-1] - nav.index[0]).days)
+        g = defl ** (1.0 / n) - 1
+        idx = pd.Series([(1 + g) ** ((d - nav.index[0]).days) for d in nav.index],
+                        index=nav.index)
+        return nav / idx
+    except Exception:
+        return nav
+
+
 def _ozet(nav):
-    """Toplam getiri, Sharpe, MaxDD."""
+    """Toplam getiri (nominal), Sharpe (REEL getiriden), MaxDD.
+
+    Sharpe nominal getiriden hesaplanırsa yüksek enflasyonda 5 kata kadar
+    şişer — enflasyon ortalamayı büyütür ama günlük oynaklığı büyütmez.
+    """
     tot = (nav.iloc[-1] / nav.iloc[0] - 1) * 100
-    dg = nav.pct_change().dropna()
+    dg = _reel_seri(nav).pct_change().dropna()
     sharpe = (dg.mean() / dg.std() * np.sqrt(252)) if dg.std() > 0 else 0.0
     dd = ((nav / nav.cummax()) - 1).min() * 100
     return tot, float(sharpe), float(dd)

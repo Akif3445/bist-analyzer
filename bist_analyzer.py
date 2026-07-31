@@ -4050,14 +4050,32 @@ class PortfolioManager:
     def risk_metrics(nav_df: pd.DataFrame) -> dict:
         """Kurumsal risk metrikleri (Roadmap-C). En az 10 NAV noktası ister.
 
-        Sharpe/Sortino: günlük getirilerden yıllıklandırılmış (rf=0 varsayımı —
-        TL risksiz getiri tartışmalı; sunumda belirtilir).
+        Sharpe/Sortino: ENAG ile REELLEŞTİRİLMİŞ günlük getirilerden
+        yıllıklandırılır. Nominal getiriyle hesaplamak yüksek enflasyonda
+        Sharpe'ı 5 KATA KADAR şişiriyordu (ölçüldü 2026-07-31: nominal 3.46 →
+        reel 0.69) çünkü enflasyon getiriyi büyütür ama günlük oynaklığa
+        katkısı yoktur. Reel risksiz getiri ~0 varsayılır; Türkiye'de politika
+        faizi enflasyonun altında kaldığı için bu MUHAFAZAKÂR bir varsayımdır
+        (gerçek reel risksiz negatifti, yani asıl Sharpe biraz daha yüksek).
         IR (Information Ratio): XU100'e göre fazla getirinin tutarlılığı.
         """
         out = {"sharpe": None, "sortino": None, "maxdd": None, "ir": None,
                "n_gun": len(nav_df)}
         if len(nav_df) < 10:
             return out
+        # ENAG ile reelleştir — nominal seri Sharpe'ı şişirir
+        try:
+            _d0 = str(nav_df["date"].iloc[0])[:10]
+            _gun = [(datetime.strptime(str(d)[:10], "%Y-%m-%d")
+                     - datetime.strptime(_d0, "%Y-%m-%d")).days for d in nav_df["date"]]
+            _defl = InflationEngine.deflator(_d0, str(nav_df["date"].iloc[-1])[:10])
+            _n = max(1, _gun[-1])
+            _g_enf = _defl ** (1.0 / _n) - 1
+            nav_df = nav_df.copy()
+            nav_df["nav"] = [float(v) / ((1 + _g_enf) ** g)
+                             for v, g in zip(nav_df["nav"], _gun)]
+        except Exception as _e:
+            log.warning("risk_metrics reelleştirme atlandı: %s", _e)
         nav = nav_df["nav"].astype(float)
         r = nav.pct_change().dropna()
         if r.std() > 0:

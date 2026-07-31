@@ -100,8 +100,8 @@ Bugünün portföy kurma hattı, beş yıl boyunca point-in-time işletildi; ayl
 
 | | Nominal | **Reel (ENAG)** | Sharpe | Maks. düşüş |
 |---|---|---|---|---|
-| Aktif yönetilen | %+4083 | **%+10.9 CAGR** | 3.33 | −%25.8 |
-| Yönetimsiz | %+3642 | %+8.4 CAGR | 2.14 | −%48.4 |
+| Aktif yönetilen | %+4083 | **%+10.9 CAGR** | 0.70 | −%25.8 |
+| Yönetimsiz | %+3642 | %+8.4 CAGR | 0.60 | −%48.4 |
 | XU100 endeksi | %+863 | **−%17.3 CAGR** | — | — |
 
 Aynı dönemde enflasyon **25 kat**tı — nominal rakamların neden asla tek başına söylenmemesi gerektiğinin sebebi tam olarak budur.

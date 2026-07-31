@@ -87,7 +87,9 @@ UI cost is deliberately near zero: one line in the Portfolio Manager (`🩺 Yön
 
 **This sweep immediately paid for itself by finding a serious bug.** The drawdown brake measured drawdown from the **all-time** peak (`cummax`), which made it a permanent trap: once 15% below the peak, buying stopped, stops kept selling into cash, cash returns 0% so NAV could never recover, and the all-time peak never declined — so the portfolio stayed braked forever. Five-year backtest return with the brake on was **+102%** vs **+3311%** with it off. Fixed in both the live engine and the backtest by measuring drawdown from a **90-day rolling peak**, which releases naturally.
 
-**After the fix, active management clearly adds value** (5y, BIST, monthly rebalance): return **+4083% vs +3642%** unmanaged, Sharpe **3.33 vs 2.14**, MaxDD **−25.8% vs −48.4%**. Roughly half the drawdown for a better return — this is the strongest evidence so far that the management layer is worth its cost (which the sim charges at ~12% cumulative turnover cost).
+**Sharpe is computed on ENAG-deflated returns (corrected 2026-07-31).** Using nominal returns with rf=0 inflated it roughly **fivefold** — measured 3.46 nominal vs 0.69 real — because inflation lifts the mean without lifting daily volatility. A Sharpe above 3 would have made this one of the best funds in history and would not have survived one question. Real risk-free is assumed 0, which is *conservative*: Turkish policy rates ran below inflation, so the true real risk-free was negative.
+
+**After the fix, active management clearly adds value** (5y, BIST, monthly rebalance): return **+4083% vs +3642%** unmanaged, Sharpe **0.70 vs 0.60** (reel getiriden — aşağıya bkz.), MaxDD **−25.8% vs −48.4%**. Roughly half the drawdown for a better return — this is the strongest evidence so far that the management layer is worth its cost (which the sim charges at ~12% cumulative turnover cost).
 
 Two proposals passed the gate and await editor approval: `takas_farki` 12→6 (+6466%, 6/6 years) and `max_pozisyon` 30→40 (+90%, 5/6 years). `trailing_pct` scored best when **disabled** (+7344%) but was correctly rejected at 4/6 years — and that rejection is the point: the sample is a 5-year bull market, so any disaster insurance looks like pure cost. Same reasoning as the earlier `analyze-stops` finding. The discipline parameters (`min_tutma_gun`, `bekleme_gun`, `gunluk_islem`) are deliberately **not** swept — they are anti-churn constraints, not free variables.
 
@@ -101,7 +103,7 @@ Two proposals passed the gate and await editor approval: `takas_farki` 12→6 (+
 | Unmanaged | +3642% | 106% | +50% | +8.4% |
 | XU100 | +863% | 57% | **−61%** | −17.3% |
 
-The defensible sentence is "~11% real CAGR while the index lost 61% in real terms", not "40× in five years". Management contributes ~2.5 points of real CAGR and roughly halves the drawdown (−25.8% vs −48.4%, Sharpe 3.33 vs 2.14).
+The defensible sentence is "~11% real CAGR while the index lost 61% in real terms", not "40× in five years". Management contributes ~2.5 points of real CAGR and roughly halves the drawdown (−25.8% vs −48.4%, Sharpe 0.70 vs 0.60).
 
 **Known biases, ranked.** Two are serious:
 
