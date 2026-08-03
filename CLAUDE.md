@@ -16,7 +16,8 @@ python test_backtest.py                 # ad-hoc manual backtest sanity check (n
 python test_rss.py                      # check which RSS news sources are currently reachable
 python tools/pmdb_admin.py enag-list    # PM DB maintenance: enag-list | enag-delete YYYY-MM | portfolios
 
-python pipeline_backtest.py dondur      # freeze universe + price panel (do this FIRST, rarely)
+python pipeline_backtest.py dondur 5    # (re)download the price panel for a window
+python pipeline_backtest.py dondur-evren # re-fetch the UNIVERSE — new epoch, rare, invalidates old results
 python pipeline_backtest.py run         # full pipeline sim vs XU100 / BIST-30 / random-6
 python pipeline_backtest.py karsilastir # managed vs unmanaged — the presentation's core table
 python pipeline_backtest.py sweep       # management-rule parameter sweep
@@ -125,7 +126,26 @@ Cause: `_walk_managed` let position weights drift with price between rebalances,
 
 **The defensible sentence is now:** *"The management layer does not produce return; it buys drawdown protection, and the price is paid out of real return."* Whether that trade is worth it is a risk-preference question, not a performance claim — present it that way. Do **not** say management beats passive holding of the same picks.
 
-Caveat that cuts the other way: the window is a five-year BIST bull market, which is exactly where downside insurance can only look like cost. The −49.1% unmanaged drawdown is a real number a real investor would have had to sit through. The 8-year `validate` window (containing 2018 and 2020) is where the management layer should be re-judged; that comparison has **not** been re-run since the fix and is the top open item.
+### Same comparison over 8 years, including the 2018 and 2020 crises
+
+The five-year window is entirely a BIST bull market — exactly where downside insurance can only look like cost. Re-run on 2018-08-03 → 2026-08-03 (468 stocks, fingerprint `47a4ec949c92`, `karsilastir 8`), a window containing the 2018 TL crisis and the 2020 Covid crash:
+
+| | Nominal | ENAG-real | **Real CAGR** | **MaxDD** | Sharpe |
+|---|---|---|---|---|---|
+| Unmanaged | +14974% | +77.1% | **+7.4%** | **−69.9%** | 0.39 |
+| Managed | +10756% | +27.5% | +3.1% | **−25.8%** | 0.25 |
+| XU100 | +1307% | −83.5% | −20.1% | −31.8% | −0.72 |
+
+**The price of the insurance collapses once the window contains crises**, and the protection grows:
+
+| | 5y (bull only) | 8y (with 2018 + 2020) |
+|---|---|---|
+| Real CAGR given up | −16.9 pts | **−4.3 pts** |
+| Drawdown avoided | +23.3 pts | **+44.1 pts** |
+
+So the honest reading is **window-dependent, and this must be said out loud**: over a pure bull run the management layer is expensive dead weight; over a realistic cycle it costs about 4 points of real CAGR and removes a **−69.9% drawdown**. Cumulative transaction cost over 8 years: 20.1%.
+
+Sharpe still favours the unmanaged track on both windows (0.39 vs 0.25 here). The defensible response is not to hide that but to name its limitation: **Sharpe treats a −70% drawdown as merely a large variance term, while in practice it is the point at which an investor abandons the strategy and realises the loss.** Drawdown control is protection against that abandonment, which volatility-based ratios do not price. Present the management layer as risk management, never as a return enhancer.
 
 **All sweep/validate numbers below predate the `_walk` fix and the frozen panel — they are STALE.** The sweep's own reference line is `_walk` ([pipeline_backtest.py:509](pipeline_backtest.py:509)), so every "vs default" figure was measured against the crippled baseline, and every run used a differently-sized panel. `sweep` and `validate` must be re-run before any of it is quoted. The *method* described here still stands; the numbers do not.
 
@@ -172,7 +192,9 @@ So the pipeline is now pinned:
 - **Failed symbols are retried** in small batches (yfinance returns empty for random symbols in bulk queries but serves them individually). 32 of 500 remain missing — those are genuinely delisted (KOZAL, IPEKE, EMLAK…), which is the survivorship bias already on the list, not a data bug.
 - **`_precompute` builds its dict sorted**, and the random control group draws from `sorted(feats)`. Dict insertion order was download order, so it silently changed both tie-breaks in `_pick_at` and the random-6 lottery.
 
-`python pipeline_backtest.py dondur` re-freezes both — a deliberate act that starts a new measurement epoch. Verified: `karsilastir` run twice back-to-back gives byte-identical output.
+**`dondur` and `dondur-evren` are deliberately separate commands.** `dondur [yil]` re-downloads only the price panel; `dondur-evren` re-fetches the universe from TradingView and starts a new measurement epoch, after which old results are not comparable and **every** panel cache must be rebuilt. The first version conflated them, and running `dondur 8` silently overwrote the universe the 5-year results were built on — leaving the 5y and 8y panels sitting on two different universes with only the newer one recorded. Liquidity ranking shifts with intraday volume every single day, so re-freezing the universe must be rare and intentional, never a side effect of adding a window.
+
+Verified: `karsilastir` run three times back-to-back gives byte-identical output.
 
 One residual: the window end is "today", so the 5-year span shifts daily. Always record the window with the number (current results are 2021-08-03 → 2026-08-03).
 
@@ -180,18 +202,20 @@ One residual: the window end is "today", so the 5-year span shifts daily. Always
 
 The answer to "did the system find something real or fit noise?". The window is split: the best parameter is chosen on the **first 60%** (train, 2018-07→2023-05) and then tested on the **last 40%** (test, 2023-05→2026-07), which never participates in the choice.
 
-**Two of four sweep proposals were exposed as noise-fitting:**
+**Two of four sweep proposals were exposed as noise-fitting.** Re-run 2026-08-03 on the frozen panel (468 stocks, fingerprint `47a4ec949c92`) — **every verdict replicated**, which is itself a good sign for the method:
 
 | Parameter | Train picks | Test: default | Test: picked | Verdict |
 |---|---|---|---|---|
-| `trailing_pct` 15→10 | 10 | +1309% | **+951%** | rejected |
-| `dusus_freni` 15→10 | 10 | +1309% | **+594%** | rejected |
-| `max_pozisyon` 30→40 | 40 | +1309% | +1382% | validated |
-| `takas_farki` 12→0 | 0 | +1309% | **+3176%** | validated |
+| `trailing_pct` 15→10 | 10 | +1476.6% | **+1006.2%** | rejected |
+| `dusus_freni` 15→10 | 10 | +1476.6% | **+605.1%** | rejected |
+| `max_pozisyon` 30→40 | 40 | +1476.6% | +1552.8% | validated (**marginal**) |
+| `takas_farki` 12→0 | 0 | +1476.6% | **+4023.1%** | validated (decisive) |
+
+**The two survivors are not equally strong and the gate does not distinguish them.** `validate`'s pass condition is bare `t_s > t_v` ([pipeline_backtest.py:649](pipeline_backtest.py:649)) with no minimum margin, while `sweep` — which only *proposes* — demands a >5% difference **and** consistency across nearly every calendar year. So the final arbiter is the more permissive of the two. On these numbers `takas_farki` improves the test window by 172% while `max_pozisyon` improves it by 5.2%, and both come back labelled "DOĞRULANDI". Treat `max_pozisyon` 30→40 as unproven until the gate carries a margin; a reviewer will find this in a minute.
 
 `validate` overwrites `pm_param_oneri` with out-of-sample evidence and **deletes** proposals that failed, so the editor only ever sees survivors. Note the direction on `takas_farki` is robust (lower is better, confirmed on both windows) but the exact value is not — the 5-year sweep said 6, the 8-year validation says 0. Prefer the conservative end.
 
-**Remaining honesty gap:** the test period (2023-05→2026-07) is itself mostly bullish, so parameters were validated on a bull holdout. The crisis periods sit in the *training* half. A stricter design would reverse the split or use walk-forward with multiple folds.
+**Remaining honesty gap:** the test period (2023-05→2026-08) is itself mostly bullish, so parameters were validated on a bull holdout. The crisis periods sit in the *training* half. A stricter design would reverse the split or use walk-forward with multiple folds — still the top open methodology item.
 
 ### Signal Tracker
 
@@ -287,12 +311,16 @@ Goal: system that credibly beats index and targets ENAG-real returns; academic-g
 - **D. Monthly recalibration loop**: rerun weight_calibration 2-3× before October, produce a "parameter stability" table.
 - **E. Presentation packaging (September)**: methodology report + charts.
 
-**Status after the 2026-08-03 correction pass.** A is done and now reproducible (`dondur`). B is done and is the **strongest result in the project**: the system sits above the 95th percentile of random 6-stock portfolios. C exists but its headline conclusion reversed — the management layer trades real return for drawdown. D and E are open.
+**Status after the 2026-08-03 correction pass.** A is done and now reproducible (`dondur`). B is done and is the **strongest result in the project**: the system sits above the 95th percentile of random 6-stock portfolios. C's headline conclusion reversed — the management layer trades real return for drawdown protection, cheaply over a full cycle (−4.3 pts real CAGR for +44.1 pts of drawdown) and expensively in a pure bull run. D and E are open.
 
-Re-runs still owed, all invalidated by the `_walk` fix and/or the universe-sort fix:
-1. `sweep` — its reference line is `_walk`, so every "vs default" number is stale.
-2. `validate` (8y) — same, and it is the only window containing 2018/2020, i.e. the only place the management layer can be judged outside a bull market.
-3. `analyze-us` (mega-cap panel) — built from `get_scan_universe("US")[:120]`, which the sort also changed.
+Re-runs still owed:
+
+1. **`sweep`** — genuinely invalidated by the `_walk` fix: its "YÖNETİMSİZ (referans)" line *is* `_walk` ([pipeline_backtest.py:509](pipeline_backtest.py:509)), so every "vs default" figure was measured against the crippled baseline. The pending parameter proposals rest on it. (`validate` has already re-run and replicated, so the conclusions survive — but the sweep's own printed numbers do not.)
+2. **`analyze-us`** (mega-cap panel) — built from `get_scan_universe("US")[:120]`, which the sort also changed.
+
+Done in this pass: `run`, `karsilastir` (5y and 8y), `validate 8`, `build-tech-us-mid` + `analyze-us-mid` + `analyze-us-regime`.
+
+Note on what each command answers, because these got conflated once already: `validate` tests whether *parameter choices* survive out of sample; it compares `_walk_managed` to `_walk_managed` and says nothing about whether the management layer is worth having. That question is `karsilastir`.
 
 Expectation framing agreed with user: promise = "systematically better than the market; reaches real (ENAG) targets when the market allows, limits losses when it doesn't" — beating ENAG in all conditions is not promisable (even XU100 fails some years).
 

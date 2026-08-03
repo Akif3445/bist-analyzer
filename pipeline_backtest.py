@@ -129,12 +129,21 @@ def _download_panel(tickers, years, tekrar=2):
     return closes, vols
 
 
-def _panel_hazirla(years=5, yenile=False):
+def _panel_hazirla(years=5, yenile=False, evren_yenile=False):
     """Donmuş evren + önbellekli fiyat paneli. Aynı girdi → aynı sayı.
 
-    İlk çağrıda evreni canlı çekip DONDURUR ve paneli diske yazar; sonraki
-    her koşu bu dosyaları kullanır. `yenile=True` ikisini de yeniden kurar
-    (yeni bir ölçüm dönemi başlatmak istendiğinde bilinçli olarak).
+    İki ayrı tazeleme düğmesi var ve AYRI olmaları şart:
+      yenile=True       → yalnız fiyat panelini yeniden indirir (evren sabit)
+      evren_yenile=True → evreni de canlı TV'den yeniden çeker
+
+    Neden ayrı: evren tek bir çapadır ve farklı yıl pencereleri (5y, 8y) AYNI
+    listeden beslenmelidir. Başlangıçta `yenile` ikisini birden yeniliyordu ve
+    `dondur 8` çalıştırılınca 5 yıllık sonuçların dayandığı liste sessizce
+    üzerine yazıldı: iki panel iki farklı evrene oturdu, dosya ise yalnız
+    yenisini gösteriyordu. Yani panel silinip yeniden kurulsa 5y sayıları
+    tutmayacaktı — tekrarlanabilirlik çapasının tam da kendisi kırılmıştı.
+    Likidite sıralaması gün içi hacimle her gün değiştiği için evreni
+    tazelemek nadir ve bilinçli bir karar olmalıdır.
     """
     import hashlib
     import json
@@ -142,7 +151,7 @@ def _panel_hazirla(years=5, yenile=False):
     import pickle
 
     onbellek = PANEL_ONBELLEK.format(yil=years)
-    if not yenile and os.path.exists(onbellek):
+    if not yenile and not evren_yenile and os.path.exists(onbellek):
         with open(onbellek, "rb") as f:
             d = pickle.load(f)
         print(f"Panel ÖNBELLEKTEN: {len(d['closes'])} hisse | dondurma {d['tarih']} "
@@ -150,7 +159,7 @@ def _panel_hazirla(years=5, yenile=False):
         return d["closes"], d["vols"]
 
     # Evren: dosyadan oku (varsa), yoksa canlı çek ve dondur
-    if os.path.exists(EVREN_DOSYA) and not yenile:
+    if os.path.exists(EVREN_DOSYA) and not evren_yenile:
         with open(EVREN_DOSYA, encoding="utf-8") as f:
             meta = json.load(f)
         uni = meta["tickers"]
@@ -853,11 +862,18 @@ if __name__ == "__main__":
     elif _cmd == "validate":
         validate(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     elif _cmd == "dondur":
-        # Ölçüm dönemini yeniden başlat: evreni ve paneli SIFIRDAN kurar.
-        # Bilinçli bir eylem olmalı — eski sonuçlar bundan sonra
-        # karşılaştırılamaz hâle gelir (bkz. TEKRARLANABİLİRLİK ÇAPASI).
+        # Paneli yeniden indirir; EVREN dosyasına DOKUNMAZ. Farklı yıl
+        # pencereleri aynı evrenden beslenmeli (bkz. _panel_hazirla).
         _panel_hazirla(yrs, yenile=True)
-        print("Dondurma tamam. Bundan sonraki run/sweep/validate bu paneli kullanır.")
+        print("Panel donduruldu (evren değişmedi).")
+    elif _cmd == "dondur-evren":
+        # Ölçüm dönemini SIFIRDAN başlatır: evreni canlı TV'den yeniden çeker.
+        # Bundan sonra ESKİ SONUÇLAR KARŞILAŞTIRILAMAZ; mevcut panellerin
+        # hepsi bu yeni evrenden yeniden kurulmalıdır.
+        print("DİKKAT: evren yeniden çekiliyor — eski sonuçlar karşılaştırılamaz "
+              "hâle gelecek ve TÜM panel önbellekleri silinip yeniden kurulmalı.")
+        _panel_hazirla(yrs, evren_yenile=True)
+        print("Evren + panel donduruldu.")
     elif _cmd == "karsilastir":
         karsilastir(yrs)
     else:
