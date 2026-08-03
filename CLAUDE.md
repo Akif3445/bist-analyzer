@@ -100,6 +100,8 @@ Robot runs the management pass for both markets. `.github/workflows/daily-robot.
 
 UI cost is deliberately near zero: one line in the Portfolio Manager (`🩺 Yönetim denetimi — sağlıklı`), which expands only when there is a finding; the parameter table appears only if overrides exist.
 
+**One audit rule pointed the wrong way and was reversed (2026-08-03).** When managed cohorts lagged the passive ones, the `yonetilen_fark` finding proposed *raising* `takas_farki` — the intuitive response ("management isn't paying, so trade less"). Measurement says the opposite: a high swap threshold is what stops the portfolio from adopting each month's fresh picks, so it holds stale names and falls behind. Raising it would have deepened exactly the problem the audit was detecting. It now proposes lowering, with the reasoning in the message. No harm was done because proposals are never auto-applied — which is precisely the argument for that gate. Worth remembering as a case where a plausible-sounding rule was backwards, and only the parameter sweep exposed it.
+
 ### Management-rule sweep (2026-07-30) — `pipeline_backtest.py sweep`
 
 `_walk_managed` replays the daily management layer (trailing stop, score exit, position cap, drawdown brake, swap threshold) over the same point-in-time pipeline, and `sweep` varies one parameter at a time. Acceptance is deliberately strict: a change is only proposed if the return difference exceeds 5% **and** the better value wins in nearly every calendar year. Proposals are written to `pm_param_oneri` and **never applied automatically** — the UI surfaces them next to the live-audit findings behind the same editor gate.
@@ -332,7 +334,9 @@ Goal: system that credibly beats index and targets ENAG-real returns; academic-g
 
 **Status after the 2026-08-03 correction pass.** A is done and now reproducible (`dondur`). B is done and is the **strongest result in the project**: the system sits above the 95th percentile of random 6-stock portfolios. C is done and, once the management layer is configured as its validation says, it improves return, drawdown and Sharpe together (+18.6% vs +7.4% real CAGR, −26.8% vs −69.9%, 0.79 vs 0.39 over 8 years). D and E are open.
 
-**Highest-value open item is now a live change, not a measurement:** production still runs `takas_farki=12`, on the wrong side of the cliff. See the parameter table under the backtest section.
+**`takas_farki` changed 12 → 6 in `PortfolioDoctor.KURAL` (2026-08-03, editor-approved).** 6 is the conservative edge of the plateau — statistically tied with 0 but trading less — and `sweep` independently picked 6 on the 5-year window. The code default was changed rather than a `pm_params` override because this is a settled decision, not an experiment: it belongs in git with its reasoning. `max_pozisyon` was left at 30; its evidence is marginal.
+
+Consequence for the live experiment: managed shadow cohorts from W29 onward carry a before/after break at this date. With ~3 weeks of history the statistical cost was near zero, and running production on the wrong side of a measured cliff until October was the larger risk.
 
 Re-runs still owed:
 

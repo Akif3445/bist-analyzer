@@ -4524,7 +4524,17 @@ class PortfolioDoctor:
     KURAL = {
         "trailing_pct":    15.0,   # zirveden bu kadar geri verirse çık
         "skor_cikis":      43,     # SAT bölgesi
-        "takas_farki":     12,     # aday, en zayıf hisseden bu kadar iyiyse takas
+        # Aday, en zayıf hisseden bu kadar iyiyse takas.
+        # 12 → 6 (2026-08-03, editör onayı). Ölçüm: 8 yıllık panelde yalnız bu
+        # parametre değiştirilince 6 ve altı ~%15-16 reel CAGR / Sharpe ~0.71,
+        # 9 ve üstü ~%3-5 / Sharpe ~0.25 veriyor — 6 ile 9 arasında bir UÇURUM
+        # var, ince ayar değil. Sebep: eşik yüksekken ayın yeni seçimleri
+        # alınamıyor, portföy bayat isimleri taşıyor; yani "yönetim" modelin
+        # güncel kararlarını uygulamıyordu. 6 platonun muhafazakâr ucu (0 ile
+        # pratik olarak eşit ama daha az işlem) ve sweep'in 5 yıllık penceresi
+        # bağımsız olarak aynı değeri seçmişti. validate iki pencerede de bu
+        # yönü doğruladı (bkz. CLAUDE.md > takas_farki tablosu).
+        "takas_farki":     6,
         "min_tutma_gun":   5,      # stop hariç, bu süreden önce satma
         "bekleme_gun":     10,     # sattığını bu süre geri alma
         "gunluk_islem":    2,      # ihtiyari (alım/takas) işlem tavanı
@@ -5136,14 +5146,24 @@ class PortfolioAudit:
 
         m = metrikler.get("yonetilen_fark")
         if m and m[1] >= N["yonetilen_fark"] and m[0] < E["yonetilen_fark_alt"]:
+            # YÖN DÜZELTİLDİ (2026-08-03). Bu kural eskiden takas eşiğini
+            # YÜKSELTMEYİ öneriyordu; gerekçe sezgiseldi ("yönetim değer
+            # katmıyorsa daha az işlem yap"). Ölçüm bunun tersini söylüyor:
+            # eşik yükseldikçe portföy ayın yeni seçimlerini alamıyor, bayat
+            # isimleri taşıyor ve geri kalıyor. 8 yıllık panelde 9 ve üstü
+            # reel CAGR'yi %15'ten %3-5'e düşürüyor. Yani eski kural, denetimi
+            # tam da sorunu büyüten yöne itiyordu — otomatik uygulanmadığı
+            # için zarar vermedi, ama editöre yanlış öneri sunuyordu.
+            _mevcut = PortfolioDoctor.kural("takas_farki")
             out.append({
                 "metrik": "yonetilen_fark",
                 "mesaj": f"Yönetilen kohortlar pasiften {abs(m[0]):.1f} puan GERİDE ({m[2]}). "
-                         f"Aktif yönetim şu ana kadar değer katmıyor — takas eşiği "
-                         f"yükseltilip işlem azaltılabilir.",
+                         f"Backtest kanıtı: bu genellikle takas eşiğinin YÜKSEK olmasından "
+                         f"kaynaklanır (portföy güncel seçimleri alamıyor), fazla işlemden "
+                         f"değil. Eşiği düşürmeyi değerlendir — 9 ve üstü ölçülmüş biçimde kötü.",
                 "parametre": "takas_farki",
-                "mevcut": PortfolioDoctor.kural("takas_farki"),
-                "onerilen": round(PortfolioDoctor.kural("takas_farki") + 4, 1),
+                "mevcut": _mevcut,
+                "onerilen": round(max(0.0, _mevcut - 3), 1),
                 "kanit": m[2],
             })
         return out
