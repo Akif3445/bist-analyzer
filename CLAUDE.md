@@ -124,7 +124,7 @@ Cause: `_walk_managed` let position weights drift with price between rebalances,
 
 **Management costs ~17 points of real CAGR and buys ~23 points of drawdown protection.** Sharpe drops 0.92 → 0.71, so it is not even a risk-adjusted win on this sample — the drawdown reduction is real but is paid for with more return than the volatility reduction justifies. Cumulative transaction cost of the managed track: 11.8%.
 
-**The defensible sentence is now:** *"The management layer does not produce return; it buys drawdown protection, and the price is paid out of real return."* Whether that trade is worth it is a risk-preference question, not a performance claim — present it that way. Do **not** say management beats passive holding of the same picks.
+> **Read the `takas_farki` section below before quoting this table.** These managed figures use `takas_farki=12`, which the project's own out-of-sample validation rejects on both windows. With the validated setting the managed track beats unmanaged on return, drawdown *and* Sharpe. This table is kept because it is what the shipped defaults actually produce — it is a statement about the current configuration, not about the management layer's potential.
 
 ### Same comparison over 8 years, including the 2018 and 2020 crises
 
@@ -143,9 +143,28 @@ The five-year window is entirely a BIST bull market — exactly where downside i
 | Real CAGR given up | −16.9 pts | **−4.3 pts** |
 | Drawdown avoided | +23.3 pts | **+44.1 pts** |
 
-So the honest reading is **window-dependent, and this must be said out loud**: over a pure bull run the management layer is expensive dead weight; over a realistic cycle it costs about 4 points of real CAGR and removes a **−69.9% drawdown**. Cumulative transaction cost over 8 years: 20.1%.
+### …but both tables above measure the management layer with a parameter its own validation rejects
 
-Sharpe still favours the unmanaged track on both windows (0.39 vs 0.25 here). The defensible response is not to hide that but to name its limitation: **Sharpe treats a −70% drawdown as merely a large variance term, while in practice it is the point at which an investor abandons the strategy and realises the loss.** Drawdown control is protection against that abandonment, which volatility-based ratios do not price. Present the management layer as risk management, never as a return enhancer.
+`MGMT_VARSAYILAN["takas_farki"] = 12`, and `validate` rejected that value on **both** windows in favour of 0. Measured on the 8-year panel, varying only `takas_farki`:
+
+| `takas_farki` | Real CAGR | MaxDD | Sharpe | Cost | Out-of-sample test half |
+|---|---|---|---|---|---|
+| 0 | **+15.9%** | −25.2% | **0.71** | 23.5% | +4023% |
+| 3 | +14.3% | −25.2% | 0.66 | 22.9% | +3508% |
+| **6** | **+15.6%** | −25.2% | **0.71** | 22.3% | +4011% |
+| 9 | +4.9% | −25.8% | 0.32 | 21.7% | +1969% |
+| **12 (current live value)** | **+3.1%** | −25.8% | **0.25** | 20.1% | +1477% |
+| 20 | +3.3% | −25.5% | 0.26 | 18.8% | +1950% |
+
+**There is a cliff between 6 and 9, and a flat plateau below it** — this is a robust result, not a tuned optimum: any value ≤6 gives ~+15% real CAGR and Sharpe ~0.7, any value ≥9 gives ~+3-5% and Sharpe ~0.25.
+
+**Why the parameter matters this much.** `takas_farki` is the score edge a candidate must have over the weakest current holding before the layer will buy it. At 12 most of each month's fresh picks were refused, so the managed portfolio kept holding stale names while the unmanaged track adopted the new target list in full. "Managed" was therefore not the model plus risk control — it was **a stale version of the model with stops bolted on**, and that, not risk management, is what was costing the return.
+
+**With validated parameters (`takas_farki` 0, `max_pozisyon` 40) the management layer dominates on every axis** over the 8-year window: real CAGR **+18.6% vs +7.4%** unmanaged, MaxDD **−26.8% vs −69.9%**, Sharpe **0.79 vs 0.39**. Nearly all of the gain comes from `takas_farki` alone (+15.9% by itself); `max_pozisyon` contributes little and remains the marginal proposal.
+
+Caveat on precision: the full-window figures are partly in-sample, since the parameter was chosen on the first 60% of the same window. The clean number is the out-of-sample column above (test half 2023-05 → 2026-08, which took no part in the choice), and it tells the same story with the same cliff.
+
+**Corrected reading, superseding the two tables above:** the management layer is *not* a return-for-risk trade. Configured as its own validation says it should be, it improves return, drawdown and Sharpe simultaneously. The earlier "management buys drawdown protection and pays for it out of real return" conclusion was an artifact of measuring it throttled. What survives from that discussion is the honest note that Sharpe under-prices drawdown — but it is no longer needed as a defence, because Sharpe now favours the managed track too.
 
 **All sweep/validate numbers below predate the `_walk` fix and the frozen panel — they are STALE.** The sweep's own reference line is `_walk` ([pipeline_backtest.py:509](pipeline_backtest.py:509)), so every "vs default" figure was measured against the crippled baseline, and every run used a differently-sized panel. `sweep` and `validate` must be re-run before any of it is quoted. The *method* described here still stands; the numbers do not.
 
@@ -311,7 +330,9 @@ Goal: system that credibly beats index and targets ENAG-real returns; academic-g
 - **D. Monthly recalibration loop**: rerun weight_calibration 2-3× before October, produce a "parameter stability" table.
 - **E. Presentation packaging (September)**: methodology report + charts.
 
-**Status after the 2026-08-03 correction pass.** A is done and now reproducible (`dondur`). B is done and is the **strongest result in the project**: the system sits above the 95th percentile of random 6-stock portfolios. C's headline conclusion reversed — the management layer trades real return for drawdown protection, cheaply over a full cycle (−4.3 pts real CAGR for +44.1 pts of drawdown) and expensively in a pure bull run. D and E are open.
+**Status after the 2026-08-03 correction pass.** A is done and now reproducible (`dondur`). B is done and is the **strongest result in the project**: the system sits above the 95th percentile of random 6-stock portfolios. C is done and, once the management layer is configured as its validation says, it improves return, drawdown and Sharpe together (+18.6% vs +7.4% real CAGR, −26.8% vs −69.9%, 0.79 vs 0.39 over 8 years). D and E are open.
+
+**Highest-value open item is now a live change, not a measurement:** production still runs `takas_farki=12`, on the wrong side of the cliff. See the parameter table under the backtest section.
 
 Re-runs still owed:
 
