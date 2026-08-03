@@ -35,3 +35,9 @@ faz2_modules.py
 # Kalibrasyon veri panelleri (weight_calibration.py ile yeniden üretilebilir)
 calibration_*.csv
 pipeline_nav.csv
+pipeline_yonetim.csv
+
+# Backtest fiyat paneli önbelleği — büyük (~15 MB) ve yeniden üretilebilir.
+# DİKKAT: backtest_evren.json GITIGNORE EDİLMEZ. Tekrarlanabilirliğin çapası
+# odur; panel silinse bile o listeden birebir aynı veri indirilir.
+backtest_panel_*.pkl

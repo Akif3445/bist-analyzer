@@ -35,7 +35,13 @@ jobs:
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          # Geç tur (21:30 UTC) yalnız US tarafını yönetir; BIST işleri
-          # akşam turunda zaten yapıldı, tekrarlamak gereksiz yük.
-          ROBOT_ONLY_MARKET: ${{ github.event.schedule == '30 21 * * 1-5' && 'US' || '' }}
+          # Her tur YALNIZ kapanmış piyasayı işler:
+          #   15:40 UTC (18:40 TR) → BIST kapandı, US seansı AÇIK  → BIST
+          #   21:30 UTC (00:30 TR) → US kapandı                    → US
+          # Önceden erken tura değer atanmadığı için o tur her iki piyasayı
+          # işliyordu: US portföyleri günde İKİ kez karar görüyor ve erken
+          # kararı seans ortasındaki yarım günün fiyatıyla veriyordu.
+          # workflow_dispatch'te schedule boştur → değer '' → elle koşuda
+          # her iki piyasa işlenir (kasıtlı: elle tetikleme tam tur demektir).
+          ROBOT_ONLY_MARKET: ${{ github.event.schedule == '30 21 * * 1-5' && 'US' || (github.event.schedule == '40 15 * * 1-5' && 'BIST' || '') }}
         run: python daily_robot.py

@@ -9,6 +9,7 @@ import logging
 import os
 import pickle  # Yalnızca eski BLOB verilerini okumak için (geriye dönük uyumluluk)
 import sqlite3
+import threading
 import time
 import traceback
 import warnings
@@ -114,22 +115,15 @@ try:
 except ImportError:
     NEWS_ENGINE_AVAILABLE = False
 
-# Phase 2 modules
-try:
-    from faz2_modules import (
-        DataCache,
-        KAPScraper,
-        TargetPriceFetcher,
-        WatchlistManager,
-        SchedulerService,
-        AlertManager,
-        enhanced_news_analysis,
-        render_kap_disclosures,
-        render_target_prices,
-    )
-    FAZ2_AVAILABLE = True
-except ImportError:
-    FAZ2_AVAILABLE = False
+# NOT — faz2_modules KALDIRILDI (2026-08-03).
+# Dosya .gitignore altındaydı: lokalde var, Streamlit Cloud'da yok. Bu yüzden
+# FAZ2_AVAILABLE lokalde True, bulutta False oluyordu ve aynı kod tabanı iki
+# FARKLI uygulama gibi davranıyordu — lokalde İngilizce sekmeler açılıyor,
+# sentiment başka bir motordan (enhanced_news_analysis) geliyor, analist hedefi
+# başka bir kaynaktan (TargetPriceFetcher) çekiliyordu. Yani lokalde görülen
+# skor bulutta üretilenle aynı olmayabilirdi; sunumda savunulacak sonuçlar
+# için bu kabul edilemez bir belirsizlik. Yerine geçen yollar zaten mevcut:
+# haber → news_engine.analyze_news, analist hedefi → fetch_tv_analyst_targets.
 
 # Configuration
 
@@ -214,14 +208,6 @@ def _score_to_json(score: "BISTScore") -> str:
         except (TypeError, ValueError):
             pass
 
-    tc_dict = None
-    tc = getattr(score, "_target_consensus", None)
-    if tc is not None:
-        try:
-            tc_dict = asdict(tc)
-        except Exception:
-            pass
-
     data = {
         "ticker": score.ticker,
         "total_score": score.total_score,
@@ -254,7 +240,6 @@ def _score_to_json(score: "BISTScore") -> str:
         },
         "kap_disclosures": list(getattr(score, "_kap_disclosures", []) or []),
         "material_events": list(getattr(score, "_material_events", []) or []),
-        "target_consensus": tc_dict,
         "news_result": _news_result_to_dict(getattr(score, "_news_result", None)),
     }
     return json.dumps(data, ensure_ascii=False, default=str)
@@ -384,16 +369,8 @@ def _score_from_json(raw) -> Optional["BISTScore"]:
         score._kap_disclosures = data.get("kap_disclosures", [])
         score._material_events = data.get("material_events", [])
         score._news_result = _news_result_from_dict(data.get("news_result"))
-
-        tc_data = data.get("target_consensus")
-        if tc_data and FAZ2_AVAILABLE:
-            try:
-                from faz2_modules import TargetPriceConsensus
-                score._target_consensus = TargetPriceConsensus(**tc_data)
-            except Exception:
-                score._target_consensus = None
-        else:
-            score._target_consensus = None
+        # Not: eski önbellek satırlarında 'target_consensus' anahtarı olabilir;
+        # FAZ2 kaldırıldığı için okunmaz (hiçbir yerde render edilmiyordu).
 
         return score
     except Exception:
@@ -1886,18 +1863,6 @@ def compute_bist_score(
         result._kap_disclosures  = news_result.kap_disclosures
         result._material_events  = news_result.material_events
         result._news_result      = news_result
-    elif FAZ2_AVAILABLE:
-        _cache     = DataCache()
-        kap_result = enhanced_news_analysis(ticker, _cache)
-        sentiment  = SentimentResult(
-            score          = kap_result["score"],
-            positive_count = kap_result["positive_count"],
-            negative_count = kap_result["negative_count"],
-            headlines      = kap_result["headlines"],
-        )
-        result._kap_disclosures = kap_result.get("kap_disclosures", [])
-        result._material_events = kap_result.get("material_events", [])
-        result._news_result     = None
     else:
         sentiment = SentimentResult(score=50.0, headlines=[])
         result._kap_disclosures = []
@@ -1916,15 +1881,9 @@ def compute_bist_score(
         if _tv:
             _auto_target = _tv["target"]
             result._tv_target = _tv  # UI'da "N analist" göstermek için
-    if FAZ2_AVAILABLE and _auto_target is None:
-        _cache    = DataCache()
-        fetcher   = TargetPriceFetcher(_cache)
-        consensus = fetcher.fetch(ticker, stock.current_price)
-        result._target_consensus = consensus
-        if consensus.analyst_count > 0:
-            _auto_target = consensus.consensus_target
-    else:
-        result._target_consensus = None
+    # Hedef fiyat bulunamazsa _auto_target None kalır; compute_bist_score bu
+    # durumda Prim ağırlığını Teknik/Sentiment'e dağıtır (bkz. aşağıdaki
+    # dinamik ağırlık bloğu) — eksik veri boşluk bırakmaz.
 
     valuation          = ValuationEngine.compute(stock, _auto_target)
     result.valuation   = valuation
@@ -2321,6 +2280,13 @@ def get_scan_universe(market: str = "BIST") -> list:
                   .limit(2500 if market == "US" else 700).get_scanner_data())
         df["_hacim"] = df["close"] * df["average_volume_30d_calc"]
         likit = df[df["_hacim"] >= cfg["min_vol"]]
+        # Hacme göre AZALAN sırala — evrenin sırası anlam taşır: kalibrasyon
+        # panelleri segmenti likidite SIRASINDAN tanımlıyor (mega-cap = ilk 120,
+        # orta ölçek = 300-420). TV'nin döndürdüğü ham sıra garanti değil, yani
+        # sıralamasız hâlde "orta ölçek" dilimi rastgele hisseler olabilirdi ve
+        # mega/mid ayrımına dayanan bulgular (US: IC +0.0065 vs +0.0212)
+        # tekrarlanamaz hâle gelirdi.
+        likit = likit.sort_values("_hacim", ascending=False)
         tickers = [str(t) for t in likit["name"] if _valid_ticker(str(t), market)]
         sectors = {}
         for _, r in df.iterrows():
@@ -2880,26 +2846,52 @@ ENAG_MOM_DEFAULTS = {
 }
 
 
+class TursoUnavailable(RuntimeError):
+    """Turso yapılandırılmış ama ulaşılamıyor.
+
+    Bilerek YAKALANMIYOR: bulut kipinde lokal SQLite'a düşmek veriyi ikiye
+    böler (bkz. _PMDB.execute_batch). Çağıran taraf bu hatayı görmeli.
+    """
+
+
 class _PMDB:
     """Portföy Yöneticisi tabloları (pm_*, enag_monthly) için depolama katmanı.
 
     TURSO_DATABASE_URL + TURSO_AUTH_TOKEN tanımlıysa Turso HTTP API kullanılır
-    (Streamlit Cloud'da /tmp silinse bile veri kalıcı olur). Tanımlı değilse
-    veya Turso'ya ulaşılamazsa lokal SQLite'a düşer — mevcut davranış korunur.
+    (Streamlit Cloud'da /tmp silinse bile veri kalıcı olur). Tanımlı DEĞİLSE
+    lokal SQLite kullanılır — lokal geliştirmenin normal yolu budur.
+    Tanımlı ama ulaşılamıyorsa lokale DÜŞÜLMEZ, hata yükseltilir (aşağıda).
     Saf HTTP (requests) — libsql paketi gerekmez, her platformda çalışır.
     """
     _cfg_checked = False
     _url = None
     _token = None
-    _http = None   # kalıcı bağlantı (TLS bir kez kurulur — sorgu başına ~600ms → ~100ms)
+    # requests.Session THREAD-SAFE DEĞİLDİR; iş parçacığı başına ayrı tutulur.
+    _local = threading.local()
+
+    # Ağ hatasında yeniden deneme (SQL hatasında DEĞİL — o kalıcıdır)
+    TURSO_DENEME = 3
+    TURSO_BEKLEME = 0.5          # saniye; her denemede iki katına çıkar
 
     @staticmethod
     def _session():
-        if _PMDB._http is None:
+        """İş parçacığına özel kalıcı HTTP oturumu.
+
+        Eskiden tek bir sınıf değişkeni (_http) paylaşılıyordu. requests.Session
+        thread-safe değildir: alttaki urllib3 bağlantı havuzu paylaşıldığında iki
+        iş parçacığı aynı soketi kullanabilir ve bir isteğin yanıtı diğerine
+        düşebilir — portföy verisinde bu, sessiz ve teşhisi çok zor bir bozulma
+        demektir. Streamlit her kullanıcı oturumunu ayrı bir ScriptRunner iş
+        parçacığında koşturur, yani çok ziyaretçili bulut demosunda bu gerçek
+        bir yarış durumudur. İş parçacığı başına Session, TLS'i bir kez kurma
+        kazancını (sorgu başına ~600ms → ~100ms) korur.
+        """
+        s = getattr(_PMDB._local, "http", None)
+        if s is None:
             s = requests.Session()
             s.headers.update({"Content-Type": "application/json"})
-            _PMDB._http = s
-        return _PMDB._http
+            _PMDB._local.http = s
+        return s
 
     @staticmethod
     def _cfg():
@@ -2950,34 +2942,60 @@ class _PMDB:
     @staticmethod
     def execute_batch(stmts: list) -> list:
         """[(sql, args), ...] — hepsi tek istekte/transaction'da.
-        Dönüş: her stmt için {"rows": [...], "lastrowid": int|None} listesi."""
+        Dönüş: her stmt için {"rows": [...], "lastrowid": int|None} listesi.
+
+        Turso YAPILANDIRILMIŞSA lokal SQLite'a ASLA düşülmez. Eskiden ağ
+        hatasında sessizce lokale düşülüyordu; Streamlit Cloud'da DB_PATH
+        /tmp altında ve konteynerle birlikte uçucu olduğu için bu, portföy
+        yazımlarının bir kısmının Turso'ya bir kısmının çöpe gitmesi demekti
+        (split-brain): NAV serisi sessizce dallanır, hangi kaydın doğru
+        olduğu sonradan bilinemezdi. Sessizce yanlış veri, gürültülü hatadan
+        çok daha pahalıdır — bu yüzden geçici hatalar üstel bekleme ile
+        yeniden denenir, kalıcı olanlar yükseltilir.
+        """
         url, tok = _PMDB._cfg()
         if url:
-            try:
-                reqs = [{"type": "execute",
-                         "stmt": {"sql": s, "args": [_PMDB._arg(a) for a in args]}}
-                        for s, args in stmts]
-                reqs.append({"type": "close"})
-                r = _PMDB._session().post(url, json={"requests": reqs},
-                                          headers={"Authorization": f"Bearer {tok}"}, timeout=20)
-                r.raise_for_status()
-                out = []
-                for res in r.json()["results"][:len(stmts)]:
-                    if res.get("type") == "error":
-                        # SQL hatası: Turso'ya ULAŞILDI, statement geçersiz.
-                        # Lokale düşme (split-brain yazma riski) — hatayı yükselt.
-                        raise sqlite3.OperationalError(
-                            res.get("error", {}).get("message", "turso error"))
-                    rr = res["response"]["result"]
-                    lid = rr.get("last_insert_rowid")
-                    out.append({"rows": _PMDB._parse_rows(rr),
-                                "lastrowid": int(lid) if lid else None})
-                return out
-            except sqlite3.OperationalError:
-                raise
-            except Exception as exc:
-                log.warning("Turso erişim hatası — lokal SQLite'a düşülüyor: %s", exc)
-        # Lokal SQLite yolu
+            son_hata = None
+            for deneme in range(_PMDB.TURSO_DENEME):
+                try:
+                    reqs = [{"type": "execute",
+                             "stmt": {"sql": s, "args": [_PMDB._arg(a) for a in args]}}
+                            for s, args in stmts]
+                    reqs.append({"type": "close"})
+                    r = _PMDB._session().post(url, json={"requests": reqs},
+                                              headers={"Authorization": f"Bearer {tok}"}, timeout=20)
+                    r.raise_for_status()
+                    out = []
+                    for res in r.json()["results"][:len(stmts)]:
+                        if res.get("type") == "error":
+                            # SQL hatası: Turso'ya ULAŞILDI, statement geçersiz.
+                            # Tekrar denemek aynı sonucu verir — doğrudan yükselt.
+                            raise sqlite3.OperationalError(
+                                res.get("error", {}).get("message", "turso error"))
+                        rr = res["response"]["result"]
+                        lid = rr.get("last_insert_rowid")
+                        out.append({"rows": _PMDB._parse_rows(rr),
+                                    "lastrowid": int(lid) if lid else None})
+                    return out
+                except sqlite3.OperationalError:
+                    raise
+                except Exception as exc:
+                    son_hata = exc
+                    # Bağlantı bozulmuş olabilir (yarım kalmış TLS, kapanmış
+                    # soket) — oturumu at ki sonraki deneme yenisini kursun.
+                    _PMDB._local.http = None
+                    if deneme < _PMDB.TURSO_DENEME - 1:
+                        bekle = _PMDB.TURSO_BEKLEME * (2 ** deneme)
+                        log.warning("Turso erişim hatası (deneme %d/%d), %.1fs sonra tekrar: %s",
+                                    deneme + 1, _PMDB.TURSO_DENEME, bekle, exc)
+                        time.sleep(bekle)
+            log.error("Turso'ya %d denemede ulaşılamadı — lokale DÜŞÜLMÜYOR: %s",
+                      _PMDB.TURSO_DENEME, son_hata)
+            raise TursoUnavailable(
+                f"Turso'ya {_PMDB.TURSO_DENEME} denemede ulaşılamadı: {son_hata}. "
+                "Bulut kipinde lokal veritabanına yazmak veriyi böleceği için "
+                "işlem iptal edildi.") from son_hata
+        # Lokal SQLite yolu — Turso hiç yapılandırılmamış (lokal geliştirme)
         out = []
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -11047,89 +11065,30 @@ def render_analysis_page(ui_lang):
             )
         with c2:
             st.markdown("**52 Haftalık Pozisyon**")
+            # Bantlar ve yön, TechnicalEngine._compute_score'un momentum kolundan
+            # (madde 6) BİREBİR kopyalanmıştır — ekran skoru neyin ürettiğini
+            # anlatmalı. Kontrarian etiketler (zirve="risk", dip="ideal alım")
+            # kalibrasyon öncesinden kalmıştı ve motorun TERSİNİ söylüyordu:
+            # BIST momentum rejiminde 52 hafta pozisyonu en güçlü pozitif
+            # sinyal (IC +0.06-0.08, iki alt dönemde de t>3.5).
             w52_pct = round(t.week52_position * 100)
-            if t.week52_position <= 0.20:
-                w52_label, w52_color = "Yıllık Dibe Yakın — İdeal Alım Bölgesi", "#1d6f4e"
-            elif t.week52_position <= 0.50:
-                w52_label, w52_color = "Alt Yarı — Makul", "#3e8e6c"
-            elif t.week52_position <= 0.80:
-                w52_label, w52_color = "Üst Yarı — Dikkatli Ol", "#a2701d"
+            if t.week52_position >= 0.80:
+                w52_label, w52_color = "Yıllık Zirveye Yakın — Güçlü Momentum Bölgesi", "#1d6f4e"
+            elif t.week52_position >= 0.60:
+                w52_label, w52_color = "Üst Yarı — Momentum Destekli", "#3e8e6c"
+            elif t.week52_position >= 0.40:
+                w52_label, w52_color = "Orta Bant — Nötr", "#6b6357"
+            elif t.week52_position >= 0.20:
+                w52_label, w52_color = "Alt Yarı — Momentum Zayıf", "#a2701d"
             else:
-                w52_label, w52_color = "Yıllık Zirveye Yakın — Yüksek Risk", "#9e2b25"
+                w52_label, w52_color = "Yıllık Dibe Yakın — Zayıf Momentum / Düşüş Trendi", "#9e2b25"
             st.markdown(
                 f"52H Düşük: **{t.week52_low:.2f} TL** &nbsp;|&nbsp; 52H Yüksek: **{t.week52_high:.2f} TL**  \n"
-                f"Pozisyon: <b style='color:{w52_color}'>{w52_pct}%</b> — {w52_label}",
+                f"Pozisyon: <b style='color:{w52_color}'>{w52_pct}%</b> — {w52_label}  \n"
+                f"<span style='color:#6b6357;font-size:12px'>Momentum rejiminde zirveye yakınlık "
+                f"güç göstergesidir; dipte olmak ucuzluk değil zayıflıktır.</span>",
                 unsafe_allow_html=True,
             )
-
-    # Phase 2 Tabs
-    if FAZ2_AVAILABLE:
-        st.markdown("---")
-        tab_kap, tab_target, tab_wl = st.tabs([
-            "KAP Disclosures",
-            "Analyst Targets",
-            "Watchlist",
-        ])
-
-        with tab_kap:
-            st.markdown("#### Recent KAP Disclosures (14 days)")
-            wl = WatchlistManager()
-
-            col_wl1, col_wl2, col_wl3 = st.columns([2, 1, 1])
-            with col_wl1:
-                wl_ticker = st.text_input("Add Stock", value=ticker_input,
-                                          key="wl_ticker", placeholder="THYAO")
-            with col_wl2:
-                wl_threshold = st.number_input("Buy Threshold", min_value=50,
-                                               max_value=90, value=65, key="wl_thr")
-            with col_wl3:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Add", key="wl_add"):
-                    wl.add(wl_ticker.upper(), alert_threshold=float(wl_threshold))
-                    st.success(f"{wl_ticker.upper()} added.")
-
-            for item in wl.get_all():
-                ca, cb, cc = st.columns([2, 2, 1])
-                with ca:
-                    c = "#1d6f4e" if item.last_score >= 55 else \
-                        "#9e2b25" if item.last_score < 40 else "#6b6357"
-                    st.markdown(
-                        f"**{item.ticker}** — "
-                        f"<span style='color:{c}'>{item.last_score:.0f}/100</span>",
-                        unsafe_allow_html=True,
-                    )
-                with cb:
-                    last = item.last_checked[:10] if item.last_checked else "never"
-                    st.caption(f"Threshold: {item.alert_threshold:.0f} · Last: {last}")
-                with cc:
-                    if st.button("Remove", key=f"del_{item.ticker}"):
-                        wl.remove(item.ticker)
-                        st.rerun()
-
-            st.markdown("---")
-            st.markdown("**Auto-Refresh Scheduler**")
-            if "scheduler" not in st.session_state:
-                st.session_state.scheduler = None
-
-            cs1, cs2 = st.columns(2)
-            with cs1:
-                if st.button("Start Scheduler",
-                             disabled=st.session_state.scheduler is not None):
-                    svc = SchedulerService(wl)
-                    svc.start()
-                    st.session_state.scheduler = svc
-                    st.success("Scheduler started (every 30 min).")
-            with cs2:
-                if st.button("Stop Scheduler",
-                             disabled=st.session_state.scheduler is None):
-                    if st.session_state.scheduler:
-                        st.session_state.scheduler.stop()
-                        st.session_state.scheduler = None
-                        st.info("Scheduler stopped.")
-
-            if st.session_state.scheduler:
-                for job in st.session_state.scheduler.get_jobs():
-                    st.caption(f"{job['name']} -> {job['next_run']}")
 
     # News Panel
     st.markdown("---")

@@ -378,6 +378,15 @@ FIN_POSITIVE_WEIGHTED = [
     ("outperform", 1), ("upgrade", 1), ("buy", 1), ("dividend", 1),
     ("cash flow", 1), ("momentum", 1), ("tailwind", 1),
     ("innovation", 1), ("partnership", 1), ("expansion", 1),
+    # English — geniş zaman / 3. tekil çekimler (2026-08-03).
+    # Liste yalnız geçmiş zaman kalıplarını taşıyordu ("raised guidance"),
+    # oysa manşetler ezici çoğunlukla geniş zamandır ("raises guidance").
+    # Bu yüzden US haberlerinde Katman 3 çoğu zaman 0 puan üretip nötr
+    # dönüyordu; dil kapısı BERT'i kapattığına göre bu boşluk kapanmalıydı.
+    ("beats expectations", 3), ("beats estimates", 3), ("tops estimates", 3),
+    ("raises guidance", 3), ("raises outlook", 3), ("lifts guidance", 3),
+    ("boosts guidance", 3), ("upgraded to buy", 3), ("raises dividend", 2),
+    ("better than feared", 2), ("record high", 2), ("beats on revenue", 2),
 ]
 
 FIN_NEGATIVE_WEIGHTED = [
@@ -462,6 +471,11 @@ FIN_NEGATIVE_WEIGHTED = [
     ("underperform", 1), ("insolvency", 1), ("share offering", 1),
     ("headwind", 1), ("slowdown", 1), ("recession", 1),
     ("uncertainty", 1), ("volatility", 1), ("risk-off", 1),
+    # English — geniş zaman / 3. tekil çekimler (bkz. pozitif listedeki not)
+    ("misses expectations", 3), ("misses estimates", 3), ("cuts guidance", 3),
+    ("slashes guidance", 3), ("lowers guidance", 3), ("lowers outlook", 3),
+    ("downgraded to underweight", 2), ("cuts dividend", 3),
+    ("suspends dividend", 3), ("misses on revenue", 2), ("plunges", 2),
 ]
 
 # Backward-compat flat lists (strong patterns ve _classify_keywords için)
@@ -848,10 +862,97 @@ def _is_technical_price_move(text: str) -> bool:
     return False
 
 
+# DİL TESPİTİ — Katman 2'nin (BERT) Türkçe modeli için kapı görevi görür.
+# Türkçe'ye özgü harfler İngilizce metinde bulunmaz; aksansız yazılmış kısa
+# başlıklar için işlev kelimesi sayımına düşülür.
+_TR_CHARS = frozenset("ğĞşŞıİöÖüÜçÇ")
+
+_TR_KELIMELER = frozenset({
+    "ve", "ile", "için", "icin", "bir", "bu", "olarak", "yüzde", "yuzde",
+    "oldu", "edildi", "açıkladı", "acikladi", "sonra", "göre", "gore",
+    "daha", "olan", "hisse", "hisseleri", "şirket", "sirket", "milyon",
+    "milyar", "kar", "kâr", "zarar", "yılın", "yilin", "üzerinde", "uzerinde",
+    "aldı", "aldi", "verdi", "yaptı", "yapti", "kazandı", "kazandi",
+    "ihale", "sözleşme", "sozlesme", "ortaklık", "ortaklik", "yatırım",
+})
+
+# İşlev kelimeleri TEK BAŞINA yetmiyor: finans manşetleri telgraf üslubunda
+# yazılır ve çoğu zaman hiç işlev kelimesi içermez ("Apple raises guidance").
+# Ölçüldü: o başlık ilk sürümde Türkçe sayılıp Türkçe BERT'e gidiyordu —
+# yani düzeltmenin engellemesi gereken durumun ta kendisi. Bu yüzden liste
+# manşet fiillerini ve finans isimlerini de kapsar.
+_EN_KELIMELER = frozenset({
+    # işlev kelimeleri
+    "the", "and", "of", "for", "to", "in", "on", "with", "its", "as",
+    "after", "said", "from", "that", "is", "are", "was", "were", "will",
+    "has", "have", "by", "at", "an", "this", "amid", "over", "against",
+    "than", "into", "but", "not", "his", "her", "their", "it", "on",
+    # manşet fiilleri
+    "raises", "raised", "beats", "beat", "cuts", "cut", "misses", "miss",
+    "reports", "posts", "announces", "says", "expects", "sees", "boosts",
+    "lifts", "slashes", "warns", "gains", "jumps", "falls", "rises",
+    "drops", "surges", "plunges", "tops", "hits", "soars", "slumps",
+    "upgrades", "downgrades", "launches", "unveils", "acquires",
+    # finans isimleri
+    "earnings", "revenue", "profit", "guidance", "quarter", "quarterly",
+    "shares", "stock", "stocks", "sales", "results", "outlook", "estimates",
+    "forecast", "dividend", "buyback", "analyst", "analysts", "target",
+    "million", "billion", "percent", "growth", "loss", "margin", "demand",
+})
+
+_WORD_RE = re.compile(r"[a-zA-ZçğıöşüÇĞİÖŞÜ]+")
+
+
+def _is_english(text: str) -> bool:
+    """Metin İngilizce mi? Hiç kanıt yoksa Türkçe varsayar.
+
+    Türkçe POZİTİF olarak tespit edilir: Türkçe'ye özgü harf varsa metin
+    Türkçedir, nokta. Gerçek Türkçe RSS manşetleri neredeyse her zaman en az
+    bir tanesini taşır. Harf yoksa Türkçe ve İngilizce kelime kanıtı sayılır.
+
+    Hata maliyeti asimetrik, ama sanılan yönde DEĞİL: Türkçe bir metni yanlışla
+    İngilizce saymak yalnızca BERT'i atlatır — Katman 1 ve 3 Türkçe kalıp ve
+    kelimeleri zaten içerdiği için sınıflandırma büyük ölçüde çalışmaya devam
+    eder. Tersi ise İngilizce metni Türkçe BERT'e sokar ve YÜKSEK GÜVENLE
+    yanlış etiket ürettirir. Yani şüphede kalındığında İngilizceye meyletmek
+    daha güvenli; varsayılan Türkçe yalnızca hiçbir kanıt yokken geçerlidir
+    (ör. salt ticker), ki o metin zaten nötr sınıflanır.
+    """
+    if not text:
+        return False
+    if any(c in _TR_CHARS for c in text):
+        return False
+    kelimeler = {w.lower() for w in _WORD_RE.findall(text)}
+    return len(kelimeler & _EN_KELIMELER) > len(kelimeler & _TR_KELIMELER)
+
+
+def _classify_english(text: str) -> str:
+    """İngilizce metin: Katman 1 (regex) + Katman 3 (finans sözlüğü). BERT YOK.
+
+    savasy/bert-base-turkish-sentiment-cased İngilizce girdiyi anlamsız OOV
+    parçalarına böler ama yine de çoğu zaman %70 üstü GÜVENLE bir etiket
+    üretir. Eşik aşıldığı için o etiket Katman 3'ün önüne geçiyordu — yani US
+    haberlerinde sistem, hiç anlamadığı bir metin hakkında "eminim" diyordu.
+    Yüksek güvenle yanlış olmak, nötr kalmaktan kötüdür.
+
+    Her iki katman da İngilizce kapsar: _STRONG_POS/NEG_PATTERNS ve
+    FIN_POSITIVE/NEGATIVE_WEIGHTED listelerindeki 'English' blokları.
+    _classify_keywords (POSITIVE_WORDS/NEGATIVE_WORDS) ise salt Türkçedir,
+    bu yüzden İngilizce yol oraya değil finans sözlüğüne bağlanır.
+    """
+    if not _is_technical_price_move(text):
+        strong = _check_strong_patterns(text)
+        if strong is not None:
+            logger.debug(f"EN güçlü override: {strong!r} | metin={text[:60]!r}")
+            return strong
+    return _classify_financial_keywords(text)
+
+
 def _classify(text: str) -> str:
     """
     Hibrit Sentiment Sınıflandırma:
     0. Boş/None metin kontrolü
+    0c. DİL KAPISI: metin İngilizce ise Türkçe BERT atlanır (bkz. _classify_english)
     1. TEKNİK FİYAT HAREKETİ → Katman 1 atlanır (yanlış override önlenir)
     2. BERT çalışıyorsa ve güven >= %70 → BERT kararı geçerli
     2. BERT çalışıyor ama güven < %70 → Finans anahtar kelimelerini dene
@@ -861,6 +962,10 @@ def _classify(text: str) -> str:
     # Boş metin kontrolü
     if not text or not text.strip():
         return "notr"
+
+    # KATMAN 0c: DİL KAPISI — Katman 2 Türkçe modeldir, İngilizce metin girmez
+    if _is_english(text):
+        return _classify_english(text)
 
     # KATMAN 0a: NEGASYON / BAĞLAM KONTROLÜ
     # "zarar azaldı" → olumlu, "kar düştü" → olumsuz gibi çift yönlü ifadeler

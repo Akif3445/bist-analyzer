@@ -22,7 +22,13 @@ Dürüstlük notları (sunumda belirtilecek):
     - Rebalanslar arası stop kontrolü yok (kalibrasyon geniş stopların
       sonuçları az değiştirdiğini gösterdi); ATR stoplar canlıda ek sigorta.
 
-Kullanım: python pipeline_backtest.py run   [yil_sayisi=5]   # tam simülasyon
+Tekrarlanabilirlik: evren backtest_evren.json'a, fiyat paneli yerel
+backtest_panel_<yil>y.pkl'e DONDURULUR. Tüm komutlar bu sabit paneli kullanır,
+yani aynı komut her koşuda aynı sayıyı verir (bkz. TEKRARLANABİLİRLİK ÇAPASI).
+
+Kullanım: python pipeline_backtest.py dondur [yil=5]        # evren+panel dondur
+          python pipeline_backtest.py run   [yil_sayisi=5]   # tam simülasyon
+          python pipeline_backtest.py karsilastir [yil=5]    # yönetilen vs yönetimsiz
           python pipeline_backtest.py sweep [yil_sayisi=5]   # yönetim kuralı taraması
           python pipeline_backtest.py validate [yil=8]        # örneklem-dışı doğrulama
 """
@@ -38,6 +44,16 @@ import yfinance as yf
 
 warnings.filterwarnings("ignore")
 
+# Konsol kodlaması: Windows'ta varsayılan cp1254, çıktıdaki '→' gibi karakterleri
+# kodlayamayıp UnicodeEncodeError ile koşuyu ÇÖKERTİYORDU — hem de sonuçlar
+# hesaplandıktan sonra, yazdırma sırasında. Saatlerce koşan bir simülasyonun
+# çıktısını bir ok işareti yüzünden kaybetmek kabul edilemez.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from bist_analyzer import (  # noqa: E402
     get_scan_universe, _sector_of, InflationEngine, BIST_STOCKS,
     BacktestEngine, _UNIVERSE_CACHE,
@@ -52,35 +68,129 @@ COST_RT      = 0.004      # round-trip %0.4 (uygulamayla tutarlı)
 RANDOM_SEEDS = 50
 
 
-def _download_panel(tickers, years):
-    """Kapanış/hacim panelleri (chunked bulk)."""
+# TEKRARLANABİLİRLİK ÇAPASI (2026-08-03)
+#
+# Ölçüldü: aynı komut iki kez koşturulduğunda panel 468 ve 464 hisse çıktı
+# (yfinance bazı sembolleri rastgele boş döndürüyor) ve 5 yıllık yönetimsiz
+# getiri %9738 → %7810 oynadı. 6 pozisyonluk yoğun bir portföyde iki üç
+# hissenin varlığı bileşik sonucu ~%20 kaydırıyor.
+#
+# Akademik sunumda savunulacak bir sayı, koşuya göre değişemez. Bu yüzden:
+#   1. EVREN dosyaya sabitlenir (backtest_evren.json — depoya girer, küçük)
+#   2. FİYAT PANELİ diske önbelleklenir (yerel, .gitignore — birebir tekrar)
+#   3. Başarısız semboller tek tek YENİDEN denenir (rastgele boş dönüşe karşı)
+#   4. feats sözlüğü SIRALI kurulur — dict sırası eşitlik bozmalarını ve
+#      rastgele-kontrol grubunun seçimini etkiliyordu
+# Panel silinirse donmuş evrenden yeniden indirilir; sembol listesi sabit
+# kaldığı için sonuç yine aynı çıkar.
+EVREN_DOSYA     = "backtest_evren.json"
+PANEL_ONBELLEK  = "backtest_panel_{yil}y.pkl"
+
+
+def _download_panel(tickers, years, tekrar=2):
+    """Kapanış/hacim panelleri (chunked bulk) + eksikleri yeniden deneme."""
     closes, vols = {}, {}
     period = f"{years + 2}y"
+
+    def _al(sembol_listesi, boyut):
+        for i in range(0, len(sembol_listesi), boyut):
+            parti = sembol_listesi[i:i+boyut]
+            try:
+                bulk = yf.download(parti, period=period, interval="1d",
+                                   auto_adjust=True, progress=False, group_by="ticker")
+                for s in parti:
+                    t = s[:-3]
+                    if t in closes:
+                        continue
+                    try:
+                        df = bulk[s] if isinstance(bulk.columns, pd.MultiIndex) else bulk
+                        cl = df["Close"].dropna()
+                        if len(cl) >= 260:
+                            closes[t] = cl
+                            vols[t] = df["Volume"].reindex(cl.index).fillna(0)
+                    except Exception:
+                        continue
+            except Exception as exc:
+                print(f"  indirme hatası (parti {i}): {exc}")
+
     syms = [t + ".IS" for t in tickers]
-    for i in range(0, len(syms), 100):
-        try:
-            bulk = yf.download(syms[i:i+100], period=period, interval="1d",
-                               auto_adjust=True, progress=False, group_by="ticker")
-            for s in syms[i:i+100]:
-                t = s[:-3]
-                try:
-                    df = bulk[s] if isinstance(bulk.columns, pd.MultiIndex) else bulk
-                    cl = df["Close"].dropna()
-                    if len(cl) >= 260:
-                        closes[t] = cl
-                        vols[t] = df["Volume"].reindex(cl.index).fillna(0)
-                except Exception:
-                    continue
-        except Exception as exc:
-            print(f"  indirme hatası (parti {i}): {exc}")
-        print(f"  veri: {min(i+100, len(syms))}/{len(syms)} sembol, {len(closes)} kullanılabilir")
+    _al(syms, 100)
+    print(f"  veri: {len(closes)}/{len(syms)} sembol (ilk geçiş)")
+
+    # Eksikleri küçük partilerle yeniden dene — yfinance toplu sorguda
+    # sembolleri sebepsiz boş döndürebiliyor, tekil istekte gelebiliyor.
+    for tur in range(tekrar):
+        eksik = [s for s in syms if s[:-3] not in closes]
+        if not eksik:
+            break
+        print(f"  eksik {len(eksik)} sembol yeniden deneniyor ({tur+1}/{tekrar})...")
+        _al(eksik, 10)
+        print(f"  veri: {len(closes)}/{len(syms)} sembol")
+    return closes, vols
+
+
+def _panel_hazirla(years=5, yenile=False):
+    """Donmuş evren + önbellekli fiyat paneli. Aynı girdi → aynı sayı.
+
+    İlk çağrıda evreni canlı çekip DONDURUR ve paneli diske yazar; sonraki
+    her koşu bu dosyaları kullanır. `yenile=True` ikisini de yeniden kurar
+    (yeni bir ölçüm dönemi başlatmak istendiğinde bilinçli olarak).
+    """
+    import hashlib
+    import json
+    import os
+    import pickle
+
+    onbellek = PANEL_ONBELLEK.format(yil=years)
+    if not yenile and os.path.exists(onbellek):
+        with open(onbellek, "rb") as f:
+            d = pickle.load(f)
+        print(f"Panel ÖNBELLEKTEN: {len(d['closes'])} hisse | dondurma {d['tarih']} "
+              f"| parmak izi {d['iz']}")
+        return d["closes"], d["vols"]
+
+    # Evren: dosyadan oku (varsa), yoksa canlı çek ve dondur
+    if os.path.exists(EVREN_DOSYA) and not yenile:
+        with open(EVREN_DOSYA, encoding="utf-8") as f:
+            meta = json.load(f)
+        uni = meta["tickers"]
+        print(f"Evren DOSYADAN: {len(uni)} hisse (donduruldu {meta['tarih']})")
+    else:
+        uni = list(get_scan_universe())      # likidite sıralı (bkz. get_scan_universe)
+        meta = {
+            "tarih": datetime.now().strftime("%Y-%m-%d"),
+            "kaynak": "get_scan_universe('BIST') — TradingView, hacme göre azalan",
+            "not": "Tekrarlanabilirlik çapası: backtest bu SABİT listeyi kullanır. "
+                   "Listeyi değiştirmek geçmiş sonuçları karşılaştırılamaz kılar.",
+            "tickers": uni,
+        }
+        with open(EVREN_DOSYA, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=1)
+        print(f"Evren DONDURULDU → {EVREN_DOSYA} ({len(uni)} hisse)")
+
+    closes, vols = _download_panel(uni, years)
+    iz = hashlib.sha256(
+        "|".join(f"{t}:{len(closes[t])}:{closes[t].iloc[-1]:.4f}"
+                 for t in sorted(closes)).encode()).hexdigest()[:12]
+    with open(onbellek, "wb") as f:
+        pickle.dump({"closes": closes, "vols": vols, "iz": iz,
+                     "tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                     "evren": len(uni)}, f)
+    print(f"Panel ÖNBELLEĞE yazıldı → {onbellek} | {len(closes)}/{len(uni)} hisse "
+          f"| parmak izi {iz}")
     return closes, vols
 
 
 def _precompute(closes, vols):
-    """Hisse başına 1 kez: momentum skor serisi, ATR%, TL hacim, getiri paneli."""
+    """Hisse başına 1 kez: momentum skor serisi, ATR%, TL hacim, getiri paneli.
+
+    SIRALI kurulur: dict ekleme sırası indirme sırasına bağlıydı, bu da
+    _pick_at'teki eşit skorların bozulmasını ve rastgele-kontrol grubunun
+    çekilişini koşudan koşuya değiştiriyordu.
+    """
     feats = {}
-    for t, cl in closes.items():
+    for t in sorted(closes):
+        cl = closes[t]
         try:
             df = pd.DataFrame({"Close": cl, "High": cl, "Low": cl, "Volume": vols[t]})
             scores, atr_s, _rsi = BacktestEngine._vectorized_scores(df, style="momentum")
@@ -140,25 +250,43 @@ def _pick_at(date, feats, ret_panel):
 
 
 def _walk(weights_by_date, closes, dates):
-    """Aylık hedef ağırlıklar → günlük NAV (devir maliyetli)."""
+    """Aylık hedef ağırlıklar → günlük NAV (devir maliyetli).
+
+    Ağırlıklar rebalanslar ARASINDA fiyatla sürüklenir (_walk_managed ile aynı
+    kurgu). Önceden `cur_w` ay boyunca sabit tutuluyordu; bu, portföyün her gün
+    sıfır maliyetle hedef ağırlığa döndürüldüğü anlamına gelir — yani yönetimsiz
+    referans modeli aslında GÜNLÜK ÜCRETSİZ REBALANS yapan bir modeldi. Bu,
+    kontrol grubunu haksız yere güçlendirir (bedava volatilite hasadı) ve
+    rebalans günündeki devir hesabını da bozar: sürüklenme yokken hedef
+    değişmediğinde devir 0 çıkar, gerçekte ise sürüklenmiş ağırlıkları hedefe
+    çekmek maliyetlidir. Yönetilen/yönetimsiz karşılaştırması ancak ikisi de
+    aynı fizik kurallarına tabiyken anlamlıdır.
+    """
     nav, cur_w = [1.0], {}
     rebal = sorted(weights_by_date)
     ri = 0
     for i in range(1, len(dates)):
         d0, d1 = dates[i-1], dates[i]
-        # günlük getiri
+        # günlük getiri + ağırlık kayması (fiyatı okunamayan isim ağırlığını korur)
         r = 0.0
+        drift = {}
         for t, w in cur_w.items():
+            g = 0.0
             cl = closes.get(t)
-            if cl is None:
-                continue
-            try:
-                p0 = cl.asof(d0); p1 = cl.asof(d1)
-                if pd.notna(p0) and pd.notna(p1) and p0 > 0:
-                    r += w * (p1 / p0 - 1)
-            except Exception:
-                continue
+            if cl is not None:
+                try:
+                    p0 = cl.asof(d0); p1 = cl.asof(d1)
+                    if pd.notna(p0) and pd.notna(p1) and p0 > 0:
+                        g = p1 / p0 - 1
+                        r += w * g
+                except Exception:
+                    g = 0.0
+            drift[t] = w * (1 + g)
         v = nav[-1] * (1 + r)
+        # Payları yeniden normalize et: _pick_at ağırlıkları 1.0'a topluyor
+        # (nakit yok), dolayısıyla toplam = 1 + r ve bölme payları tam korur.
+        toplam = sum(drift.values())
+        cur_w = {t: w / toplam for t, w in drift.items()} if toplam > 0 else {}
         # rebalans günü mü?
         while ri < len(rebal) and rebal[ri] <= d1:
             new_w = weights_by_date[rebal[ri]]
@@ -190,10 +318,7 @@ def _stats(nav, xu, label):
 def run(years=5):
     t0 = time.time()
     print(f"=== Tam-Pipeline Simülasyonu | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
-    universe = get_scan_universe()
-    print(f"Evren: {len(universe)} hisse (bugünün likit listesi — survivorship notu raporda)")
-
-    closes, vols = _download_panel(universe, years)
+    closes, vols = _panel_hazirla(years)
     feats = _precompute(closes, vols)
     print(f"Öznitelikler: {len(feats)} hisse ({time.time()-t0:.0f}s)")
 
@@ -226,7 +351,7 @@ def run(years=5):
 
     # 3) RASTGELE-6 (50 tohum)
     rng_navs = []
-    all_t = list(feats.keys())
+    all_t = sorted(feats)   # deterministik: dict sırası koşudan koşuya değişiyordu
     for seed in range(RANDOM_SEEDS):
         rng = np.random.default_rng(seed)
         wbd_r = {}
@@ -454,8 +579,7 @@ def sweep(years=5):
     Sharpe, MaxDD ve YIL BAZINDA tutarlılık."""
     t0 = time.time()
     print(f"=== Yönetim Kuralı Taraması | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
-    universe = get_scan_universe()
-    closes, vols = _download_panel(universe, years)
+    closes, vols = _panel_hazirla(years)
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
     print(f"Panel: {len(feats)} hisse ({time.time()-t0:.0f}s)")
@@ -566,8 +690,7 @@ def validate(years=8):
     """
     t0 = time.time()
     print(f"=== Örneklem-Dışı Doğrulama | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
-    universe = get_scan_universe()
-    closes, vols = _download_panel(universe, years)
+    closes, vols = _panel_hazirla(years)
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
 
@@ -659,6 +782,67 @@ def validate(years=8):
     return onaylanan
 
 
+def karsilastir(years=5):
+    """YÖNETİLEN vs YÖNETİMSİZ — sunumun merkez tablosu, tek komutla tekrarlanır.
+
+    Bu karşılaştırma 2026-08-03'e kadar YANLIŞTI ve yanlışlığı sonucu tersine
+    çeviriyordu. Sebep: _walk_managed ağırlıkları fiyatla sürüklerken _walk
+    onları rebalanslar arasında SABİT tutuyordu, yani yönetimsiz referans her
+    gün sıfır maliyetle hedef ağırlığa dönen, gerçekleştirilemez bir portföydü.
+    Trend piyasada bu her gün kazananı budamak demek — referansı yapay olarak
+    zayıflatıyordu. İki taraf aynı fiziğe tabi olunca yönetimin katkısı
+    getiride ARTI değil EKSİ çıkıyor; kazanç düşüş korumasında.
+
+    Donmuş panel kullanır (bkz. _panel_hazirla), yani sayı koşudan koşuya
+    değişmez — akademik sunumda savunulabilirliğin ön şartı.
+    """
+    t0 = time.time()
+    print(f"=== Yönetim Karşılaştırması | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    start = xu.index[-1] - pd.DateOffset(years=years)
+    dates = list(xu.index[xu.index >= start])
+    rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
+    rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
+    wbd = {}
+    for d in rebal_dates:
+        w = _pick_at(d, feats, ret_panel)
+        if w:
+            wbd[d] = w
+    print(f"Panel {len(feats)} hisse | {len(wbd)}/{len(rebal_dates)} rebalans "
+          f"| {dates[0]:%Y-%m-%d} → {dates[-1]:%Y-%m-%d} ({time.time()-t0:.0f}s)\n")
+    print(f"Yönetim parametreleri: {MGMT_VARSAYILAN}\n")
+
+    xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
+    nav_u = _walk(wbd, closes, dates)
+    nav_m = _walk_managed(wbd, closes, dates, feats, dict(MGMT_VARSAYILAN))
+
+    print("=" * 118)
+    su = _stats(nav_u, xu_n, "YÖNETİMSİZ (aylık reb.)")
+    sm = _stats(nav_m, xu_n, "YÖNETİLEN (günlük)")
+    sx = _stats(xu_n, xu_n, "XU100")
+    print("=" * 118)
+    print(f"\nYÖNETİMİN KATKISI: reel CAGR {sm['reel_yillik']-su['reel_yillik']:+.1f} puan | "
+          f"MaxDD {sm['maxdd']-su['maxdd']:+.1f} puan | Sharpe {sm['sharpe']-su['sharpe']:+.2f}")
+    print(f"İşlem maliyeti (yönetilen, kümülatif): %{nav_m.attrs.get('maliyet', 0)*100:.1f}")
+    if sm["reel_yillik"] < su["reel_yillik"]:
+        print("OKUMA: Yönetim getiri ÜRETMİYOR, risk AZALTIYOR — düşüşü kısmanın "
+              "bedeli reel getiriden ödeniyor. Sunumda böyle sunulmalı.")
+    else:
+        print("OKUMA: Yönetim hem getiriyi hem riski iyileştiriyor.")
+
+    out = pd.DataFrame({"yonetimsiz": nav_u, "yonetilen": nav_m, "xu100": xu_n})
+    out.to_csv("pipeline_yonetim.csv")
+    print(f"\npipeline_yonetim.csv yazıldı | toplam süre {time.time()-t0:.0f}s")
+
+
 if __name__ == "__main__":
     yrs = int(sys.argv[2]) if len(sys.argv) > 2 else 5
     _cmd = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -668,5 +852,13 @@ if __name__ == "__main__":
         sweep(yrs)
     elif _cmd == "validate":
         validate(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
+    elif _cmd == "dondur":
+        # Ölçüm dönemini yeniden başlat: evreni ve paneli SIFIRDAN kurar.
+        # Bilinçli bir eylem olmalı — eski sonuçlar bundan sonra
+        # karşılaştırılamaz hâle gelir (bkz. TEKRARLANABİLİRLİK ÇAPASI).
+        _panel_hazirla(yrs, yenile=True)
+        print("Dondurma tamam. Bundan sonraki run/sweep/validate bu paneli kullanır.")
+    elif _cmd == "karsilastir":
+        karsilastir(yrs)
     else:
         print(__doc__)

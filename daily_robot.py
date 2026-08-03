@@ -22,7 +22,61 @@ from datetime import datetime
 
 warnings.filterwarnings("ignore")
 
+# Elle koşuda (Windows konsolu cp1254) çıktıdaki emoji/ok karakterleri
+# UnicodeEncodeError veriyordu. Actions'ta zaten UTF-8, orada etkisiz.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import bist_analyzer as ba  # noqa: E402
+
+
+def _rejim_tablosu() -> None:
+    """pm_regime_history şeması: PK (date) → PK (date, market).
+
+    Eski şema günde TEK satır tutuyordu. İki piyasa yazılınca ikincisi
+    birincisini eziyordu; pratikte US rejimi BIST'inkini siliyordu, yani
+    rejim geçmişi hem eksik hem de hangi piyasaya ait olduğu belirsizdi.
+
+    SQLite'ta PRIMARY KEY yerinde değiştirilemez, tablo yeniden kurulur.
+    Mevcut satırların hepsi compute_market_regime() VARSAYILANIYLA, yani
+    BIST rejimiyle yazılmıştı → market='BIST' olarak taşınır (kayıpsız).
+    'vix' kolonu US için eklendi; BIST'te NULL kalır (usdtry_1m'in US'te
+    NULL kalması gibi) — iki piyasanın stres göstergesi farklı büyüklükler
+    olduğu için tek kolona bindirmek analizi yanıltırdı.
+
+    Adımlar tek execute_batch'te gönderilir. Yarıda kesilse bile kendini
+    onarır: veri v2'ye kopyalandıktan sonra düşer, sonraki koşu boş tabloyu
+    yeniden kurup INSERT OR IGNORE ile devam eder.
+    """
+    ba._PMDB.execute("""
+        CREATE TABLE IF NOT EXISTS pm_regime_history (
+            date TEXT PRIMARY KEY, regime TEXT, score INTEGER,
+            breadth REAL, usdtry_1m REAL
+        )
+    """)
+    kolonlar = {c.get("name") for c in ba._PMDB.execute(
+        "SELECT name FROM pragma_table_info('pm_regime_history')")["rows"]}
+    if "market" in kolonlar:
+        return
+    ba._PMDB.execute_batch([
+        ("""CREATE TABLE IF NOT EXISTS pm_regime_history_v2 (
+                date TEXT, market TEXT, regime TEXT, score INTEGER,
+                breadth REAL, usdtry_1m REAL, vix REAL,
+                PRIMARY KEY (date, market)
+            )""", ()),
+        ("INSERT OR IGNORE INTO pm_regime_history_v2 "
+         "(date, market, regime, score, breadth, usdtry_1m) "
+         "SELECT date, 'BIST', regime, score, breadth, usdtry_1m "
+         "FROM pm_regime_history", ()),
+        ("DROP TABLE pm_regime_history", ()),
+        ("ALTER TABLE pm_regime_history_v2 RENAME TO pm_regime_history", ()),
+    ])
+    # ASCII ok: Windows konsolu (cp1254) '→' karakterini kodlayamıyor ve
+    # elle koşuda UnicodeEncodeError veriyor.
+    print("       pm_regime_history: (date) -> (date, market) semasina tasindi")
 
 
 def main() -> int:
@@ -39,13 +93,17 @@ def main() -> int:
         print("CI ortamında lokal SQLite'a yazmak anlamsız — çıkılıyor.")
         return 1
 
-    # 1) NAV güncelle
-    try:
-        ba.PortfolioManager.update_navs()
-        n_port = len(ba.PortfolioManager.active_portfolios())
-        print(f"[1/4] NAV güncellendi ({n_port} aktif portföy)")
-    except Exception as exc:
-        print(f"[1/4] NAV hatası: {exc}")
+    # 1) NAV güncelle — yalnız işlenen piyasa(lar)
+    # Kısıtsız çağrı (market=None) her iki piyasayı yazıyordu; 15:40 turunda bu,
+    # US NAV'ını seans ORTASINDAKİ fiyatla kaydetmek demekti. Kararları kapanışa
+    # taşıyıp performans defterini yarım günün fiyatıyla tutmak tutarsız olurdu.
+    for _mkt in _piyasalar:
+        try:
+            ba.PortfolioManager.update_navs(market=_mkt)
+            n_port = len(ba.PortfolioManager.active_portfolios(market=_mkt))
+            print(f"[1/4]  [{_mkt}] NAV güncellendi ({n_port} aktif portföy)")
+        except Exception as exc:
+            print(f"[1/4]  [{_mkt}] NAV hatası: {exc}")
 
     # 2) Haftalık işler (kendi hafta korumaları var — gerekmiyorsa dokunmaz)
     try:
@@ -57,8 +115,15 @@ def main() -> int:
 
     # Gölge + kontrol setleri — her piyasa için ayrı (BIST ve US bağımsız
     # kohortlar biriktirir; biri hata verse diğeri koşmaya devam etmeli)
+    #
+    # DİKKAT: burası eskiden kısıtlı turda (`_only` doluyken) HİÇ koşmuyordu
+    # (`_piyasalar if not _only else ()`). Erken tur kısıtsız olduğu için o
+    # zaman zararsızdı; artık her iki tur da kısıtlı, dolayısıyla o hâliyle
+    # haftalık kohortlar hiçbir zaman oluşmazdı — gölge deneyinin tamamı
+    # sessizce dururdu. Mükerrer koşma riski yok: hafta+piyasa bazlı
+    # eksik_g/eksik_k kontrolü zaten idempotentlik sağlıyor.
     week = datetime.now().strftime("%G-W%V")
-    for _mkt in (_piyasalar if not _only else ()):
+    for _mkt in _piyasalar:
         try:
             rows = ba._PMDB.execute(
                 "SELECT COUNT(*) AS c FROM pm_portfolios WHERE kind='golge' AND horizon != 'kontrol' "
@@ -217,22 +282,22 @@ def main() -> int:
     except Exception as exc:
         print(f"[3.5]  Kalibrasyon hatası: {exc}")
 
-    # 4) Rejim günlüğü
+    # 4) Rejim günlüğü — YALNIZ işlenen piyasa(lar) için
     try:
-        regime = ba.compute_market_regime()
-        ba._PMDB.execute("""
-            CREATE TABLE IF NOT EXISTS pm_regime_history (
-                date TEXT PRIMARY KEY, regime TEXT, score INTEGER,
-                breadth REAL, usdtry_1m REAL
-            )
-        """)
-        ba._PMDB.execute(
-            "INSERT OR REPLACE INTO pm_regime_history (date, regime, score, breadth, usdtry_1m) VALUES (?,?,?,?,?)",
-            (datetime.now().strftime("%Y-%m-%d"), regime["regime"], regime["score"],
-             regime.get("breadth"), regime.get("usdtry_1m")))
-        print(f"[4/4] Rejim kaydı: {regime['regime']} ({regime['score']}/7)")
+        _rejim_tablosu()
     except Exception as exc:
-        print(f"[4/4] Rejim kaydı hatası: {exc}")
+        print(f"[4/4] Rejim tablosu hazırlanamadı: {exc}")
+    for _mkt in _piyasalar:
+        try:
+            regime = ba.compute_market_regime(_mkt)
+            ba._PMDB.execute(
+                "INSERT OR REPLACE INTO pm_regime_history "
+                "(date, market, regime, score, breadth, usdtry_1m, vix) VALUES (?,?,?,?,?,?,?)",
+                (datetime.now().strftime("%Y-%m-%d"), _mkt, regime["regime"], regime["score"],
+                 regime.get("breadth"), regime.get("usdtry_1m"), regime.get("vix")))
+            print(f"[4/4]  [{_mkt}] Rejim kaydı: {regime['regime']} ({regime['score']}/7)")
+        except Exception as exc:
+            print(f"[4/4]  [{_mkt}] Rejim kaydı hatası: {exc}")
 
     print("=== Robot tamamlandı ===")
     return 0

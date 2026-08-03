@@ -24,6 +24,14 @@ import sys
 import time
 from datetime import datetime, timedelta
 
+# Windows konsolu (cp1254) çıktıdaki '→' gibi karakterleri kodlayamayıp
+# koşuyu çökertiyor — üstelik saatler süren bir kalibrasyonun sonunda.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import numpy as np
 import pandas as pd
 import requests
@@ -468,14 +476,46 @@ US_HORIZONS = [1, 3, 7, 14, 30, 60, 90]
 US_PANEL_N  = 120   # en likit N US hissesi — kesitsel IC için fazlasıyla yeterli
 
 
+US_EVREN_DOSYA = "calib_evren_us.json"
+
+
 def _us_tickers(n: int = US_PANEL_N, offset: int = 0) -> list:
-    """Likiditeye göre sıralı US evreninden N hisse.
+    """Likiditeye göre sıralı US evreninden N hisse — DONDURULMUŞ.
 
     offset=0   → en likit (mega-cap, en verimli segment)
     offset=300 → orta ölçek (daha az takip edilen; teknik kenar burada olabilir)
+
+    İki düzeltme (2026-08-03):
+    1) get_scan_universe artık hacme göre AZALAN sıralı dönüyor. Öncesinde
+       TradingView'in ham sırası kullanılıyordu, yani bu dilim "likidite
+       sırası 300-420" DEĞİLDİ — segment tanımı ile ölçülen şey uyuşmuyordu.
+       Mega/orta ölçek karşılaştırmasının tamamı bu dilimlemeye dayandığı
+       için önceki US bulguları bu düzeltmeden sonra yeniden ölçülmüştür.
+    2) Seçilen liste dosyaya dondurulur. US evreni her gün değişiyor (canlı
+       TV sorgusu); dondurulmazsa "aynı analizi tekrarla" mümkün olmaz ve
+       IC/t-istatistikleri koşudan koşuya oynar.
     """
+    import json
+    import os
     from bist_analyzer import get_scan_universe
-    return get_scan_universe("US")[offset:offset + n]
+
+    anahtar = f"{offset}_{n}"
+    donmus = {}
+    if os.path.exists(US_EVREN_DOSYA):
+        with open(US_EVREN_DOSYA, encoding="utf-8") as f:
+            donmus = json.load(f)
+        if anahtar in donmus:
+            print(f"  US evreni dosyadan: {anahtar} ({len(donmus[anahtar]['tickers'])} hisse, "
+                  f"donduruldu {donmus[anahtar]['tarih']})")
+            return donmus[anahtar]["tickers"]
+
+    secim = get_scan_universe("US")[offset:offset + n]
+    donmus[anahtar] = {"tarih": datetime.now().strftime("%Y-%m-%d"),
+                       "offset": offset, "n": n, "tickers": secim}
+    with open(US_EVREN_DOSYA, "w", encoding="utf-8") as f:
+        json.dump(donmus, f, ensure_ascii=False, indent=1)
+    print(f"  US evreni DONDURULDU → {US_EVREN_DOSYA} [{anahtar}] ({len(secim)} hisse)")
+    return secim
 
 
 def build_tech_us(offset: int = 0, csv_yol: str = None):
