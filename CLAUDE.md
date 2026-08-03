@@ -118,15 +118,14 @@ Cause: `_walk_managed` let position weights drift with price between rebalances,
 
 **Clean re-measurement** — frozen panel, 468 stocks, 2021-08-03 → 2026-08-03, fingerprint `d06dee9a3d6a`, run twice with byte-identical output (`python pipeline_backtest.py karsilastir`):
 
-| | Nominal | ENAG-real | **Real CAGR** | MaxDD | **Sharpe** |
-|---|---|---|---|---|---|
-| Unmanaged (monthly rebal.) | +9760% | +295.5% | **+31.7%** | −49.1% | **0.92** |
-| Managed (daily) | +4860% | +99.0% | **+14.8%** | **−25.8%** | 0.71 |
-| XU100 | +858% | −61.6% | −17.4% | −22.9% | −0.54 |
+| | Nominal | **Sharpe** | MaxDD |
+|---|---|---|---|
+| Unmanaged (monthly rebal.) | +9760% | 0.92 | −49.1% |
+| Managed, `takas_farki=12` (old default) | +4860% | 0.71 | −25.8% |
+| **Managed, `takas_farki=6` (current)** | **+13552%** | **1.48** | **−19.7%** |
+| XU100 | +858% | −0.54 | −22.9% |
 
-**Management costs ~17 points of real CAGR and buys ~23 points of drawdown protection.** Sharpe drops 0.92 → 0.71, so it is not even a risk-adjusted win on this sample — the drawdown reduction is real but is paid for with more return than the volatility reduction justifies. Cumulative transaction cost of the managed track: 11.8%.
-
-> **Read the `takas_farki` section below before quoting this table.** These managed figures use `takas_farki=12`, which the project's own out-of-sample validation rejects on both windows. With the validated setting the managed track beats unmanaged on return, drawdown *and* Sharpe. This table is kept because it is what the shipped defaults actually produce — it is a statement about the current configuration, not about the management layer's potential.
+**With the swap threshold at its corrected value the management layer wins on all three axes** — more return, roughly half the volatility-adjusted risk, and drawdown cut from −49.1% to −19.7%. The middle row is what the *previous* default produced and is kept only to show how much a single mis-set parameter cost: at 12 the layer could not adopt each month's fresh picks and carried stale names (see the `takas_farki` table below).
 
 ### Same comparison over 8 years, including the 2018 and 2020 crises
 
@@ -138,16 +137,13 @@ The five-year window is entirely a BIST bull market — exactly where downside i
 | Managed | +10756% | +27.5% | +3.1% | **−25.8%** | 0.25 |
 | XU100 | +1307% | −83.5% | −20.1% | −31.8% | −0.72 |
 
-**The price of the insurance collapses once the window contains crises**, and the protection grows:
+**With `takas_farki=6` the managed track wins here too**, and by more than it does over five years: real CAGR **+15.6% vs +7.4%** unmanaged, MaxDD **−25.2% vs −69.9%**, Sharpe **0.71 vs 0.39**. The `takas_farki=12` row above is the old default and is kept for the same reason as in the 5-year table.
 
-| | 5y (bull only) | 8y (with 2018 + 2020) |
-|---|---|---|
-| Real CAGR given up | −16.9 pts | **−4.3 pts** |
-| Drawdown avoided | +23.3 pts | **+44.1 pts** |
+So the "management trades return for risk" framing that stood for a few hours on 2026-08-03 is **withdrawn on both windows**. It was never a trade-off; it was one mis-set parameter.
 
-### …but both tables above measure the management layer with a parameter its own validation rejects
+### The parameter that did all of this
 
-`MGMT_VARSAYILAN["takas_farki"] = 12`, and `validate` rejected that value on **both** windows in favour of 0. Measured on the 8-year panel, varying only `takas_farki`:
+`MGMT_VARSAYILAN["takas_farki"]` was 12, and `validate` rejected that value on **both** windows in favour of 0. Measured on the 8-year panel, varying only `takas_farki`:
 
 | `takas_farki` | Real CAGR | MaxDD | Sharpe | Cost | Out-of-sample test half |
 |---|---|---|---|---|---|
@@ -155,7 +151,7 @@ The five-year window is entirely a BIST bull market — exactly where downside i
 | 3 | +14.3% | −25.2% | 0.66 | 22.9% | +3508% |
 | **6** | **+15.6%** | −25.2% | **0.71** | 22.3% | +4011% |
 | 9 | +4.9% | −25.8% | 0.32 | 21.7% | +1969% |
-| **12 (current live value)** | **+3.1%** | −25.8% | **0.25** | 20.1% | +1477% |
+| **12 (old default, superseded)** | **+3.1%** | −25.8% | **0.25** | 20.1% | +1477% |
 | 20 | +3.3% | −25.5% | 0.26 | 18.8% | +1950% |
 
 **There is a cliff between 6 and 9, and a flat plateau below it** — this is a robust result, not a tuned optimum: any value ≤6 gives ~+15% real CAGR and Sharpe ~0.7, any value ≥9 gives ~+3-5% and Sharpe ~0.25.
@@ -166,11 +162,29 @@ The five-year window is entirely a BIST bull market — exactly where downside i
 
 Caveat on precision: the full-window figures are partly in-sample, since the parameter was chosen on the first 60% of the same window. The clean number is the out-of-sample column above (test half 2023-05 → 2026-08, which took no part in the choice), and it tells the same story with the same cliff.
 
-**Corrected reading, superseding the two tables above:** the management layer is *not* a return-for-risk trade. Configured as its own validation says it should be, it improves return, drawdown and Sharpe simultaneously. The earlier "management buys drawdown protection and pays for it out of real return" conclusion was an artifact of measuring it throttled. What survives from that discussion is the honest note that Sharpe under-prices drawdown — but it is no longer needed as a defence, because Sharpe now favours the managed track too.
+**Corrected reading, superseding everything above it:** the management layer is *not* a return-for-risk trade. Configured as its own validation says it should be, it improves return, drawdown and Sharpe simultaneously on both windows. The "management buys drawdown protection and pays for it out of real return" conclusion was an artifact of measuring it throttled. What survives from that discussion is the honest note that Sharpe under-prices drawdown — but it is no longer needed as a defence, because Sharpe now favours the managed track too.
 
-**All sweep/validate numbers below predate the `_walk` fix and the frozen panel — they are STALE.** The sweep's own reference line is `_walk` ([pipeline_backtest.py:509](pipeline_backtest.py:509)), so every "vs default" figure was measured against the crippled baseline, and every run used a differently-sized panel. `sweep` and `validate` must be re-run before any of it is quoted. The *method* described here still stands; the numbers do not.
+**Methodological lesson worth telling in the presentation.** Three separate conclusions in this project turned out to be artifacts of a measurement error rather than facts about markets: management appearing to destroy value (`_walk` fixed weights), the drawdown brake appearing catastrophic (all-time-peak `cummax`), and the trailing stop appearing to be pure cost (measured while `takas_farki` blocked replacements). In each case the reported number was confidently wrong and internally consistent. The defence that actually worked was not intuition — every one of these was intuitive — but re-measurement under a changed assumption.
 
-Two proposals passed the gate and await editor approval: `takas_farki` 12→6 (+6466%, 6/6 years) and `max_pozisyon` 30→40 (+90%, 5/6 years). `trailing_pct` scored best when **disabled** (+7344%) but was correctly rejected at 4/6 years — and that rejection is the point: the sample is a 5-year bull market, so any disaster insurance looks like pure cost. Same reasoning as the earlier `analyze-stops` finding. The discipline parameters (`min_tutma_gun`, `bekleme_gun`, `gunluk_islem`) are deliberately **not** swept — they are anti-churn constraints, not free variables.
+### Sweep re-run 2026-08-03 — every parameter now says DON'T CHANGE, and the old proposals were interaction artifacts
+
+Frozen 5-year panel, `takas_farki=6` as the new default. Reference: unmanaged +9760%, Sharpe 0.92, MaxDD −49.1%.
+
+| Parameter | Best value | Default | Verdict |
+|---|---|---|---|
+| `trailing_pct` | 20 (+2286% over default) | 15 | no change — only 3/6 years |
+| `dusus_freni` | 15 | 15 | already optimal |
+| `max_pozisyon` | 30 | 30 | already optimal |
+| `takas_farki` | 6 | 6 | already optimal |
+
+**The two proposals that were pending approval have evaporated, and that is the important finding.** They were:
+
+- `max_pozisyon` 30→40 — now 40 scores *worse* than 30 (+12926% vs +13552%). Its earlier advantage existed only while `takas_farki=12` starved the portfolio of fresh names; a wider position cap partly compensated for a portfolio that could not rotate. Fix the rotation and the compensation becomes harmful.
+- `trailing_pct` **disabled** used to score best (+7344%). Now disabling it (`=100`) gives +10942% against +13552% for the default 15 — **the trailing stop earns its keep once the portfolio actually rotates.** Previously it was cutting positions the layer then could not replace.
+
+This is bias #6 on the list below (one-factor-at-a-time) biting hard: with `takas_farki` mis-set, single-parameter sweeps were measuring compensations for that error rather than the parameters themselves. Any future single-parameter conclusion should be re-checked whenever a different parameter moves.
+
+Method note (unchanged): acceptance requires the return difference to exceed 5% **and** the better value to win in nearly every calendar year. Proposals go to `pm_param_oneri` and are **never applied automatically**. The discipline parameters (`min_tutma_gun`, `bekleme_gun`, `gunluk_islem`) are deliberately **not** swept — they are anti-churn constraints, not free variables.
 
 ### Backtest results in REAL terms, and the bias list (2026-07-30)
 
@@ -273,6 +287,10 @@ Regime logging is per market too, and `pm_regime_history` was migrated from `PRI
 Two point-in-time panels, same Grinold-Kahn method as BIST (120 stocks × 6y × weekly, ~28k observations each), via `weight_calibration.py build-tech-us` / `build-tech-us-mid` + `analyze-us` / `analyze-us-mid`:
 
 - **Mega-cap (120 most liquid):** momentum IC +0.0065 (t=0.53) — insignificant, sign flips across sub-periods. Contrarian IC −0.0136 (t=−1.31), consistently on the *wrong* side. No technical edge in the world's most efficient segment.
+
+> **Mega-cap re-measured 2026-08-03** after the universe sort (117 stocks, 25,794 obs). The momentum half replicated exactly — IC +0.0062 (t=0.47) at 30d, sign still flipping across sub-periods (−0.0223 / +0.0367). **The contrarian claim did not.** It is now +0.0085 (t=0.69) at 30d and **+0.0622 (t=5.33) at 90d** — the largest single t-statistic anywhere in the mega-cap table, where the old note said it was "consistently on the wrong side."
+>
+> **Do not act on that t-statistic.** Contrarian's 30-day sub-period signs also flip (+0.0321 / −0.0167), which is the same episodic pattern already documented for 52-week position: a large full-sample number carried by one sub-period, not a durable effect. Switching US to contrarian on the strength of one t=5.33 would repeat precisely the mistake this file keeps recording. What the re-measurement actually establishes is weaker and more useful: **neither style has a stable edge in US mega-caps**, so the earlier justification for `_tech_style_for` returning `"momentum"` ("contrarian is reliably wrong") is withdrawn, and the real justification is the regime-conditional result below plus the mid-cap contrarian sign. Both styles' unconditional verdict on the corrected panel is the tool's own: *do not use the US score alone as a ranking.*
 - **Mid-cap (liquidity ranks 300–420):** momentum IC +0.0212 (**t=2.06**), **stable across sub-periods**. 52-week position t=2.14, RSI t=2.27 also signal.
 
 > ### ⚠️ The mid-cap result above did NOT replicate (re-measured 2026-08-03)
@@ -338,12 +356,12 @@ Goal: system that credibly beats index and targets ENAG-real returns; academic-g
 
 Consequence for the live experiment: managed shadow cohorts from W29 onward carry a before/after break at this date. With ~3 weeks of history the statistical cost was near zero, and running production on the wrong side of a measured cliff until October was the larger risk.
 
-Re-runs still owed:
+**All re-runs are done** (2026-08-03): `run`, `karsilastir` 5y and 8y, `validate 8`, `sweep 5`, `build-tech-us` + `analyze-us`, `build-tech-us-mid` + `analyze-us-mid`, `analyze-us-regime`. Every number quoted in this file now comes from the frozen panels.
 
-1. **`sweep`** — genuinely invalidated by the `_walk` fix: its "YÖNETİMSİZ (referans)" line *is* `_walk` ([pipeline_backtest.py:509](pipeline_backtest.py:509)), so every "vs default" figure was measured against the crippled baseline. The pending parameter proposals rest on it. (`validate` has already re-run and replicated, so the conclusions survive — but the sweep's own printed numbers do not.)
-2. **`analyze-us`** (mega-cap panel) — built from `get_scan_universe("US")[:120]`, which the sort also changed.
-
-Done in this pass: `run`, `karsilastir` (5y and 8y), `validate 8`, `build-tech-us-mid` + `analyze-us-mid` + `analyze-us-regime`.
+Remaining methodology work, in priority order:
+1. **Walk-forward with multiple folds** — `validate`'s single 60/40 split puts both crises in the training half, so parameters are still validated on a bull holdout. This is the largest open weakness.
+2. **A margin on `validate`'s acceptance gate** — currently bare `t_s > t_v` while `sweep` demands >5% plus year-by-year consistency; the more permissive check has the final word.
+3. **8-year `sweep`** — the 5-year sweep now says every parameter is at its optimum, but that is a bull-only window.
 
 Note on what each command answers, because these got conflated once already: `validate` tests whether *parameter choices* survive out of sample; it compares `_walk_managed` to `_walk_managed` and says nothing about whether the management layer is worth having. That question is `karsilastir`.
 

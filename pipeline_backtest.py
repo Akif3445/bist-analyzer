@@ -405,13 +405,20 @@ def run(years=5):
 # değer ancak çoğu alt dönemde tutarlıysa "iyi" sayılır. Tek bir toplam sayıya
 # bakıp parametre seçmek, tam da kaçınmak istediğimiz aşırı-uyum hatasıdır.
 
-MGMT_VARSAYILAN = {
-    "trailing_pct": 15.0,   # zirveden geri verme toleransı
-    "dusus_freni":  15.0,   # portföy düşüşünde yeni alım freni
-    "max_pozisyon": 30.0,   # tek pozisyon tavanı (oran olarak 0.30)
-    "skor_cikis":   43.0,   # skor bu seviyenin altına düşerse çık
-    "takas_farki":  12.0,   # aday, tutulandan bu kadar iyiyse değiştir
-}
+# CANLI KURALLARDAN TÜRETİLİR — elle kopyalanmaz.
+#
+# Burası eskiden bağımsız bir sözlüktü ve sürüklendi: PortfolioDoctor.KURAL'da
+# takas_farki 12 → 6 yapıldığında bu kopya 12'de kaldı, yani tarama üretimde
+# artık geçerli olmayan bir "varsayılan"a karşı ölçüm yapacaktı. Aynı sayının
+# iki yerde yaşaması, tam da bu projede birkaç kez canımızı yakan hata sınıfı
+# (bkz. _walk vs _walk_managed). Tek kaynak: bist_analyzer.PortfolioDoctor.KURAL.
+def _mgmt_varsayilan() -> dict:
+    from bist_analyzer import PortfolioDoctor
+    return {k: float(PortfolioDoctor.KURAL[k]) for k in
+            ("trailing_pct", "dusus_freni", "max_pozisyon", "skor_cikis", "takas_farki")}
+
+
+MGMT_VARSAYILAN = _mgmt_varsayilan()
 
 
 def _skor_at(feats, t, date):
