@@ -21,7 +21,8 @@ python pipeline_backtest.py dondur-evren # re-fetch the UNIVERSE — new epoch, 
 python pipeline_backtest.py run         # full pipeline sim vs XU100 / BIST-30 / random-6
 python pipeline_backtest.py karsilastir # managed vs unmanaged — the presentation's core table
 python pipeline_backtest.py sweep       # management-rule parameter sweep
-python pipeline_backtest.py validate 8  # out-of-sample validation (8y, train/test split)
+python pipeline_backtest.py validate 8  # out-of-sample validation (8y, single 60/40 split)
+python pipeline_backtest.py walkforward 8 5  # walk-forward: 5 expanding folds (stricter)
 ```
 
 `tools/pmdb_admin.py` exists so DB maintenance doesn't require handing Claude Code a blanket "run any Python" permission — the local `.claude/settings.local.json` allows only `python tools/pmdb_admin.py:*`, so the possible operations are bounded by this script's subcommands. Add new maintenance actions as subcommands here rather than widening the permission rule.
@@ -374,10 +375,43 @@ Consequence for the live experiment: managed shadow cohorts from W29 onward carr
 
 **All re-runs are done** (2026-08-03): `run`, `karsilastir` 5y and 8y, `validate 8`, `sweep 5`, `build-tech-us` + `analyze-us`, `build-tech-us-mid` + `analyze-us-mid`, `analyze-us-regime`. Every number quoted in this file now comes from the frozen panels.
 
+### Walk-forward validation (2026-08-05) — `pipeline_backtest.py walkforward [yil] [katman]`
+
+Replaces `validate`'s single 60/40 split with an expanding window: the period is cut into `katman+1` slices and each fold trains on everything before its test slice. Every test slice is chronologically *after* its training data and takes no part in the choice. Acceptance is stricter than `validate` on purpose — a change must win in **more than half the folds** and by **more than 5%**, where `validate`'s bare `t_s > t_v` accepted a 0.1% edge.
+
+**Section 1 — is the management layer worth having, period by period?** NAVs come from one continuous run (the portfolio is not reset each period, so entry costs are not repeated). 8-year panel, `takas_farki=6`:
+
+| Period | Unmanaged | Managed |
+|---|---|---|
+| 2018-08→2019-12 | −11.8% (dd **−69.9%**) | **+7.8%** (dd −23.8%) |
+| 2019-12→2021-04 | **+167.1%** (dd −59.9%) | +113.5% (dd −25.2%) |
+| 2021-04→2022-08 | **+128.3%** (dd −39.8%) | +114.8% (dd −20.6%) |
+| 2022-08→2023-12 | +121.3% (dd −49.1%) | **+152.7%** (dd −19.7%) |
+| 2023-12→2025-04 | +72.7% (dd −29.0%) | **+174.1%** (dd −13.9%) |
+| 2025-04→2026-08 | +688.8% (dd −39.9%) | **+710.4%** (dd −13.8%) |
+
+Return: managed wins **4 of 6**. Drawdown: managed wins **6 of 6**, almost always by roughly half. The drawdown result has no exceptions in any sub-period, which makes it a property of the layer rather than an artifact of the window — this is the single most defensible claim about the management layer.
+
+The first period is the one to show: through the 2018 TL crisis the unmanaged track **lost 11.8% while drawing down 69.9%**, and the managed track **made 7.8% with a 23.8% drawdown**. The two periods management loses are both strong bull runs — the cost of the insurance, paid where insurance is not needed.
+
+**Section 2 — do parameter choices survive?** No, and this replicates at both fold counts:
+
+| Parameter | 5 folds | 3 folds | Training's picks (5-fold) |
+|---|---|---|---|
+| `trailing_pct` | 0/5 | 0/3 | [10, 10, 15, 20, 15] |
+| `dusus_freni` | 1/5 | 1/3 | [20, 100, 100, 15, 15] |
+| `max_pozisyon` | 0/5 | 0/3 | [40, 40, 40, 30, 30] |
+| `takas_farki` | 1/5 | 1/3 | [20, 12, 3, 0, 6] |
+
+**The "training's picks" column is the real finding.** For `takas_farki` the training half chose 20, 12, 3, 0 and 6 across five folds — the entire tested range. When the "optimum" moves that much with the training period, the parameter surface is mostly noise at that time scale, and any single-window optimum is a coincidence waiting to be quoted. This is also the cleanest available refutation of the two proposals `validate` had marked DOĞRULANDI: `max_pozisyon` 30→40 wins **zero** folds, `takas_farki`→0 wins one.
+
+Note this run does **not** re-litigate the 12→6 change: the default under test *is* 6, so the question asked was "is anything better than 6", and the answer is no. Supporting detail: when training picked high values (20, 12 in folds 1-2) the test half lost (−8.4%, −22.9%); when it picked low (3 in fold 3) the test half won (+38.7%). The direction still favours the low end.
+
+Fold-count sensitivity was checked deliberately (5 vs 3): identical verdicts on all four parameters, so the conclusion is not an artifact of how the window was cut.
+
 Remaining methodology work, in priority order:
-1. **Walk-forward with multiple folds** — `validate`'s single 60/40 split puts both crises in the training half, so parameters are still validated on a bull holdout. This is the largest open weakness.
-2. **A margin on `validate`'s acceptance gate** — currently bare `t_s > t_v` while `sweep` demands >5% plus year-by-year consistency; the more permissive check has the final word.
-3. **8-year `sweep`** — the 5-year sweep now says every parameter is at its optimum, but that is a bull-only window.
+1. **Per-fold system vs random-6** — the "above the 95th percentile" claim still rests on one window; showing it holds in each fold would close the "lucky period" objection.
+2. **8-year `sweep`** — the 5-year sweep says every parameter is at its optimum, but that window is bull-only. Lower priority now that walk-forward covers the same ground more strictly.
 
 Note on what each command answers, because these got conflated once already: `validate` tests whether *parameter choices* survive out of sample; it compares `_walk_managed` to `_walk_managed` and says nothing about whether the management layer is worth having. That question is `karsilastir`.
 

@@ -798,6 +798,160 @@ def validate(years=8):
     return onaylanan
 
 
+def walkforward(years=8, katman=5):
+    """WALK-FORWARD DOĞRULAMA — validate'in tek bölmesinin yerine çok katman.
+
+    NEDEN: validate() pencereyi bir kez %60/%40 böler. 8 yıllık pencerede bu,
+    2018 TL krizi ile 2020 Covid çöküşünün İKİSİNİ DE eğitim yarısına atar;
+    yani parametreler yalnız boğa piyasasında sınanmış olur. Tek bölme ayrıca
+    şansa açıktır: bir parametre bir kez tesadüfen tutabilir.
+
+    NASIL: genişleyen pencere. Dönem katman+1 dilime bölünür ve her adımda
+    geçmişin tamamıyla öğrenip BİR SONRAKİ dilimi sınarız:
+
+        Eğitim [0]        → Test [1]
+        Eğitim [0,1]      → Test [2]
+        Eğitim [0,1,2]    → Test [3]
+        ...
+
+    Her test dilimi seçime hiç katılmaz ve kronolojik olarak eğitimden
+    SONRA gelir — ileriye bakma (look-ahead) yok. Sonuç tek bir "tuttu"
+    değil, "5 katmanın 4'ünde tuttu" gibi bir sayım olur.
+
+    Kabul ölçütü validate'ten SIKI: bir değişiklik ancak katmanların
+    çoğunda VE anlamlı bir farkla (>%5) kazanırsa önerilir. validate'in
+    çıplak `t_s > t_v` eşiği %0.1'lik farkı bile onaylıyordu.
+    """
+    t0 = time.time()
+    print(f"=== Walk-Forward Doğrulama | {years} yıl | {katman} katman | "
+          f"{datetime.now():%Y-%m-%d %H:%M} ===")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
+    rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
+    wbd = {}
+    for d in rebal_dates:
+        w = _pick_at(d, feats, ret_panel)
+        if w:
+            wbd[d] = w
+    print(f"Panel {len(feats)} hisse | {len(wbd)} rebalans | "
+          f"{dates[0]:%Y-%m-%d} → {dates[-1]:%Y-%m-%d} ({time.time()-t0:.0f}s)\n")
+
+    # Dilim sınırları: katman+1 eşit parça
+    n = len(dates)
+    sinir = [int(n * i / (katman + 1)) for i in range(katman + 2)]
+    print("Katmanlar:")
+    for k in range(katman):
+        eg_son, te_bas, te_son = sinir[k + 1], sinir[k + 1], sinir[k + 2] - 1
+        print(f"  {k+1}. eğitim {dates[0]:%Y-%m}→{dates[eg_son-1]:%Y-%m} | "
+              f"TEST {dates[te_bas]:%Y-%m}→{dates[te_son]:%Y-%m}")
+    print()
+
+    # ---- BÖLÜM 1: DÖNEM DÖNEM YÖNETİMLİ vs YÖNETİMSİZ ----
+    #
+    # Parametre taramasından ÖNCE gelen ve daha temel olan soru: yönetim
+    # katmanı işe yarıyor mu? Bugüne dek tek bir toplam pencerede ölçüldü ve
+    # cevap iki kez ters döndü (önce _walk'un sabit ağırlığı yüzünden, sonra
+    # takas_farki yanlış ayarlı olduğu için). Tek sayı yerine dönem dönem
+    # bakmak, sonucun bir döneme mi yaslandığını gösterir.
+    #
+    # NAV'lar TEK bir sürekli koşudan alınır, dönem başında sıfırlanmaz —
+    # gerçek portföy de her çeyrekte sıfırdan kurulmuyor. Böylece her dönemin
+    # başındaki giriş maliyeti yapay olarak tekrarlanmıyor.
+    nav_u_tam = _walk(wbd, closes, dates)
+    nav_m_tam = _walk_managed(wbd, closes, dates, feats, dict(MGMT_VARSAYILAN))
+
+    def _dilim(nav, bas, son):
+        s = nav.iloc[bas:son + 1]
+        getiri = (s.iloc[-1] / s.iloc[0] - 1) * 100
+        dd = ((s / s.cummax()) - 1).min() * 100
+        return getiri, dd
+
+    print("BÖLÜM 1 — Dönem dönem YÖNETİMLİ vs YÖNETİMSİZ "
+          f"(varsayılan parametreler: takas_farki={MGMT_VARSAYILAN['takas_farki']:g})")
+    print(f"{'dönem':<22} {'yönetimsiz':>22} {'yönetilen':>22}   kazanan")
+    print("-" * 96)
+    y_kazandi = 0
+    for k in range(katman + 1):
+        b, s = sinir[k], sinir[k + 1] - 1
+        gu, ddu = _dilim(nav_u_tam, b, s)
+        gm, ddm = _dilim(nav_m_tam, b, s)
+        kazanan = "YÖNETİLEN" if gm > gu else "yönetimsiz"
+        if gm > gu:
+            y_kazandi += 1
+        print(f"{dates[b]:%Y-%m}→{dates[s]:%Y-%m}      "
+              f"%{gu:>9.1f} (dd %{ddu:>6.1f})  %{gm:>9.1f} (dd %{ddm:>6.1f})   {kazanan}")
+    print("-" * 96)
+    print(f"Yönetim {y_kazandi}/{katman + 1} dönemde getiriyi geçti.\n")
+
+    # ---- BÖLÜM 2: PARAMETRE SEÇİMLERİ ÖRNEKLEM-DIŞI TUTUYOR MU ----
+    taranacak = {
+        "trailing_pct": [10, 15, 20, 25, 100],
+        "dusus_freni":  [10, 15, 20, 100],
+        "max_pozisyon": [20, 25, 30, 40],
+        "takas_farki":  [0, 3, 6, 9, 12, 20],
+    }
+    print("BÖLÜM 2 — Parametre seçimleri örneklem-dışı tutuyor mu\n")
+
+    ozet = {}
+    for par_ad, degerler in taranacak.items():
+        print(f"--- {par_ad} (varsayılan {MGMT_VARSAYILAN[par_ad]:g}) ---")
+        kazanma, secimler = 0, []
+        for k in range(katman):
+            eg_dates = dates[:sinir[k + 1]]
+            te_dates = dates[sinir[k + 1]:sinir[k + 2]]
+            w_eg = {d: w for d, w in wbd.items() if d <= eg_dates[-1]}
+            w_te = {d: w for d, w in wbd.items() if eg_dates[-1] < d <= te_dates[-1]}
+            if not w_eg or not w_te:
+                print(f"  {k+1}. katman atlandı (yeterli rebalans yok)")
+                continue
+            # 1) EĞİTİMDE seç
+            en_iyi, en_iyi_get = None, -1e18
+            for d in degerler:
+                par = dict(MGMT_VARSAYILAN); par[par_ad] = float(d)
+                g = _ozet(_walk_managed(w_eg, closes, eg_dates, feats, par))[0]
+                if g > en_iyi_get:
+                    en_iyi, en_iyi_get = d, g
+            # 2) TESTTE sına
+            par_v = dict(MGMT_VARSAYILAN)
+            par_s = dict(MGMT_VARSAYILAN); par_s[par_ad] = float(en_iyi)
+            t_v = _ozet(_walk_managed(w_te, closes, te_dates, feats, par_v))[0]
+            t_s = _ozet(_walk_managed(w_te, closes, te_dates, feats, par_s))[0]
+            # Anlamlı fark şartı: %5'ten küçük iyileşme gürültü sayılır
+            fark = (t_s - t_v) / max(abs(t_v), 1e-9) * 100
+            tuttu = (en_iyi != MGMT_VARSAYILAN[par_ad]) and fark > 5.0
+            if tuttu:
+                kazanma += 1
+            secimler.append(en_iyi)
+            print(f"  {k+1}. katman: eğitim seçti {en_iyi:>4g} | test varsayılan "
+                  f"%{t_v:>9.1f} → seçilen %{t_s:>9.1f} ({fark:+6.1f}%) "
+                  f"{'✓' if tuttu else '·'}")
+        gecerli = len(secimler)
+        ozet[par_ad] = (kazanma, gecerli, secimler)
+        if gecerli:
+            print(f"  → {kazanma}/{gecerli} katmanda varsayılanı anlamlı biçimde geçti\n")
+    print("=" * 96)
+    print(f"{'parametre':<14} {'katman':>8}  {'eğitimin seçimleri':<28} karar")
+    print("-" * 96)
+    for par_ad, (kazanma, gecerli, secimler) in ozet.items():
+        # SIKI KABUL: katmanların çoğunda kazanmalı (yarıdan fazlası)
+        onay = gecerli >= 3 and kazanma > gecerli / 2
+        karar = ("DEĞİŞTİR → " + str(max(set(secimler), key=secimler.count))) if onay else "DEĞİŞTİRME"
+        print(f"{par_ad:<14} {kazanma:>4}/{gecerli:<3}  "
+              f"{str(secimler):<28} {karar}")
+    print("=" * 96)
+    print("Not: bir katmanda kazanmak şans olabilir; çoğunlukta kazanmak zordur.")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
 def karsilastir(years=5):
     """YÖNETİLEN vs YÖNETİMSİZ — sunumun merkez tablosu, tek komutla tekrarlanır.
 
@@ -883,5 +1037,8 @@ if __name__ == "__main__":
         print("Evren + panel donduruldu.")
     elif _cmd == "karsilastir":
         karsilastir(yrs)
+    elif _cmd == "walkforward":
+        walkforward(int(sys.argv[2]) if len(sys.argv) > 2 else 8,
+                    int(sys.argv[3]) if len(sys.argv) > 3 else 5)
     else:
         print(__doc__)
