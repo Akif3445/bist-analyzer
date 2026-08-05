@@ -280,6 +280,22 @@ UI: the US menu mirrors BIST exactly (US Kokpit · US Portfoy Yoneticisi · US L
 
 Regime logging is per market too, and `pm_regime_history` was migrated from `PRIMARY KEY (date)` to `(date, market)` — with one row per day the second market silently overwrote the first. Migration is idempotent, runs from `_rejim_tablosu()` on the robot's next pass, copies existing rows as `market='BIST'` (they were all written with the default), and adds a `vix` column (US stress is VIX, BIST's is FX — folding them into one column would corrupt any later analysis).
 
+### Incident 2026-07-31 → 08-05: the robot ran green every day and did nothing
+
+Turso started returning **400 Bad Request** to the Actions runner. The then-current `_PMDB` silently fell back to `sqlite3.connect(DB_PATH)` — on a GitHub runner that is a scratch disk destroyed with the container. Reads fell back too, so the robot saw an empty database, reported `NAV güncellendi (0 aktif portföy)`, made no decisions, and wrote its work into a directory that no longer exists. Every run showed a green checkmark, because each step catches its own exception and `main()` returned 0 unconditionally.
+
+Cost: five weekdays with no stop-loss execution, no score exits, no swaps, and — worse for the October evidence — the "Yönetilen" shadow cohorts ran *effectively passive* for a week, so that stretch of the managed-vs-passive comparison is contaminated and cannot be recovered.
+
+The URL was identical on both sides and the same code worked locally, so the cause is the **`TURSO_AUTH_TOKEN` repo secret**, not the code.
+
+Three defences added, because any one of them would have caught it on day one:
+
+1. **`_PMDB` no longer falls back** when Turso is configured (see Persistence) — it retries, then raises `TursoUnavailable`.
+2. **The robot probes Turso with a real `SELECT 1` before doing any work** and exits 1 if it fails. "Configured" is not "reachable", and that distinction is the whole incident.
+3. **The exit code now tells the truth.** Step failures are collected in `hatalar` and produce a non-zero exit. ENAG scraping and the monthly calibration are deliberately excluded — both are known-flaky external sources (the ENAG site's TLS is broken) and would produce permanent red, which blunts the signal.
+
+Lesson for the presentation's reliability story: a green build proved nothing here because success was never actually asserted. The failure was silent for a week in a system that had monitoring, an audit layer, and a daily cron — all of which were themselves reporting success.
+
 **Robot:** `daily_robot.py` loops both markets for the weekly shadow/control cohorts (each market wrapped separately so one failing doesn't stop the other; freshness checked per market). First US cohort landed 2026-W30: 9 shadow + 2 control (random-draw + NDX100 passive with 99 names). When the US shadow set comes back empty the robot prints why — in Ayı that is the calibration brake firing, not a failure. `check_risk_alerts()` and `update_navs()` also run per market; both previously built symbols as `t + ".IS"` for every portfolio, so **US positions would silently never price and never raise a stop/target alert** — fixed 2026-07-23.
 
 ### US calibration finding (2026-07-23) — the edge is in mid-caps, not mega-caps

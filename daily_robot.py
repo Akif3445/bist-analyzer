@@ -93,6 +93,26 @@ def main() -> int:
         print("CI ortamında lokal SQLite'a yazmak anlamsız — çıkılıyor.")
         return 1
 
+    # YAPILANDIRILMIŞ OLMAK, ERİŞİLEBİLİR OLMAK DEĞİLDİR.
+    #
+    # 2026-07-31 → 2026-08-05 arası robot her gün YEŞİL bitti ve hiçbir şey
+    # yapmadı: Turso 400 döndürüyordu, o günkü kod sessizce runner'ın geçici
+    # diskine düşüyordu. Okumalar da oraya düştüğü için robot "0 aktif
+    # portföy" görüp hiçbir karar almadı, yazdıkları ise konteynerle birlikte
+    # silindi. Bir haftalık yönetim kaybı ve gölge deneyinde kirli veri.
+    # Tek bir yazma denemesi bunu ilk gün kırmızıya çevirirdi.
+    try:
+        ba._PMDB.execute("SELECT 1")
+    except Exception as exc:
+        print(f"HATA: Turso'ya ulaşılamıyor — {type(exc).__name__}: {exc}")
+        print("Muhtemel sebep: TURSO_AUTH_TOKEN süresi dolmuş veya geçersiz.")
+        print("Yazımlar geçici diske gitmesin diye koşu İPTAL edildi.")
+        return 1
+
+    # Kritik adımların hataları toplanır; en az biri varsa çıkış kodu 1 olur.
+    # Aksi hâlde her adım kendi except'inde hatayı yutuyor ve iş yeşil görünüyordu.
+    hatalar: list = []
+
     # 1) NAV güncelle — yalnız işlenen piyasa(lar)
     # Kısıtsız çağrı (market=None) her iki piyasayı yazıyordu; 15:40 turunda bu,
     # US NAV'ını seans ORTASINDAKİ fiyatla kaydetmek demekti. Kararları kapanışa
@@ -103,6 +123,7 @@ def main() -> int:
             n_port = len(ba.PortfolioManager.active_portfolios(market=_mkt))
             print(f"[1/4]  [{_mkt}] NAV güncellendi ({n_port} aktif portföy)")
         except Exception as exc:
+            hatalar.append(f"NAV/{_mkt}")
             print(f"[1/4]  [{_mkt}] NAV hatası: {exc}")
 
     # 2) Haftalık işler (kendi hafta korumaları var — gerekmiyorsa dokunmaz)
@@ -111,6 +132,7 @@ def main() -> int:
         print(f"[2/4] Analist hedef fotoğrafı: {snap} hisse "
               f"({'yeni çekildi' if snap else 'bu hafta zaten var'})")
     except Exception as exc:
+        hatalar.append("hedef-fotografi")
         print(f"[2/4] Hedef fotoğrafı hatası: {exc}")
 
     # Gölge + kontrol setleri — her piyasa için ayrı (BIST ve US bağımsız
@@ -152,6 +174,7 @@ def main() -> int:
                 print(f"      [{_mkt}] Gölge+kontrol set {week} mevcut "
                       f"({rows[0]['c']}+{rows_k[0]['c']})")
         except Exception as exc:
+            hatalar.append(f"golge-set/{_mkt}")
             print(f"      [{_mkt}] Gölge set hatası: {exc}")
     try:
         ba.PortfolioManager.auto_archive_shadows()
@@ -175,6 +198,7 @@ def main() -> int:
                     print(f"        {r['portfoy'][:28]:28} | {a['aksiyon']:6} "
                           f"{a['ticker']:7} %{a['agirlik']:.0f} — {a['gerekce'][:60]}")
         except Exception as exc:
+            hatalar.append(f"yonetim/{_mkt}")
             print(f"[2.9]  [{_mkt}] Yönetim hatası: {exc}")
 
     # 2.95) YÖNETİM DENETİMİ — kuralların işe yarayıp yaramadığını ölçer,
@@ -191,6 +215,7 @@ def main() -> int:
                 print(f"       ⚠️ {_b['mesaj'][:110]}")
                 print(f"          öneri: {_b['parametre']} {_b['mevcut']} → {_b['onerilen']}")
         except Exception as exc:
+            hatalar.append(f"denetim/{_mkt}")
             print(f"[2.95] [{_mkt}] Denetim hatası: {exc}")
 
     # 3) Risk alarmları
@@ -202,6 +227,7 @@ def main() -> int:
         for a in alerts:
             print(f"      {a}")
     except Exception as exc:
+        hatalar.append("risk-alarmlari")
         print(f"[3/4] Risk kontrolü hatası: {exc}")
 
     # 2.7) ENAG hatırlatıcısı — geçen ayın verisi eksikse duyuruyu tespit et
@@ -286,6 +312,7 @@ def main() -> int:
     try:
         _rejim_tablosu()
     except Exception as exc:
+        hatalar.append("rejim-tablosu")
         print(f"[4/4] Rejim tablosu hazırlanamadı: {exc}")
     for _mkt in _piyasalar:
         try:
@@ -297,8 +324,16 @@ def main() -> int:
                  regime.get("breadth"), regime.get("usdtry_1m"), regime.get("vix")))
             print(f"[4/4]  [{_mkt}] Rejim kaydı: {regime['regime']} ({regime['score']}/7)")
         except Exception as exc:
+            hatalar.append(f"rejim/{_mkt}")
             print(f"[4/4]  [{_mkt}] Rejim kaydı hatası: {exc}")
 
+    # Çıkış kodu gerçeği söylemeli: adım bazlı except'ler hatayı yutuyordu ve
+    # her şey çökse bile iş YEŞİL görünüyordu. ENAG ve aylık kalibrasyon
+    # bilinçli olarak sayılmaz — ikisi de bilinen kırılgan dış kaynaklar
+    # (ENAG sitesinin SSL'i bozuk), kalıcı kırmızı üretip sinyali köreltirler.
+    if hatalar:
+        print(f"=== Robot {len(hatalar)} HATAYLA tamamlandı: {', '.join(hatalar)} ===")
+        return 1
     print("=== Robot tamamlandı ===")
     return 0
 
