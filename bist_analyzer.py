@@ -11555,32 +11555,37 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
 
         # KARŞILAŞTIRMA GRAFİĞİ — tüm portföyler tek grafikte
         st.markdown("### " + ("Portföy Karşılaştırma" if ui_lang == "TR" else "Portfolio Comparison"))
-        gc1, gc2 = st.columns([3, 2])
+        gc1, gc2 = st.columns([2, 3])
         with gc1:
             range_label = st.radio("Aralık" if ui_lang == "TR" else "Range",
                                    ["1 Hafta", "1 Ay", "3 Ay", "1 Yıl", "Tümü"],
                                    index=4, horizontal=True, key="pm_cmp_range")
         with gc2:
-            golge_sec = st.radio("Gölge portföyler" if ui_lang == "TR" else "Shadows",
-                                 ["Son kohort", "Tümü", "Yok"], index=0, horizontal=True,
-                                 key="pm_cmp_shadow_mode",
-                                 help="Her hafta 9 gölge + 2 kontrol açılır; hepsi çizilirse "
-                                      "grafik okunmaz olur. 'Son kohort' yalnız en yeni haftayı "
-                                      "gösterir — eski kohortlar arkada izlenmeye devam eder "
-                                      "(Kombinasyon Karnesi hepsini toplar).")
+            # Gölge adları "... 2026-W29" ile biter; hafta etiketi son sözcük.
+            _haftalar = sorted({p["name"].split()[-1] for p in shadows
+                                if "-W" in p["name"].split()[-1]}, reverse=True)
+            secili_hafta = st.multiselect(
+                "Gölge kohortları — hafta seç" if ui_lang == "TR" else "Shadow cohorts — pick weeks",
+                _haftalar, default=_haftalar[:1], key="pm_cmp_weeks",
+                help="Her hafta 9 gölge + 2 kontrol portföy açılır. Hepsi birden çizilince "
+                     "grafik okunmaz oluyordu; buradan istediğin haftaları seç. Boş bırakırsan "
+                     "yalnız kendi portföylerin çizilir. Seçilmeyen kohortlar arkada izlenmeye "
+                     "devam eder (Kombinasyon Karnesi hepsini toplar).")
+        gc3, gc4 = st.columns([2, 3])
+        with gc3:
+            detay = st.radio("Gösterim" if ui_lang == "TR" else "Detail",
+                             ["Kohort ortalaması", "Tüm portföyler"], index=0,
+                             horizontal=True, key="pm_cmp_detay",
+                             help="Tek bir hafta bile 11 çizgi demek. 'Kohort ortalaması' o "
+                                  "haftanın sistem portföylerini TEK çizgide toplar, kontrol "
+                                  "gruplarını (Rastgele / BIST30) ayrı bırakır — karşılaştırma "
+                                  "zaten bu üçü arasında. Analizlerde de kohort ortalaması "
+                                  "kullanılıyor; tek portföyün sonucu büyük ölçüde şanstır.")
         _range_days = {"1 Hafta": 7, "1 Ay": 30, "3 Ay": 90, "1 Yıl": 365, "Tümü": 9999}[range_label]
         _cutoff = (datetime.now() - timedelta(days=_range_days)).strftime("%Y-%m-%d")
 
-        if golge_sec == "Yok":
-            _chart_ports = ports
-        elif golge_sec == "Tümü":
-            _chart_ports = _all_active
-        else:
-            # Son kohort: gölge adları "... 2026-W29" ile biter — en yeni hafta etiketi
-            _hafta = [p["name"].split()[-1] for p in shadows if "-W" in p["name"].split()[-1]]
-            _son_h = max(_hafta) if _hafta else ""
-            _chart_ports = ports + [p for p in shadows
-                                    if _son_h and p["name"].split()[-1] == _son_h]
+        _secili_shadows = [p for p in shadows if p["name"].split()[-1] in secili_hafta]
+        _chart_ports = ports + _secili_shadows
         fig_cmp = go.Figure()
         xu_series = {}   # tarih -> xu100 (benchmark için tüm portföylerden topla)
         _total_pts = 0
@@ -11591,39 +11596,83 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
         if range_label == "1 Hafta":
             _saatlik, _xu_saat = PortfolioManager.intraday_navs(
                 _chart_ports, _poss_all, _navs_all, market=market)
-        for p in _chart_ports:
-            _m = _pm_meta(p["horizon"], p["profile"])
-            is_shadow = p.get("kind") == "golge"
-            label = f"{_m['ikon']} {p['name']}"
+        def _seri_of(p):
+            """Tek portföyün 100'e tabanlanmış serisi → (x, y) veya None.
+            Saatlik veri varsa (1 Hafta görünümü) onu, yoksa günlük NAV'ı kullanır."""
             _hs = _saatlik.get(p["id"])
             if _hs is not None and len(_hs) >= 2:
-                base = float(_hs.iloc[0])
-                fig_cmp.add_trace(go.Scatter(
-                    x=_hs.index, y=(_hs / base * 100.0).round(2), mode="lines",
-                    name=label, opacity=0.55 if is_shadow else 1.0,
-                    line=dict(width=1.2 if is_shadow else 2.5,
-                              dash="dot" if is_shadow else "solid"),
-                ))
-                _total_pts += len(_hs)
-                continue
-            nav = _navs_all.get(p["id"], pd.DataFrame())
-            nav = nav[nav["date"] >= _cutoff] if len(nav) else nav
-            if nav.empty:
-                continue
-            base = float(nav["nav"].iloc[0])
-            if base <= 0:
-                continue
-            rebased = nav["nav"] / base * 100.0
+                b = float(_hs.iloc[0])
+                if b > 0:
+                    return list(_hs.index), (_hs / b * 100.0)
+            nv = _navs_all.get(p["id"], pd.DataFrame())
+            nv = nv[nv["date"] >= _cutoff] if len(nv) else nv
+            if nv.empty:
+                return None
+            b = float(nv["nav"].iloc[0])
+            if b <= 0:
+                return None
+            return list(nv["date"]), (nv["nav"] / b * 100.0)
+
+        def _ciz(plist, label, is_shadow, ortalama=False):
+            """Bir portföyü ya da bir grubun ORTALAMASINI çizer.
+
+            Ortalama, her portföy 100'e tabanlandıktan SONRA alınır — aksi hâlde
+            büyük NAV'lı portföy ortalamayı domine ederdi. Kohorttaki portföyler
+            aynı gün açıldığı için tarihler hizalıdır."""
+            nonlocal _total_pts
+            seriler = []
+            for p in plist:
+                s = _seri_of(p)
+                if s is None:
+                    continue
+                seriler.append(pd.Series(list(s[1]), index=s[0]))
+            if not seriler:
+                return
+            if ortalama and len(seriler) > 1:
+                y = pd.concat(seriler, axis=1).mean(axis=1).dropna()
+            else:
+                y = seriler[0]
+            if len(y) < 1:
+                return
             fig_cmp.add_trace(go.Scatter(
-                x=nav["date"], y=rebased.round(2), mode="lines+markers",
-                name=label, opacity=0.55 if is_shadow else 1.0,
-                line=dict(width=1.5 if is_shadow else 3,
+                x=list(y.index), y=y.round(2),
+                mode="lines" if len(y) > 40 else "lines+markers",
+                name=label, opacity=0.6 if is_shadow else 1.0,
+                line=dict(width=2.0 if is_shadow else 3,
                           dash="dot" if is_shadow else "solid"),
             ))
-            _total_pts += len(nav)
-            for d, x in zip(nav["date"], nav["xu100_close"]):
+            _total_pts += len(y)
+
+        # Benchmark serisi: seçilen tüm portföylerden toplanır (moddan bağımsız)
+        for p in _chart_ports:
+            nv = _navs_all.get(p["id"], pd.DataFrame())
+            nv = nv[nv["date"] >= _cutoff] if len(nv) else nv
+            for d, x in zip(nv.get("date", []), nv.get("xu100_close", [])):
                 if x and x > 0:
                     xu_series[d] = x
+
+        # Kullanıcı portföyleri her modda tek tek çizilir
+        for p in ports:
+            _m = _pm_meta(p["horizon"], p["profile"])
+            _ciz([p], f"{_m['ikon']} {p['name']}", False)
+
+        if detay == "Kohort ortalaması":
+            for h in sorted(secili_hafta, reverse=True):
+                _hp = [p for p in _secili_shadows if p["name"].split()[-1] == h]
+                _sistem = [p for p in _hp if p.get("horizon") != "kontrol"]
+                # PASİF ve YÖNETİLEN AYRI çizilir — bu ikisinin farkı projenin
+                # canlı deneyinin ta kendisi (bkz. CLAUDE.md > Bilimsel bütünlük).
+                # Tek ortalamada birleştirmek ölçmek istediğimiz şeyi gizlerdi.
+                for _yon, _et in ((0, "Pasif"), (1, "Yönetilen")):
+                    _grp = [p for p in _sistem if (p.get("managed") or 0) == _yon]
+                    if _grp:
+                        _ciz(_grp, f"◆ {_et} ort. {h} ({len(_grp)})", True, ortalama=True)
+                for _k in [p for p in _hp if p.get("horizon") == "kontrol"]:
+                    _ciz([_k], f"○ {_k.get('profile', 'Kontrol')} {h}", True)
+        else:
+            for p in _secili_shadows:
+                _m = _pm_meta(p["horizon"], p["profile"])
+                _ciz([p], f"{_m['ikon']} {p['name']}", True)
         if range_label == "1 Hafta" and len(_xu_saat) >= 2:
             _xb = float(_xu_saat.iloc[0])
             fig_cmp.add_trace(go.Scatter(
