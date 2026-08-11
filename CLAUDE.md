@@ -23,6 +23,7 @@ python pipeline_backtest.py karsilastir # managed vs unmanaged — the presentat
 python pipeline_backtest.py sweep       # management-rule parameter sweep
 python pipeline_backtest.py validate 8  # out-of-sample validation (8y, single 60/40 split)
 python pipeline_backtest.py walkforward 8 5  # walk-forward: 5 expanding folds (stricter)
+python pipeline_backtest.py pozisyon 8  # position-count sweep + luck-band measurement
 ```
 
 `tools/pmdb_admin.py` exists so DB maintenance doesn't require handing Claude Code a blanket "run any Python" permission — the local `.claude/settings.local.json` allows only `python tools/pmdb_admin.py:*`, so the possible operations are bounded by this script's subcommands. Add new maintenance actions as subcommands here rather than widening the permission rule.
@@ -408,6 +409,28 @@ The first period is the one to show: through the 2018 TL crisis the unmanaged tr
 Note this run does **not** re-litigate the 12→6 change: the default under test *is* 6, so the question asked was "is anything better than 6", and the answer is no. Supporting detail: when training picked high values (20, 12 in folds 1-2) the test half lost (−8.4%, −22.9%); when it picked low (3 in fold 3) the test half won (+38.7%). The direction still favours the low end.
 
 Fold-count sensitivity was checked deliberately (5 vs 3): identical verdicts on all four parameters, so the conclusion is not an artifact of how the window was cut.
+
+### Position count (2026-08-11) — `pipeline_backtest.py pozisyon [yil]`
+
+`MAX_POS = 6` had never been tested; it was an assumption carried since the first version. It is now tested and it stays. The command also parameterises `_pick_at(max_pos=)`, which nothing else did.
+
+**Section 1 — performance collapses as positions are added** (8-year panel, real CAGR):
+
+| N | Unmanaged | Managed | Managed Sharpe |
+|---|---|---|---|
+| 4 | +4.5% | **+23.6%** | 0.88 |
+| **6 (default)** | **+7.4%** | +15.6% | 0.71 |
+| 8 | +4.9% | +9.0% | 0.49 |
+| 10 | −4.6% | +0.7% | 0.14 |
+| 15 | −8.9% | −7.6% | −0.34 |
+
+Going 6 → 10 costs about **15 points of real CAGR**. The edge lives at the very top of the ranking and dilutes away by rank 7–15 — which is itself weak evidence that the ranking carries real information, since that is where information *should* concentrate.
+
+**Section 2 — but the luck band really does narrow.** 50 random N-stock portfolios from the same universe, 5–95% spread of final NAV: N=6 → **9.6×**, N=10 → 4.6×, N=15 → 3.3×. This is the honest explanation for why two live user portfolios from the same system sit 38 points apart. **It is not fixable by adding positions without destroying the edge** — the mitigation is to judge the system on cohort averages, never on one portfolio.
+
+**Section 3 — N=4 looked better and failed walk-forward.** Training picked 4 in four of five folds, and the full-window number favoured it clearly (+23.6% vs +15.6%). Out of sample it beat the default in only **2/5** folds, and fold 3 was a collapse: 56.0% against 127.1% for N=6. Note also that N=4's advantage appears *only* with the management layer (unmanaged, 4 is worse than 6) — the same interaction signature that made `max_pozisyon` 30→40 look validated.
+
+So: the single-window optimum was wrong for the fourth time in this project, and the walk-forward gate caught it again.
 
 Remaining methodology work, in priority order:
 1. **Per-fold system vs random-6** — the "above the 95th percentile" claim still rests on one window; showing it holds in each fold would close the "lucky period" objection.

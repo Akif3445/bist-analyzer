@@ -216,8 +216,13 @@ def _precompute(closes, vols):
     return feats
 
 
-def _pick_at(date, feats, ret_panel):
-    """Bugünkü propose() mantığının point-in-time kopyası → {ticker: weight}."""
+def _pick_at(date, feats, ret_panel, max_pos=None):
+    """Bugünkü propose() mantığının point-in-time kopyası → {ticker: weight}.
+
+    max_pos: pozisyon sayısı (varsayılan MAX_POS). Parametreleştirildi çünkü
+    pozisyon SAYISI bugüne dek hiç taranmamıştı — 6 değeri bir varsayımdı."""
+    if max_pos is None:
+        max_pos = MAX_POS
     cands = []
     for t, f in feats.items():
         cl = f["close"]
@@ -248,7 +253,7 @@ def _pick_at(date, feats, ret_panel):
         picks.append((t, atr))
         kept.append(t) if t in win.columns else None
         sec_n[sec] = sec_n.get(sec, 0) + 1
-        if len(picks) >= MAX_POS:
+        if len(picks) >= max_pos:
             break
     if not picks:
         return {}
@@ -798,6 +803,132 @@ def validate(years=8):
     return onaylanan
 
 
+def pozisyon(years=8, katman=5):
+    """POZİSYON SAYISI TARAMASI — MAX_POS hiç test edilmemişti.
+
+    İki ayrı soruyu birlikte yanıtlar, çünkü ikisi zıt yönde çeker:
+
+      1. GETİRİ: pozisyon sayısı artınca en iyi fikirler seyreliyor mu?
+         Yönetimli/yönetimsiz getiri, MaxDD ve Sharpe her N için ölçülür,
+         ayrıca walk-forward katmanlarında kaç kez varsayılanı geçtiği.
+
+      2. ŞANS: aynı evrenden N hisse çekilen 50 rastgele portföyün son
+         NAV dağılımı ne kadar geniş? Bu, "portföyün sonucu ne kadar
+         kendi becerisi, ne kadar çekiliş" sorusunun doğrudan ölçüsü.
+         Canlıda kullanıcının iki portföyü arasında 38 puan fark çıktı;
+         bu bölüm o farkın N ile nasıl daraldığını gösterir.
+
+    Bu ikisi birlikte okunmalı: N büyüdükçe beklenen getiri bir miktar
+    düşebilir ama kötü bir çekiliş yapma ihtimali de düşer. Hangisinin
+    daha değerli olduğu risk tercihidir — ölçüm ikisini de verir.
+    """
+    t0 = time.time()
+    print(f"=== Pozisyon Sayısı Taraması | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
+    rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
+    xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
+    print(f"Panel {len(feats)} hisse | {dates[0]:%Y-%m-%d} → {dates[-1]:%Y-%m-%d} "
+          f"({time.time()-t0:.0f}s)\n")
+
+    denenecek = [4, 6, 8, 10, 12, 15]
+
+    print("BÖLÜM 1 — Sistem performansı, pozisyon sayısına göre")
+    print(f"{'N':>3} {'reel CAGR':>11} {'MaxDD':>8} {'Sharpe':>7} {'yönetimli reel':>15} "
+          f"{'yön. MaxDD':>11} {'yön. Sharpe':>12}")
+    print("-" * 74)
+    wbd_cache = {}
+    for n in denenecek:
+        wbd = {}
+        for d in rebal_dates:
+            w = _pick_at(d, feats, ret_panel, max_pos=n)
+            if w:
+                wbd[d] = w
+        wbd_cache[n] = wbd
+        su = _stats(_walk(wbd, closes, dates), xu_n, "_")
+        sm = _stats(_walk_managed(wbd, closes, dates, feats, dict(MGMT_VARSAYILAN)), xu_n, "_")
+        isaret = " *" if n == MAX_POS else ""
+        print(f"{n:>3} {su['reel_yillik']:>10.1f}% {su['maxdd']:>7.1f}% {su['sharpe']:>7.2f} "
+              f"{sm['reel_yillik']:>14.1f}% {sm['maxdd']:>10.1f}% {sm['sharpe']:>12.2f}{isaret}")
+    print("(* mevcut varsayılan)\n")
+
+    print("BÖLÜM 2 — ŞANS FAKTÖRÜ: aynı evrenden N hisselik 50 rastgele portföy")
+    print(f"{'N':>3} {'%5 dilim':>10} {'medyan':>9} {'%95 dilim':>11} "
+          f"{'bant genişliği':>16} {'en kötü/en iyi':>16}")
+    print("-" * 72)
+    all_t = sorted(feats)
+    for n in denenecek:
+        finaller = []
+        for seed in range(RANDOM_SEEDS):
+            rng = np.random.default_rng(seed)
+            wbd_r = {}
+            for d in rebal_dates:
+                elig = [t for t in all_t if feats[t]["close"].index.searchsorted(d) > 260]
+                if len(elig) >= n:
+                    sel = rng.choice(elig, n, replace=False)
+                    wbd_r[d] = {t: 1.0 / n for t in sel}
+            finaller.append(_walk(wbd_r, closes, dates).iloc[-1])
+        f = np.array(finaller)
+        p5, p50, p95 = np.percentile(f, [5, 50, 95])
+        print(f"{n:>3} {p5:>10.1f} {p50:>9.1f} {p95:>11.1f} {p95/p5:>15.1f}x "
+              f"{f.min()/f.max():>15.2f}")
+    print()
+    print("Okuma: bant genişliği (%95 ÷ %5) düştükçe sonuç 'hangi hisseleri")
+    print("çektiğine' daha az bağlı demektir. Beklenen getiri ile bu daralma")
+    print("arasındaki denge, pozisyon sayısı kararının özüdür.\n")
+
+    # BÖLÜM 3 — tek pencere optimumuna GÜVENME. Bu projede tam bu tür
+    # sonuçlar üç kez çürüdü (takas_farki etkileşimi, max_pozisyon, trailing).
+    # wbd'ler yukarıda zaten kuruldu; katmanlara bölmek ucuz.
+    n = len(dates)
+    sinir = [int(n * i / (katman + 1)) for i in range(katman + 2)]
+    print(f"BÖLÜM 3 — WALK-FORWARD: eğitimde seçilen N, testte tutuyor mu ({katman} katman)")
+    print(f"{'katman':<8} {'test dönemi':<20} {'eğitim seçti':>13} "
+          f"{'test varsayılan':>16} {'test seçilen':>14}")
+    print("-" * 78)
+    kazanma, secimler = 0, []
+    for k in range(katman):
+        eg_dates = dates[:sinir[k + 1]]
+        te_dates = dates[sinir[k + 1]:sinir[k + 2]]
+        en_iyi, en_iyi_g = None, -1e18
+        for nn in denenecek:
+            w_eg = {d: w for d, w in wbd_cache[nn].items() if d <= eg_dates[-1]}
+            if not w_eg:
+                continue
+            g = _ozet(_walk_managed(w_eg, closes, eg_dates, feats, dict(MGMT_VARSAYILAN)))[0]
+            if g > en_iyi_g:
+                en_iyi, en_iyi_g = nn, g
+        if en_iyi is None:
+            continue
+        def _te(nn):
+            w = {d: x for d, x in wbd_cache[nn].items()
+                 if eg_dates[-1] < d <= te_dates[-1]}
+            return _ozet(_walk_managed(w, closes, te_dates, feats,
+                                       dict(MGMT_VARSAYILAN)))[0] if w else float("nan")
+        t_v, t_s = _te(MAX_POS), _te(en_iyi)
+        fark = (t_s - t_v) / max(abs(t_v), 1e-9) * 100
+        tuttu = (en_iyi != MAX_POS) and fark > 5.0
+        if tuttu:
+            kazanma += 1
+        secimler.append(en_iyi)
+        print(f"{k+1:<8} {te_dates[0]:%Y-%m}→{te_dates[-1]:%Y-%m}      {en_iyi:>13} "
+              f"{t_v:>15.1f}% {t_s:>13.1f}% {'  ✓' if tuttu else '  ·'}")
+    print("-" * 78)
+    onay = len(secimler) >= 3 and kazanma > len(secimler) / 2
+    print(f"Eğitimin seçimleri: {secimler} | {kazanma}/{len(secimler)} katmanda tuttu")
+    print(f"KARAR: {'DEĞİŞTİR → ' + str(max(set(secimler), key=secimler.count)) if onay else 'DEĞİŞTİRME (MAX_POS=%d kalsın)' % MAX_POS}")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
 def walkforward(years=8, katman=5):
     """WALK-FORWARD DOĞRULAMA — validate'in tek bölmesinin yerine çok katman.
 
@@ -1040,5 +1171,7 @@ if __name__ == "__main__":
     elif _cmd == "walkforward":
         walkforward(int(sys.argv[2]) if len(sys.argv) > 2 else 8,
                     int(sys.argv[3]) if len(sys.argv) > 3 else 5)
+    elif _cmd == "pozisyon":
+        pozisyon(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     else:
         print(__doc__)
