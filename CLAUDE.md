@@ -92,6 +92,29 @@ This parallel-cohort design became considerably more important on 2026-08-03: th
 
 Robot runs the management pass for both markets. `.github/workflows/daily-robot.yml` runs a cron per market — 15:40 UTC for BIST, 21:30 UTC for US (after its close), because the 15:40 run is mid-session for US and would decide on half-day prices. See "Robot market isolation" under US parity for the full wiring and the trap that came with it.
 
+### Partial profit-take fired every day, not once (fixed 2026-08-18)
+
+`PortfolioDoctor`'s partial profit-take had no memory of having fired. The condition was just `price >= target` against a **static** `target_price`, so while the price stayed above target it trimmed another 1/3 **every single day**. Live example (pid 4, TUPRS): weight went 33% → 22% → 15% → 10% → 7% → 4% across six trims while the stock rose 295 → 340. **The system sold its best position down to nothing precisely because it kept winning.** Systemic, not isolated: 47 repeated trims across 12+ portfolios (TUPRS, CRFSA, TKFEN).
+
+Fix: `pm_positions.kar_alindi` flag (idempotent migration), checked in the condition and written by `_uygula` when the trim was a profit-take. `SAT` deletes the row and `AL` uses `INSERT OR REPLACE`, so a reopened position starts clean.
+
+Note this behaviour was **never modelled in the backtest** — `_walk_managed` has no partial profit-taking. So the live system was doing something the simulation did not, and no amount of re-running the backtest would have found it. Live audit metrics and reading the trade log are what caught it.
+
+### The drawdown brake looked like a trap and is NOT — measured, then reverted
+
+pid 4 sat at 96% cash for 9 consecutive days, brake firing every day (NAV 18.9% below its 17 July peak, threshold 15%). The obvious reading is the documented `cummax` trap: cash earns 0%, so NAV freezes, so the drawdown never heals, so the brake never releases. The live `tail(90)` is 90 NAV **rows** (~4.5 months of weekdays) and a five-week-old portfolio has ~25 rows, so the window is effectively since-inception and the fix documented under the sweep section does nothing for young portfolios.
+
+So a release condition was added — brake off once cash exceeds a threshold, on the argument that a mostly-cash portfolio has already de-risked and the brake is now only blocking recovery. **Measured on the 8-year panel, it is harmful:**
+
+| | Real CAGR | MaxDD | Sharpe |
+|---|---|---|---|
+| Brake always on (current) | **+15.6%** | **−25.2%** | **0.71** |
+| Released on cash threshold | +11.7% | −39.5% | 0.56 |
+
+Identical at every threshold tested (30/40/50/60%), because once braked the cash level is already above all of them. Reverted in both engines.
+
+The reasoning error: in the backtest, "braked and mostly cash" means *positions were stopped out during a decline*, and buying back into that is what costs the 14 points of drawdown. pid 4 reached 96% cash mainly through the profit-take bug above, which is a different cause with a different fix. **Fix the cause, not the symptom** — and this is the fifth time in this project that an intuitive fix was measured and rejected.
+
 ### Rule audit + editor-approved parameters (2026-07-28)
 
 `PortfolioAudit` runs in the robot every day, measures whether the management rules are actually working, writes to `pm_audit`, and **changes nothing on its own**. Metrics: **stop accuracy** (did a stopped-out stock keep falling? if it rebounded the stop was too tight), **swap accuracy** (did the replacement beat what was sold?), **cost burden** (commission paid ÷ gross NAV movement), **managed−passive spread** (the parallel cohorts — the actual question), and average cash. Exit/swap events only count once ≥5 days old.

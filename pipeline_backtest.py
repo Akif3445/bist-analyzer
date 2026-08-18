@@ -517,6 +517,11 @@ def _walk_managed(weights_by_date, closes, dates, feats, par):
         # 3) Rebalans günü: takas eşiğiyle hedefe yaklaş
         while ri < len(rebal) and rebal[ri] <= d1:
             hedef = weights_by_date[rebal[ri]]
+            # Fren "nakit yüksekse serbest bırakılsın" diye denendi (2026-08-18)
+            # ve ÖLÇÜLDÜ: reel CAGR %15.6 → %11.7, MaxDD %-25.2 → %-39.5.
+            # Frendeyken yüksek nakit "pozisyonlar düşen piyasada stoplandı"
+            # demek; oraya geri girmek zarar ettiriyor. Fren işini yapıyor,
+            # dokunulmadı. Sezgi yine yanıldı, ölçüm düzeltti.
             frende = v < nav_peak * (1 - fren)
             if frende:
                 # Düşüş freni: yeni alım yok, mevcut korunur

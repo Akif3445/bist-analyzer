@@ -3559,7 +3559,14 @@ class PortfolioManager:
             _pcols = {c.get("name") for c in
                       _PMDB.execute("SELECT name FROM pragma_table_info('pm_positions')")["rows"]}
             for kolon, tanim in (("peak_price", "REAL DEFAULT 0"),
-                                 ("opened_at",  "TEXT")):
+                                 ("opened_at",  "TEXT"),
+                                 # Kısmi kâr alma POZİSYON BAŞINA BİR KEZ olmalı.
+                                 # Bayrak yokken koşul "fiyat >= hedef" idi ve hedef
+                                 # statik olduğu için fiyat hedefin üstünde kaldığı
+                                 # HER GÜN yeniden 1/3 kesiyordu: TUPRS %33→22→15→10→7→4
+                                 # olurken hisse 295→340 yükseliyordu. Sistem, kazanmaya
+                                 # devam ettiği için en iyi pozisyonunu satıyordu.
+                                 ("kar_alindi", "INTEGER DEFAULT 0")):
                 if kolon not in _pcols:
                     _PMDB.execute(f"ALTER TABLE pm_positions ADD COLUMN {kolon} {tanim}")
                     log.info("pm_positions: %s kolonu eklendi", kolon)
@@ -4710,6 +4717,7 @@ class PortfolioDoctor:
             # uygulanırsa ikincisi birincisini geri alır (ve nakit yanlış hesaplanır);
             # bu yüzden önce nihai ağırlık bulunur, sonra tek aksiyon üretilir.
             satilan = {t for t, a, _, _ in aksiyonlar if a == "SAT"}
+            kar_alinanlar = set()   # bu turda kâr alınanlar → bayrak yazılacak
             tavan = PortfolioDoctor.kural("max_pozisyon")
             hedef_w = {}
             for x in kalan:
@@ -4721,8 +4729,10 @@ class PortfolioDoctor:
                 nedenler = []
                 f = fiyat.get(t)
                 hedef = float(x.get("target_price") or 0)
-                if f and hedef > 0 and f >= hedef and w >= 6.0:
+                if (f and hedef > 0 and f >= hedef and w >= 6.0
+                        and not int(x.get("kar_alindi") or 0)):
                     w = round(w * (1 - PortfolioDoctor.kural("kismi_kar_pay")), 1)
+                    kar_alinanlar.add(t)
                     nedenler.append(f"hedefe ulaşıldı ({f:.2f} ≥ {hedef:.2f}), 1/3 kâr alındı")
                 if w > tavan:
                     w = tavan
@@ -4804,7 +4814,8 @@ class PortfolioDoctor:
 
             if not dry_run:
                 PortfolioDoctor._uygula(p, pos, aksiyonlar, fiyat, zirve_guncel,
-                                        maliyet, bugun, scan)
+                                        maliyet, bugun, scan,
+                                        kar_alinanlar=kar_alinanlar)
             rapor.append({"pid": pid, "portfoy": p["name"],
                           "aksiyonlar": [{"ticker": t, "aksiyon": a, "agirlik": w, "gerekce": g}
                                          for t, a, w, g in aksiyonlar]})
@@ -4812,7 +4823,8 @@ class PortfolioDoctor:
 
     @staticmethod
     def _uygula(p: dict, pos: list, aksiyonlar: list, fiyat: dict,
-                zirve_guncel: dict, maliyet_pct: float, bugun: str, scan: dict = None):
+                zirve_guncel: dict, maliyet_pct: float, bugun: str, scan: dict = None,
+                kar_alinanlar: set = None):
         """Kararları veritabanına yazar: NAV zincirlenir, pozisyonlar güncellenir,
         her işlem gerekçesiyle pm_trades'e kaydedilir."""
         pid = p["id"]
@@ -4860,8 +4872,12 @@ class PortfolioDoctor:
                               "VALUES (?,?,?,?,?,?,?,?)",
                               (pid, t, f, yeni_w, stop, hedef, f, bugun)))
             else:   # AZALT — ağırlık küçülür, pozisyon kalır
-                stmts.append(("UPDATE pm_positions SET weight=? WHERE pid=? AND ticker=?",
-                              (yeni_w, pid, t)))
+                if t in (kar_alinanlar or set()):
+                    stmts.append(("UPDATE pm_positions SET weight=?, kar_alindi=1 "
+                                  "WHERE pid=? AND ticker=?", (yeni_w, pid, t)))
+                else:
+                    stmts.append(("UPDATE pm_positions SET weight=? WHERE pid=? AND ticker=?",
+                                  (yeni_w, pid, t)))
 
             stmts.append(("INSERT INTO pm_trades (pid, tarih, ticker, aksiyon, agirlik_once, "
                           "agirlik_sonra, fiyat, maliyet_pct, gerekce) VALUES (?,?,?,?,?,?,?,?,?)",
