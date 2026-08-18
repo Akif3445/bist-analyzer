@@ -470,7 +470,7 @@ Method caveat printed by the command itself: the periods are slices of one conti
 
 Three defaults confirmed. `sector_cap=2` is notable: it beats both 1 (+11.5%) and 3 (+14.7%) on the full window, so the diversification limit is genuinely at a sweet spot rather than being arbitrary. `corr_limit` barely binds — 0.95 and 1.01 (filter off) give identical results, so the correlation filter is close to inert at its current setting.
 
-**`min_tl_vol` 20M → 10M is the only proposal to pass the strict gate in this entire review round.** Full window: +17.8% vs +15.6% real CAGR, MaxDD −22.1% vs −25.2%, Sharpe 0.78 vs 0.71 — better on all three axes, and training chose it in 5 of 5 folds, which is far more stable than the wild swings seen for `takas_farki` or `max_pozisyon`.
+**`min_tl_vol` 20M → 10M passed the strict gate — and was then WITHDRAWN when measured across a wider range. See the addendum below.** Full window: +17.8% vs +15.6% real CAGR, MaxDD −22.1% vs −25.2%, Sharpe 0.78 vs 0.71 — better on all three axes, and training chose it in 5 of 5 folds, which is far more stable than the wild swings seen for `takas_farki` or `max_pozisyon`.
 
 The obvious objection is that a lower liquidity floor means thinner names and therefore worse market impact. **Tested directly** against the slippage model, and the objection does not hold — 10M wins at every portfolio size:
 
@@ -482,6 +482,31 @@ The obvious objection is that a lower liquidity floor means thinner names and th
 | 25M TL | **+5.6%** | +2.6% | 0.0% |
 
 Note also `min_tl_vol=100M` collapses to −6.4% real CAGR. The edge really does live in less-liquid names — consistent with the US finding that it appears where analyst coverage thins, and it explains the capacity limit measured above. Awaiting editor approval; `MIN_TL_VOL` is the backtest's own constant, the live equivalent is the scanner's volume gate.
+
+#### Addendum — the `min_tl_vol` proposal dissolved under a wider sweep, and NOT applied
+
+The sweep above tested 10/20/50/100M. Extending it downward to include the value the **live** system actually uses exposes the problem:
+
+| Threshold | Real CAGR | MaxDD | Sharpe | With 5M TL portfolio |
+|---|---|---|---|---|
+| **1M (live scanner)** | +18.3% | −26.8% | 0.81 | +10.1% |
+| 5M | +14.0% | −25.7% | 0.65 | +7.5% |
+| **10M** (proposed) | +17.8% | −22.1% | 0.78 | +11.0% |
+| **20M (backtest default)** | +15.6% | −25.2% | 0.71 | +10.3% |
+| 50M | +6.6% | −28.9% | 0.38 | +3.4% |
+
+**The curve is not monotonic** — 18.3 → 14.0 → 17.8 → 15.6 across adjacent thresholds. A real effect would be smooth; this pattern says the differences across 1M–20M are noise, and the 3/5 walk-forward majority was a thin one. What survives is only the high end: **50M+ is clearly bad**, which is the same "the edge lives in less-liquid names" result seen elsewhere.
+
+**Not applied.** There is no measurable basis for preferring 10M over 20M.
+
+**But the sweep found something more important on the way.** The backtest and the live system use *different* liquidity filters:
+
+| | Threshold | Window |
+|---|---|---|
+| Backtest `MIN_TL_VOL` | **20M TL** | 30-day rolling |
+| Live `volume_ok` ([bist_analyzer.py:2525](bist_analyzer.py:2525)) | **1M TL** | 20-day rolling |
+
+The live system is **twenty times more permissive** than the backtest. This is a fresh instance of known bias #1 ("the backtest tests a different system than the live one") and it had not been noticed before. It is disclosed rather than fixed: aligning the constants would invalidate every frozen result in this file for a difference the table above shows to be within noise. State it in the presentation; do not quietly change it.
 
 ### Market impact / scale capacity (2026-08-18) — `pipeline_backtest.py slippage [yil]`
 
