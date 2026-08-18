@@ -24,6 +24,9 @@ python pipeline_backtest.py sweep       # management-rule parameter sweep
 python pipeline_backtest.py validate 8  # out-of-sample validation (8y, single 60/40 split)
 python pipeline_backtest.py walkforward 8 5  # walk-forward: 5 expanding folds (stricter)
 python pipeline_backtest.py pozisyon 8  # position-count sweep + luck-band measurement
+python pipeline_backtest.py slippage 8  # market impact — how much capacity does the edge have
+python pipeline_backtest.py kurulum 8   # construction params (score_min, sector_cap, corr, volume)
+python pipeline_backtest.py sanstest 8  # system vs random-6, period by period
 ```
 
 `tools/pmdb_admin.py` exists so DB maintenance doesn't require handing Claude Code a blanket "run any Python" permission — the local `.claude/settings.local.json` allows only `python tools/pmdb_admin.py:*`, so the possible operations are bounded by this script's subcommands. Add new maintenance actions as subcommands here rather than widening the permission rule.
@@ -238,7 +241,7 @@ Honest caveat to state alongside it: the system also takes **more drawdown than 
 2. **Parameter selection was in-sample** — `sweep` finds the best value on the same data it measures. Addressed by `validate` below.
 3. **Survivorship / universe selection** — the universe is *today's* liquid list, so companies that delisted or shrank are absent (optimistic). Partly mitigated by applying each date's own volume filter.
 4. **Bull-market sample** — the 5-year window is entirely a BIST upswing, where insurance (stops, brakes) can only look like cost. Addressed by using an 8-year window in `validate`, which contains the 2018 TL crisis (−28% drawdown) and the 2020 Covid crash (−32%).
-5. **No slippage model** — cost is a flat percentage; in reality size moves price in small caps, which the universe contains.
+5. ~~**No slippage model**~~ — CLOSED 2026-08-18, see "Market impact / scale capacity". Capacity is a few million TL; all other figures in this file assume zero impact.
 6. **One-factor-at-a-time** — parameter interactions unexplored.
 
 ### Reproducibility anchor (2026-08-03) — `dondur`
@@ -432,6 +435,28 @@ The first period is the one to show: through the 2018 TL crisis the unmanaged tr
 Note this run does **not** re-litigate the 12→6 change: the default under test *is* 6, so the question asked was "is anything better than 6", and the answer is no. Supporting detail: when training picked high values (20, 12 in folds 1-2) the test half lost (−8.4%, −22.9%); when it picked low (3 in fold 3) the test half won (+38.7%). The direction still favours the low end.
 
 Fold-count sensitivity was checked deliberately (5 vs 3): identical verdicts on all four parameters, so the conclusion is not an artifact of how the window was cut.
+
+### Market impact / scale capacity (2026-08-18) — `pipeline_backtest.py slippage [yil]`
+
+Bias #5 on the list ("no slippage model") is now closed. `COST_RT` is a flat percentage that ignores trade *size*; in reality buying pushes the price up and selling pushes it down, and the effect grows with the trade's share of daily volume. The portfolio holds genuinely thin names (OZATD, OZSUB, ODINE), so this was never a theoretical concern.
+
+Model: square-root law, `impact = SLIP_K × sqrt(trade / ADV)` with `SLIP_K = 0.02` — 1% of ADV costs 0.20%, 10% costs 0.63%, 50% costs 1.41%. ADV comes from each stock's own `tlvol` series at that date, so it is point-in-time. `portfoy_tl=0` disables it and reproduces the old numbers exactly, so nothing already published moved.
+
+**How much capacity does the edge have?** (8-year panel, managed track)
+
+| Portfolio size | Unmanaged real CAGR | Managed real CAGR | Sharpe | Cost vs frictionless |
+|---|---|---|---|---|
+| (no impact) | +7.4% | **+15.6%** | 0.71 | — |
+| 100k TL | +6.7% | +14.8% | 0.68 | −0.8 pts |
+| 500k TL | +5.9% | +13.8% | 0.64 | −1.8 pts |
+| 1M TL | +5.3% | +13.1% | 0.62 | −2.6 pts |
+| 5M TL | +2.9% | +10.3% | 0.52 | −5.3 pts |
+| 10M TL | +1.3% | +8.5% | 0.45 | −7.1 pts |
+| 50M TL | −3.6% | **+0.8%** | 0.16 | −14.9 pts |
+
+**The strategy has a capacity of a few million TL.** Below ~1M TL the edge is essentially intact; by 10M TL roughly half of it has gone to market impact; by 50M TL it is gone. This is a property of a concentrated small/mid-cap momentum strategy and is not a defect — but it must be stated, because **every figure previously reported in this file assumes zero market impact, i.e. an infinitely small portfolio.**
+
+Caveat: `SLIP_K` is an order-of-magnitude estimate from the conservative end of the published range, not a calibrated constant for BIST. The shape of the decay is more trustworthy than any single row.
 
 ### Position count (2026-08-11) — `pipeline_backtest.py pozisyon [yil]`
 

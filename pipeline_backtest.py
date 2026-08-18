@@ -65,6 +65,38 @@ CORR_LIMIT   = 0.85
 SCORE_MIN    = 50.0
 MIN_TL_VOL   = 20_000_000
 COST_RT      = 0.004      # round-trip %0.4 (uygulamayla tutarlı)
+
+# PİYASA ETKİSİ (slippage) — bilinen yanlılık listesindeki 5. madde.
+# COST_RT düz bir yüzdedir ve işlem BÜYÜKLÜĞÜNÜ hiç dikkate almaz. Gerçekte
+# alım fiyatı yukarı, satış fiyatı aşağı iter; etki, işlemin o hissenin
+# günlük hacmine oranıyla büyür. Portföy ince hacimli isimler tutuyor
+# (OZATD, OZSUB, ODINE...), yani bu kalem teorik değil.
+#
+# Karekök yasası: etki ≈ K × sqrt(işlem / günlük hacim). K=0.02 ile
+#   hacmin  %1'i  → %0.20
+#   hacmin %10'u  → %0.63
+#   hacmin %50'si → %1.41
+# Literatürdeki ampirik aralığın muhafazakâr ucu; kesin bir sabit değil,
+# büyüklük mertebesi tahmini olarak okunmalı.
+SLIP_K = 0.02
+
+
+def _piyasa_etkisi(feats, ticker, tarih, islem_tl):
+    """Tek işlemin piyasa etkisi (oran). Hacim bilinmiyorsa ceza uygulanır."""
+    if islem_tl <= 0:
+        return 0.0
+    f = feats.get(ticker) if feats else None
+    if f is None:
+        return SLIP_K
+    try:
+        tv = f["tlvol"]
+        ix = tv.index.searchsorted(tarih, side="right") - 1
+        adv = float(tv.iloc[ix]) if ix >= 0 else 0.0
+    except Exception:
+        adv = 0.0
+    if adv <= 0:
+        return SLIP_K
+    return SLIP_K * min(1.0, islem_tl / adv) ** 0.5
 RANDOM_SEEDS = 50
 
 
@@ -216,13 +248,21 @@ def _precompute(closes, vols):
     return feats
 
 
-def _pick_at(date, feats, ret_panel, max_pos=None):
+def _pick_at(date, feats, ret_panel, max_pos=None, kur=None):
     """Bugünkü propose() mantığının point-in-time kopyası → {ticker: weight}.
 
     max_pos: pozisyon sayısı (varsayılan MAX_POS). Parametreleştirildi çünkü
     pozisyon SAYISI bugüne dek hiç taranmamıştı — 6 değeri bir varsayımdı."""
     if max_pos is None:
         max_pos = MAX_POS
+    # Kurulum parametreleri de dışarıdan verilebilir. Hiçbiri bugüne dek
+    # taranmamıştı; "makul görünen" varsayımlardı ve bu dosyada o ifade
+    # defalarca yanlış çıktı (kontrarian skor, düşüş freni, takas_farki...).
+    k = kur or {}
+    _min_vol = k.get("min_tl_vol", MIN_TL_VOL)
+    _skor_min = k.get("score_min", SCORE_MIN)
+    _sek_cap = k.get("sector_cap", SECTOR_CAP)
+    _kor_lim = k.get("corr_limit", CORR_LIMIT)
     cands = []
     for t, f in feats.items():
         cl = f["close"]
@@ -234,7 +274,7 @@ def _pick_at(date, feats, ret_panel, max_pos=None):
             continue
         price, score = float(cl.iloc[ix]), float(f["score"].iloc[ix])
         sma, tlv, atr = float(f["sma200"].iloc[ix] or 0), float(f["tlvol"].iloc[ix] or 0), float(f["atr_pct"].iloc[ix])
-        if tlv < MIN_TL_VOL or price <= 0 or not sma or price < sma or score < SCORE_MIN:
+        if tlv < _min_vol or price <= 0 or not sma or price < sma or score < _skor_min:
             continue
         mom3 = (price / float(cl.iloc[max(0, ix-63)]) - 1) * 100
         cands.append((t, score + mom3 * 0.4, atr))
@@ -244,11 +284,11 @@ def _pick_at(date, feats, ret_panel, max_pos=None):
     win = ret_panel.loc[:date].tail(120)
     for t, _rank, atr in cands:
         sec = _sector_of(t)
-        if sec_n.get(sec, 0) >= SECTOR_CAP:
+        if sec_n.get(sec, 0) >= _sek_cap:
             continue
         if kept and t in win.columns:
             cors = win[kept].corrwith(win[t]).abs()
-            if (cors > CORR_LIMIT).any():
+            if (cors > _kor_lim).any():
                 continue
         picks.append((t, atr))
         kept.append(t) if t in win.columns else None
@@ -263,7 +303,7 @@ def _pick_at(date, feats, ret_panel, max_pos=None):
     return {t: float(wi) for (t, _a), wi in zip(picks, w)}
 
 
-def _walk(weights_by_date, closes, dates):
+def _walk(weights_by_date, closes, dates, feats=None, portfoy_tl=0.0):
     """Aylık hedef ağırlıklar → günlük NAV (devir maliyetli).
 
     Ağırlıklar rebalanslar ARASINDA fiyatla sürüklenir (_walk_managed ile aynı
@@ -307,6 +347,14 @@ def _walk(weights_by_date, closes, dates):
             turnover = sum(abs(new_w.get(t, 0) - cur_w.get(t, 0))
                            for t in set(new_w) | set(cur_w)) / 2
             v *= (1 - COST_RT * turnover)
+            # portfoy_tl=0 → etki kapalı, davranış eskisiyle BİREBİR aynı
+            if portfoy_tl > 0:
+                etki = 0.0
+                for t in set(new_w) | set(cur_w):
+                    d = abs(new_w.get(t, 0) - cur_w.get(t, 0))
+                    if d > 0:
+                        etki += d / 2 * _piyasa_etkisi(feats, t, d1, portfoy_tl * v * d)
+                v *= (1 - etki)
             cur_w = dict(new_w)
             ri += 1
         nav.append(v)
@@ -438,7 +486,7 @@ def _skor_at(feats, t, date):
     return v if np.isfinite(v) else None
 
 
-def _walk_managed(weights_by_date, closes, dates, feats, par):
+def _walk_managed(weights_by_date, closes, dates, feats, par, portfoy_tl=0.0):
     """Aylık hedefler + GÜNLÜK yönetim (trailing stop, skor çıkışı, tavan,
     düşüş freni, takas eşiği). Nakit gerçek pozisyondur (getirisi 0)."""
     trail = par["trailing_pct"] / 100.0
@@ -489,6 +537,7 @@ def _walk_managed(weights_by_date, closes, dates, feats, par):
 
         # 2) GÜNLÜK YÖNETİM
         satilan_w = 0.0
+        satilanlar = {}      # ticker -> satılan ağırlık (piyasa etkisi için)
         for t in list(cur):
             cl = closes.get(t)
             if cl is None:
@@ -501,18 +550,29 @@ def _walk_managed(weights_by_date, closes, dates, feats, par):
                 continue
             # a) takip eden stop
             if cur[t]["peak"] > 0 and float(p) <= cur[t]["peak"] * (1 - trail):
-                satilan_w += cur[t]["w"]; del cur[t]; continue
+                satilan_w += cur[t]["w"]
+                satilanlar[t] = satilanlar.get(t, 0) + cur[t]["w"]
+                del cur[t]; continue
             # b) skor çıkışı
             sk = _skor_at(feats, t, d1)
             if sk is not None and sk < skor_c:
-                satilan_w += cur[t]["w"]; del cur[t]; continue
+                satilan_w += cur[t]["w"]
+                satilanlar[t] = satilanlar.get(t, 0) + cur[t]["w"]
+                del cur[t]; continue
             # c) pozisyon tavanı
             if cur[t]["w"] > tavan:
                 satilan_w += cur[t]["w"] - tavan
+                satilanlar[t] = satilanlar.get(t, 0) + (cur[t]["w"] - tavan)
                 cur[t]["w"] = tavan
         if satilan_w > 0:
             v *= (1 - COST_RT / 2 * satilan_w)     # tek yön maliyet
             islem_maliyeti_toplam += COST_RT / 2 * satilan_w
+            if portfoy_tl > 0:
+                _e = 0.0
+                for _t, _w in satilanlar.items():
+                    _e += _w * _piyasa_etkisi(feats, _t, d1, portfoy_tl * v * _w)
+                v *= (1 - _e)
+                islem_maliyeti_toplam += _e
 
         # 3) Rebalans günü: takas eşiğiyle hedefe yaklaş
         while ri < len(rebal) and rebal[ri] <= d1:
@@ -553,6 +613,14 @@ def _walk_managed(weights_by_date, closes, dates, feats, par):
                         for t in set(yeni_w) | set(cur)) / 2
             v *= (1 - COST_RT * devir)
             islem_maliyeti_toplam += COST_RT * devir
+            if portfoy_tl > 0:
+                _e = 0.0
+                for _t in set(yeni_w) | set(cur):
+                    _d = abs(yeni_w.get(_t, 0) - cur.get(_t, {}).get("w", 0))
+                    if _d > 0:
+                        _e += _d / 2 * _piyasa_etkisi(feats, _t, d1, portfoy_tl * v * _d)
+                v *= (1 - _e)
+                islem_maliyeti_toplam += _e
             yeni_cur = {}
             for t, w in yeni_w.items():
                 pk = cur[t]["peak"] if t in cur else 0.0
@@ -934,6 +1002,213 @@ def pozisyon(years=8, katman=5):
     print(f"Tamamlandı ({time.time()-t0:.0f}s)")
 
 
+def sanstest(years=8, katman=5):
+    """SİSTEM vs RASTGELE — her dönemde ayrı ayrı.
+
+    Projenin en güçlü sonucu "sistemin son NAV'ı rastgele-6 dağılımının %95
+    persentilinin üstünde" idi. Ama bu TEK pencereden geliyordu ve "o dönem
+    şanslıydınız" itirazına açıktı. Burada pencere dönemlere bölünür ve her
+    dönemde sistem, aynı dönemde çekilmiş 50 rastgele portföyle kıyaslanır.
+
+    Her dönem kendi içinde 100'e tabanlanır; portföy dönem başında sıfırlanmaz
+    (sürekli koşudan dilim alınır), böylece giriş maliyeti tekrarlanmaz.
+    """
+    t0 = time.time()
+    print(f"=== Sistem vs Rastgele, dönem dönem | {years} yıl | "
+          f"{datetime.now():%Y-%m-%d %H:%M} ===")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    reb = pd.date_range(dates[0], dates[-1], freq="MS")
+    reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+    wbd = {}
+    for d in reb:
+        w = _pick_at(d, feats, ret_panel)
+        if w:
+            wbd[d] = w
+    nav_sys = _walk(wbd, closes, dates)
+
+    all_t = sorted(feats)
+    rng_navs = []
+    for seed in range(RANDOM_SEEDS):
+        rng = np.random.default_rng(seed)
+        wbd_r = {}
+        for d in reb:
+            elig = [t for t in all_t if feats[t]["close"].index.searchsorted(d) > 260]
+            if len(elig) >= MAX_POS:
+                sel = rng.choice(elig, MAX_POS, replace=False)
+                wbd_r[d] = {t: 1.0 / MAX_POS for t in sel}
+        rng_navs.append(_walk(wbd_r, closes, dates))
+    print(f"Panel {len(feats)} hisse | {RANDOM_SEEDS} rastgele tohum "
+          f"({time.time()-t0:.0f}s)")
+    print()
+
+    n_all = len(dates)
+    sinir = [int(n_all * i / (katman + 1)) for i in range(katman + 2)]
+    print(f"{'dönem':<22} {'sistem':>9} {'rastgele medyan':>16} "
+          f"{'%95 dilim':>11} {'persentil':>11}  sonuç")
+    print("-" * 84)
+    ustte = 0
+    for k in range(katman + 1):
+        b, e = sinir[k], sinir[k + 1] - 1
+        sg = (nav_sys.iloc[e] / nav_sys.iloc[b] - 1) * 100
+        rg = np.array([(n.iloc[e] / n.iloc[b] - 1) * 100 for n in rng_navs])
+        pct = float((rg < sg).mean() * 100)
+        p95 = float(np.percentile(rg, 95))
+        if sg > p95:
+            ustte += 1
+        print(f"{dates[b]:%Y-%m}→{dates[e]:%Y-%m}      %{sg:>7.1f} %{np.median(rg):>14.1f} "
+              f"%{p95:>9.1f} {pct:>10.0f}%  {'%95 ÜSTÜ' if sg > p95 else ''}")
+    print("-" * 84)
+    print(f"Sistem {ustte}/{katman + 1} dönemde rastgelenin %95 persentilinin üstünde.")
+    print("Not: dönemler bağımsız değil (aynı sürekli koşunun dilimleri) ve")
+    print("rastgele portföyler her dönemde aynı tohumlarla üretiliyor — yani")
+    print("bu bir kesin anlamlılık testi değil, tutarlılık göstergesidir.")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
+def kurulum(years=8, katman=5):
+    """PORTFÖY KURULUM parametrelerini tarar — hiçbiri test edilmemişti.
+
+    MAX_POS taraması bu varsayımların ne kadar körü körüne taşındığını
+    gösterdi. Buradakiler de aynı sınıftan: score_min (aday eşiği),
+    sector_cap (aynı sektörden kaç hisse), corr_limit (korelasyon elemesi),
+    min_tl_vol (likidite tabanı). Hepsi "makul görünen" sayılardı.
+
+    Kabul, walkforward ile aynı: katmanların ÇOĞUNDA ve >%5 farkla kazanmalı.
+    """
+    t0 = time.time()
+    print(f"=== Kurulum Parametreleri | {years} yıl | {katman} katman | "
+          f"{datetime.now():%Y-%m-%d %H:%M} ===")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    reb = pd.date_range(dates[0], dates[-1], freq="MS")
+    reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+    xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
+    n_all = len(dates)
+    sinir = [int(n_all * i / (katman + 1)) for i in range(katman + 2)]
+    print(f"Panel {len(feats)} hisse ({time.time()-t0:.0f}s)")
+    print()
+
+    taranacak = {
+        "score_min":  ([40, 45, 50, 55, 60], SCORE_MIN),
+        "sector_cap": ([1, 2, 3], SECTOR_CAP),
+        "corr_limit": ([0.70, 0.80, 0.85, 0.95, 1.01], CORR_LIMIT),
+        "min_tl_vol": ([10e6, 20e6, 50e6, 100e6], MIN_TL_VOL),
+    }
+    for ad, (degerler, varsayilan) in taranacak.items():
+        print(f"--- {ad} (varsayılan {varsayilan:g}) ---")
+        wbd_c = {}
+        for d0 in degerler:
+            w_all = {}
+            for d in reb:
+                w = _pick_at(d, feats, ret_panel, kur={ad: d0})
+                if w:
+                    w_all[d] = w
+            wbd_c[d0] = w_all
+            sm = _stats(_walk_managed(w_all, closes, dates, feats,
+                                      dict(MGMT_VARSAYILAN)), xu_n, "_")
+            im = " *" if d0 == varsayilan else ""
+            print(f"  {ad}={d0:<10g} reel CAGR %{sm['reel_yillik']:>6.1f} | "
+                  f"MaxDD %{sm['maxdd']:>6.1f} | Sharpe {sm['sharpe']:>5.2f} | "
+                  f"{len(w_all)} rebalans{im}")
+        kazanma, secimler = 0, []
+        for k in range(katman):
+            eg, te = dates[:sinir[k+1]], dates[sinir[k+1]:sinir[k+2]]
+            en_iyi, en_g = None, -1e18
+            for d0 in degerler:
+                w_eg = {d: w for d, w in wbd_c[d0].items() if d <= eg[-1]}
+                if not w_eg:
+                    continue
+                g = _ozet(_walk_managed(w_eg, closes, eg, feats, dict(MGMT_VARSAYILAN)))[0]
+                if g > en_g:
+                    en_iyi, en_g = d0, g
+            if en_iyi is None:
+                continue
+            def _te(d0):
+                w = {d: x for d, x in wbd_c[d0].items() if eg[-1] < d <= te[-1]}
+                return _ozet(_walk_managed(w, closes, te, feats,
+                                           dict(MGMT_VARSAYILAN)))[0] if w else float("nan")
+            t_v, t_s = _te(varsayilan), _te(en_iyi)
+            fark = (t_s - t_v) / max(abs(t_v), 1e-9) * 100
+            if en_iyi != varsayilan and fark > 5.0:
+                kazanma += 1
+            secimler.append(en_iyi)
+        onay = len(secimler) >= 3 and kazanma > len(secimler) / 2
+        print(f"  → eğitimin seçimleri {secimler} | {kazanma}/{len(secimler)} katmanda tuttu")
+        print(f"  KARAR: {'DEĞİŞTİR' if onay else 'DEĞİŞTİRME'}")
+        print()
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
+def slippage(years=8):
+    """PİYASA ETKİSİ: kenar hangi portföy büyüklüğüne kadar ayakta kalıyor?
+
+    Backtest bugüne dek işlem maliyetini düz yüzde saydı ve işlem BÜYÜKLÜĞÜNÜ
+    hiç dikkate almadı. Portföy ince hacimli isimler tuttuğu için bu, "gerçek
+    parayla uygulanabilir mi" sorusunun cevabını gizliyordu.
+
+    Burada portföy büyüklüğü artırılır ve her seviyede kenarın ne kadarının
+    hayatta kaldığı ölçülür. Sonuç, ölçek kapasitesinin büyüklük mertebesi
+    tahminidir — kesin bir eşik değil, ama "sınırsız" olmadığını gösterir.
+    """
+    t0 = time.time()
+    print(f"=== Piyasa Etkisi / Ölçek Kapasitesi | {years} yıl | "
+          f"{datetime.now():%Y-%m-%d %H:%M} ===")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    reb = pd.date_range(dates[0], dates[-1], freq="MS")
+    reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+    wbd = {}
+    for d in reb:
+        w = _pick_at(d, feats, ret_panel)
+        if w:
+            wbd[d] = w
+    xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
+    print(f"Panel {len(feats)} hisse | {len(wbd)} rebalans | SLIP_K={SLIP_K} "
+          f"({time.time()-t0:.0f}s)")
+    print()
+
+    print(f"{'portföy':>12} {'yönetimsiz reel':>17} {'yönetimli reel':>16} "
+          f"{'yön. Sharpe':>12} {'kayıp':>9}")
+    print("-" * 72)
+    taban_m = None
+    for tl in (0, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000):
+        su = _stats(_walk(wbd, closes, dates, feats, tl), xu_n, "_")
+        sm = _stats(_walk_managed(wbd, closes, dates, feats,
+                                  dict(MGMT_VARSAYILAN), portfoy_tl=tl), xu_n, "_")
+        if taban_m is None:
+            taban_m = sm["reel_yillik"]
+        ad = "etki YOK" if tl == 0 else f"{tl/1e6:,.1f}M TL"
+        kayip = "" if tl == 0 else f"{sm['reel_yillik']-taban_m:+8.1f}p"
+        print(f"{ad:>12} {su['reel_yillik']:>16.1f}% {sm['reel_yillik']:>15.1f}% "
+              f"{sm['sharpe']:>12.2f} {kayip:>9}")
+    print()
+    print("Okuma: 'etki YOK' satırı bugüne kadar raporlanan rakamdır. Aşağı")
+    print("indikçe kenarın ne kadarının işlem maliyetine gittiği görülür.")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
 def walkforward(years=8, katman=5):
     """WALK-FORWARD DOĞRULAMA — validate'in tek bölmesinin yerine çok katman.
 
@@ -1034,6 +1309,7 @@ def walkforward(years=8, katman=5):
         "dusus_freni":  [10, 15, 20, 100],
         "max_pozisyon": [20, 25, 30, 40],
         "takas_farki":  [0, 3, 6, 9, 12, 20],
+        "skor_cikis":   [35, 39, 43, 47, 52],
     }
     print("BÖLÜM 2 — Parametre seçimleri örneklem-dışı tutuyor mu\n")
 
@@ -1176,6 +1452,12 @@ if __name__ == "__main__":
     elif _cmd == "walkforward":
         walkforward(int(sys.argv[2]) if len(sys.argv) > 2 else 8,
                     int(sys.argv[3]) if len(sys.argv) > 3 else 5)
+    elif _cmd == "sanstest":
+        sanstest(yrs)
+    elif _cmd == "kurulum":
+        kurulum(yrs)
+    elif _cmd == "slippage":
+        slippage(yrs)
     elif _cmd == "pozisyon":
         pozisyon(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     else:
