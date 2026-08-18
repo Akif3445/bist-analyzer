@@ -436,6 +436,53 @@ Note this run does **not** re-litigate the 12→6 change: the default under test
 
 Fold-count sensitivity was checked deliberately (5 vs 3): identical verdicts on all four parameters, so the conclusion is not an artifact of how the window was cut.
 
+### System vs random, period by period (2026-08-18) — `sanstest`
+
+**This qualifies the strongest claim in the project and must be presented alongside it.** The headline was "the system's final NAV sits above the 95th percentile of random 6-stock portfolios". That is true over the full window. Broken into six sub-periods it is far less flattering:
+
+| Period | System | Random median | Random 95th | System percentile |
+|---|---|---|---|---|
+| 2018-08→2019-12 | **−14.6%** | +78.3% | +156.6% | **0%** |
+| 2019-12→2021-04 | +143.1% | +179.4% | +504.6% | 40% |
+| 2021-04→2022-08 | +166.0% | +59.7% | +131.7% | **98%** |
+| 2022-08→2023-12 | +92.4% | +189.8% | +318.6% | **8%** |
+| 2023-12→2025-04 | +106.0% | +26.6% | +103.4% | **94%** |
+| 2025-04→2026-08 | +636.0% | +52.2% | +142.6% | **100%** |
+
+**Above the 95th percentile in only 3 of 6 periods, and in the bottom decile in two.** In 2018-08→2019-12 — the TL crisis — the system *lost 14.6% while the median random portfolio made 78.3%*, the worst possible ranking.
+
+The full-window result is not wrong: compounding is what an investor actually experiences, and a strategy that wins big in three periods and loses in two can still finish far ahead of every random draw. But **"consistently beats random" is not supported.** The edge is episodic and regime-dependent, and it fails badly in exactly the reversal environments where momentum is known to crash.
+
+Present it as: *over the full window the system finishes above the 95th percentile of random draws; period by period it is above the 95th percentile in half the sub-periods and in the bottom decile in two, including the 2018 crisis.* That is the honest version, and it is far more defensible than the headline alone.
+
+Method caveat printed by the command itself: the periods are slices of one continuous run (not independent) and the random portfolios reuse the same 50 seeds across periods, so this is a consistency indicator, not a significance test.
+
+### Construction parameters (2026-08-18) — `pipeline_backtest.py kurulum [yil]`
+
+`score_min`, `sector_cap`, `corr_limit` and `min_tl_vol` had never been tested. `_pick_at` now accepts them via `kur=`. Walk-forward gate, same as elsewhere (majority of folds, >5%):
+
+| Parameter | Default | Training's picks | Folds held | Verdict |
+|---|---|---|---|---|
+| `score_min` | 50 | [40, 45, 40, 45, 45] | 0/5 | no change |
+| `sector_cap` | 2 | [1, 1, 1, 3, 3] | 2/5 | no change |
+| `corr_limit` | 0.85 | [0.70 ×5] | 0/5 | no change |
+| **`min_tl_vol`** | **20M** | **[10M ×5]** | **3/5** | **change proposed** |
+
+Three defaults confirmed. `sector_cap=2` is notable: it beats both 1 (+11.5%) and 3 (+14.7%) on the full window, so the diversification limit is genuinely at a sweet spot rather than being arbitrary. `corr_limit` barely binds — 0.95 and 1.01 (filter off) give identical results, so the correlation filter is close to inert at its current setting.
+
+**`min_tl_vol` 20M → 10M is the only proposal to pass the strict gate in this entire review round.** Full window: +17.8% vs +15.6% real CAGR, MaxDD −22.1% vs −25.2%, Sharpe 0.78 vs 0.71 — better on all three axes, and training chose it in 5 of 5 folds, which is far more stable than the wild swings seen for `takas_farki` or `max_pozisyon`.
+
+The obvious objection is that a lower liquidity floor means thinner names and therefore worse market impact. **Tested directly** against the slippage model, and the objection does not hold — 10M wins at every portfolio size:
+
+| Portfolio | 10M floor | 20M floor | 50M floor |
+|---|---|---|---|
+| no impact | **+17.8%** | +15.6% | +6.6% |
+| 1M TL | **+14.4%** | +13.1% | +5.1% |
+| 5M TL | **+11.0%** | +10.3% | +3.4% |
+| 25M TL | **+5.6%** | +2.6% | 0.0% |
+
+Note also `min_tl_vol=100M` collapses to −6.4% real CAGR. The edge really does live in less-liquid names — consistent with the US finding that it appears where analyst coverage thins, and it explains the capacity limit measured above. Awaiting editor approval; `MIN_TL_VOL` is the backtest's own constant, the live equivalent is the scanner's volume gate.
+
 ### Market impact / scale capacity (2026-08-18) — `pipeline_backtest.py slippage [yil]`
 
 Bias #5 on the list ("no slippage model") is now closed. `COST_RT` is a flat percentage that ignores trade *size*; in reality buying pushes the price up and selling pushes it down, and the effect grows with the trade's share of daily volume. The portfolio holds genuinely thin names (OZATD, OZSUB, ODINE), so this was never a theoretical concern.
