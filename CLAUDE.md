@@ -436,6 +436,42 @@ Note this run does **not** re-litigate the 12→6 change: the default under test
 
 Fold-count sensitivity was checked deliberately (5 vs 3): identical verdicts on all four parameters, so the conclusion is not an artifact of how the window was cut.
 
+### Portfolios converge and turn over too fast — `skor_cikis` 43 → 39 (2026-08-29)
+
+Symptom reported from the live system: "portfolios have started to move identically". Measured, and it is real — but the accompanying guess ("they stopped buying") was the opposite of the truth. The system trades heavily: 26–98 trades/day across the managed set, roughly one trade per portfolio every two days.
+
+What is actually wrong is **turnover and convergence**:
+
+| Measure | Value |
+|---|---|
+| Managed BIST portfolios | 35 |
+| Unique stocks across all of them | **49** (of 210 slots) |
+| INVES / KUVVA / DEVA / POLHO | in 43% / 40% / 37% / 37% of portfolios |
+| Average holding period | **10.3 days** |
+| Sell reasons, 14 days | score exit 96, swap 77, stop 49 |
+| Cost burden | **4.2%** of gross movement (was 1.4%) |
+
+Two things follow. The convergence is a direct consequence of `takas_farki=6`: a low swap threshold pushes every portfolio toward the same top-ranked names, so a set of portfolios that looks diversified across horizons and profiles is closer to one bet. **The backtest cannot see this** — it simulates a single portfolio, so cross-portfolio convergence is invisible to it. Worth stating in the presentation as a limitation of the simulation, not just of the system.
+
+The turnover is worse. The calibration puts the edge at **30–90 days**, and the live system was holding for **10**. Score exits were the largest driver, so `skor_cikis` — never swept until now — was the suspect.
+
+Measured on the 8-year panel, the curve is single-peaked and smooth, which is what a real effect looks like:
+
+| `skor_cikis` | Real CAGR | MaxDD | Sharpe | With 5M TL portfolio |
+|---|---|---|---|---|
+| 30 | +18.8% | −31.0% | 0.81 | +17.0% |
+| 35 | +19.9% | −26.3% | 0.84 | +13.7% |
+| **39 (new)** | **+21.0%** | −25.8% | **0.88** | +14.8% |
+| **43 (old)** | +15.6% | −25.2% | 0.71 | +10.3% |
+| 47 | +5.7% | −27.1% | 0.35 | +1.6% |
+| 52 | +2.6% | −24.0% | 0.23 | −2.1% |
+
+MaxDD is flat across 35–43, so the extra return is not bought with risk, and the advantage survives market impact. Walk-forward: training picked 39 in **5 of 5** folds and it held in 3, with large wins (+37.9%, +43.7%, +36.2%) and small losses (−0.8%, −7.0%).
+
+**Contrast with `min_tl_vol`, which failed the same review a week earlier.** Both showed 5/5 training picks and 3/5 folds held. The difference is the shape of the wider curve: `min_tl_vol` zig-zagged (18.3 → 14.0 → 17.8 → 15.6) and was correctly read as noise; `skor_cikis` rises to a single peak and falls away cleanly. **When the walk-forward margin is thin, the shape of the full curve is the tie-breaker** — that is the transferable lesson.
+
+Cost for the live experiment: the managed shadow cohorts now carry a **second** before/after break (first `takas_farki` on 2026-08-03, now this). The live track is therefore three configurations deep and correspondingly weaker as evidence. Accepted deliberately: the live leg is already short and was contaminated by the robot outage, while leaving a measurably bad exit threshold in production for six more weeks has a certain cost.
+
 ### System vs random, period by period (2026-08-18) — `sanstest`
 
 **This qualifies the strongest claim in the project and must be presented alongside it.** The headline was "the system's final NAV sits above the 95th percentile of random 6-stock portfolios". That is true over the full window. Broken into six sub-periods it is far less flattering:

@@ -4530,7 +4530,17 @@ class PortfolioDoctor:
     # "Dengeli — kurumsal standart" parametreleri
     KURAL = {
         "trailing_pct":    15.0,   # zirveden bu kadar geri verirse çık
-        "skor_cikis":      43,     # SAT bölgesi
+        # SAT bölgesi eşiği. 43 → 39 (2026-08-29, ölçümle).
+        # 43'te pozisyonlar erken kesiliyordu: canlıda satışların en büyük
+        # sürücüsü skor çıkışıydı (14 günde 96 satış) ve ortalama tutma
+        # süresi 10 güne inmişti — oysa kalibrasyon kenarın 30-90 GÜNDE
+        # olduğunu söylüyor, yani sinyal işlemeden pozisyondan çıkılıyordu.
+        # 8 yıllık panelde eğri tek tepeli ve pürüzsüz: 30→18.8%, 35→19.9%,
+        # 39→21.0%, 43→15.6%, 47→5.7%, 52→2.6% reel CAGR. MaxDD 35-43
+        # arasında sabit (~-26%), yani getiri riskle satın alınmıyor.
+        # Walk-forward: eğitim 5/5 katmanda 39 seçti, 3/5'te anlamlı geçti
+        # (+%37.9, +%43.7, +%36.2; kayıplar -%0.8 ve -%7.0).
+        "skor_cikis":      39,
         # Aday, en zayıf hisseden bu kadar iyiyse takas.
         # 12 → 6 (2026-08-03, editör onayı). Ölçüm: 8 yıllık panelde yalnız bu
         # parametre değiştirilince 6 ve altı ~%15-16 reel CAGR / Sharpe ~0.71,
