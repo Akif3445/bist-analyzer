@@ -691,7 +691,42 @@ Going 6 → 10 costs about **15 points of real CAGR**. The edge lives at the ver
 
 So: the single-window optimum was wrong for the fourth time in this project, and the walk-forward gate caught it again.
 
-Remaining methodology work, in priority order:
+### Agreed next steps (2026-08-31, carried into a new session)
+
+The deflated-Sharpe result changed the plan. Testing more configurations on the same
+8-year BIST panel now *lowers* confidence rather than raising it, so the work shifts
+from searching to getting more independent evidence out of what we have. Three tasks,
+in this order:
+
+**1. Lock a data vault — do this FIRST, before any further testing.**
+Every result so far used the entire 8-year window, so nothing is untouched. Reserve
+the most recent 2 years and do not read them again until October. All development
+happens on the remaining 6; at the end the vault is opened **once**. That single
+number will be worth more than the ~695 trials already run, precisely because it is
+uncontaminated. Once opened it cannot be a vault again — so open it only when there
+is something final to check.
+
+**2. Combinatorial cross-validation (CPCV).**
+The current design splits the window one way (train/test) or into expanding folds.
+CPCV generates many train/test block combinations from the same data and returns a
+*distribution* of out-of-sample results instead of one number, and it yields the
+Probability of Backtest Overfitting directly. Better use of data already held, no
+waiting. This is the natural companion to `dsr`.
+
+**3. A third market.**
+The US transfer test took three minutes and produced evidence no amount of BIST
+backtesting could. Repeat for another market (Germany or the UK) via the same route:
+`get_scan_universe` supports market parameterisation, `us_transfer` is the template,
+and **behavioural parameters must again stay untouched** — that constraint is what
+makes the result meaningful.
+
+**Standing rule agreed with the user:** stop grid-searching for the best value of a
+parameter. Future changes should come from a stated hypothesis tested once (e.g.
+"the trailing stop should be volatility-scaled because the US result suggests the
+thresholds are volatility quantities"), not from sweeping a range and taking the
+maximum. One motivated trial costs almost nothing in DSR terms; twenty do.
+
+Also open, unchanged from before:
 1. **Per-fold system vs random-6** — the "above the 95th percentile" claim still rests on one window; showing it holds in each fold would close the "lucky period" objection.
 2. **8-year `sweep`** — the 5-year sweep says every parameter is at its optimum, but that window is bull-only. Lower priority now that walk-forward covers the same ground more strictly.
 
