@@ -27,6 +27,8 @@ python pipeline_backtest.py pozisyon 8  # position-count sweep + luck-band measu
 python pipeline_backtest.py slippage 8  # market impact — how much capacity does the edge have
 python pipeline_backtest.py kurulum 8   # construction params (score_min, sector_cap, corr, volume)
 python pipeline_backtest.py sanstest 8  # system vs random-6, period by period
+python pipeline_backtest.py dsr 8       # deflated Sharpe — multiple-testing correction
+python pipeline_backtest.py us 8        # US transfer test — out-of-sample in space
 ```
 
 `tools/pmdb_admin.py` exists so DB maintenance doesn't require handing Claude Code a blanket "run any Python" permission — the local `.claude/settings.local.json` allows only `python tools/pmdb_admin.py:*`, so the possible operations are bounded by this script's subcommands. Add new maintenance actions as subcommands here rather than widening the permission rule.
@@ -213,6 +215,107 @@ Frozen 5-year panel, `takas_farki=6` as the new default. Reference: unmanaged +9
 This is bias #6 on the list below (one-factor-at-a-time) biting hard: with `takas_farki` mis-set, single-parameter sweeps were measuring compensations for that error rather than the parameters themselves. Any future single-parameter conclusion should be re-checked whenever a different parameter moves.
 
 Method note (unchanged): acceptance requires the return difference to exceed 5% **and** the better value to win in nearly every calendar year. Proposals go to `pm_param_oneri` and are **never applied automatically**. The discipline parameters (`min_tutma_gun`, `bekleme_gun`, `gunluk_islem`) are deliberately **not** swept — they are anti-churn constraints, not free variables.
+
+### US transfer test (2026-08-31) — `pipeline_backtest.py us` — out-of-sample in SPACE
+
+Out-of-sample testing in *time* takes years. Testing in *space* does not. If the same construction logic works in a completely different market with parameters chosen on BIST, that is evidence the method generalises — available immediately, and it is the one kind of evidence that more BIST backtesting cannot produce (see the DSR section: additional trials make the BIST result weaker, not stronger).
+
+**Rule observed strictly: no behavioural parameter was touched.** `skor_cikis`, `takas_farki`, `trailing_pct`, `dusus_freni`, `max_pozisyon`, `MAX_POS`, `sector_cap`, `corr_limit`, `score_min` all kept their BIST-chosen values. Tuning any of them would have destroyed the entire point. Only structural conversions were made — symbol suffix, benchmark `^GSPC`, cost 0.4% → 0.2% (US commission is half), volume floor 20M TL → $50M (each equal to its own market's universe threshold).
+
+Panel: 593 US stocks, 2018-08-31 → 2026-08-31, fingerprint `fa8182eb025d`, 96/96 rebalances.
+
+| | Total | CAGR | MaxDD | Sharpe |
+|---|---|---|---|---|
+| **Unmanaged (selection only)** | **+1294.7%** | **+39.0%** | −35.9% | **1.06** |
+| Managed (BIST rules applied) | +73.6% | +7.1% | −40.7% | 0.41 |
+| S&P 500 | +164.3% | +12.9% | −33.9% | 0.72 |
+| Random-6, 50 seeds | median NAV 3.91 | | 5–95%: [1.88, 8.35] | |
+
+**The selection model transfers, and strongly.** Final NAV 13.95 against a random-6 5–95% band of [1.88, 8.35] — the **100th percentile**. It beats the S&P on both return (39.0% vs 12.9% CAGR) and risk-adjusted return (Sharpe 1.06 vs 0.72), using parameters selected in a different country, currency and market structure. Because the random-6 control experiences the same US bull market, the outperformance against *it* cannot be explained by the market being strong.
+
+**The management layer does not transfer, and actively destroys value.** It cuts CAGR from 39.0% to 7.1%, and — unlike in BIST — it does not even deliver its supposed compensation: drawdown gets *worse* (−40.7% vs −35.9%). Its entire justification in BIST was halving drawdown in 6 of 6 sub-periods; in the US it fails on both axes at once.
+
+The likely mechanism is that the management thresholds are volatility-scaled quantities I wrongly classed as "behavioural". A 15% trailing stop is a much tighter leash on a US large-cap than on a BIST small-cap, so the same number means something different in each market. That reading is consistent with the DSR concern applying *specifically* to the management parameters: those are the ones fitted to BIST, and they are the ones that fail to travel.
+
+**What this changes:**
+
+1. The strongest claim in the project is now the **selection** model, and it rests on two independent legs — above the 95th percentile of random draws in BIST *and* in the US, with the same parameters. That is real out-of-sample evidence, and it is what partially answers the deflated-Sharpe problem.
+2. The **management layer's claim shrinks to BIST**. It must be presented as a market-specific risk overlay, not a general property of the method. Do not describe it as validated.
+3. The US live cohorts currently run with `managed=1` and BIST thresholds. On this evidence that is the wrong configuration, but it is **not changed here** — a parameter decision needs its own walk-forward and editor approval, and this measurement is one window in one market.
+
+Caveat: 2018–2026 was a strong US bull run, so absolute figures flatter any long-only momentum strategy. The random-6 comparison is the control that survives that objection; the S&P comparison does not, on its own.
+
+### Backtest methodology audit against the published standard (2026-08-31)
+
+Two references define the standard here: Bailey & López de Prado's **Deflated Sharpe Ratio** and the Arnott–Harvey–Markowitz **Backtesting Protocol**. Both make the same central point: a researcher tries hundreds of configurations and reports the best, so the reported Sharpe is inflated and must be discounted by the number of trials.
+
+Where this project stands, item by item:
+
+| Requirement | Status |
+|---|---|
+| Point-in-time data, no look-ahead | ✅ |
+| Realistic costs incl. market impact | ✅ (2026-08-18) |
+| Out-of-sample beyond a single split | ✅ walk-forward, 5 and 3 folds |
+| Reproducibility | ✅ frozen panel + SHA fingerprint |
+| Control groups | ✅ random-6, equal-weight BIST-30, index |
+| Inflation adjustment | ✅ ENAG-real throughout |
+| Failed variants reported, not just winners | ✅ this file |
+| **Multiple-testing correction** | ⚠️ **implemented and FAILED — see below** |
+| Survivorship-free universe | ⚠️ bounded, not eliminated |
+| **Backtest tests the deployed system** | ❌ quantified below, and it is substantial |
+| More than one market | ✅ US transfer test — selection transfers, management does not |
+
+#### Deflated Sharpe Ratio — `pipeline_backtest.py dsr`
+
+Roughly **695 parameter configurations** were evaluated across this project. The DSR asks: if the strategy had *no* edge, what is the highest Sharpe we would expect to see after that many trials?
+
+| Trials N | Expected max Sharpe under the null | DSR |
+|---|---|---|
+| 25 (this run's grid) | 0.46 | 0.885 |
+| 100 | 0.58 | 0.805 |
+| 300 | 0.66 | 0.735 |
+| **695 (whole project)** | **0.72** | **0.679** |
+
+Uncorrected PSR against SR\*=0 is **0.9934** — the Sharpe looks decisively significant until the correction is applied. After it, **DSR = 0.68 against a 0.95 threshold. We do not clear the bar at any plausible trial count**, including the most generous one.
+
+Daily inputs: SR 0.0557 (0.88 annualised), T=1994, skew ≈ 0, kurtosis 6.46 — the fat tails matter and the DSR penalises them.
+
+**This does not say the strategy does not work. It says the backtest alone cannot establish that it does**, given how much searching was done. Three consequences:
+
+1. **More sweeping makes the result weaker, not stronger.** Every new configuration raises N and lowers DSR. The search phase is over; further parameter hunting is now actively counterproductive.
+2. **Independent evidence is the only remedy** — a different market (US transfer test) or live time. Both are out-of-sample in a way more backtesting cannot be.
+3. **The number must be presented.** A reviewer asking "how many parameters did you try?" will apply this discount mentally; doing it first is the difference between rigour and salesmanship.
+
+Mitigating argument, offered with caution because it is self-serving: DSR assumes the maximum was selected. Walk-forward *rejected* nearly every proposal and the defaults were kept in almost every case — only `takas_farki` and `skor_cikis` were ever changed. The effective N is therefore below 695. But even at N=25 the DSR is 0.885, still short of 0.95.
+
+#### How much does "the backtest tests a different system" actually cost? (measured)
+
+The simulation runs the technical core only; the live score is 45% technical + 25% news + 20% analyst upside + 10% valuation. Measured on 35 live stocks (top and mid band of the current scan), computing both scores:
+
+| Measure | Value |
+|---|---|
+| Spearman rank correlation | **+0.761** |
+| Pearson level correlation | +0.989 |
+| **Overlap in the top 6 picks** | **3 of 6** |
+
+Levels track almost perfectly because technical carries 45% of the weighted sum, but **ranking is what the strategy acts on**, and there the two disagree enough to change half the portfolio. So bias #1 is **not a footnote** — the backtest builds a portfolio roughly half of which the live system would not have chosen.
+
+Component rank correlations with the composite: technical +0.761, analyst premium +0.115, sentiment **−0.010**, valuation −0.167. Sentiment being ~zero is consistent with the earlier GDELT finding (t<1) and with most stocks receiving a near-neutral 50 when article counts are low — it shifts levels without moving ranks.
+
+#### Survivorship, bounded rather than eliminated
+
+A factual correction first: of the 32 universe names missing from the panel, **most are recent IPOs, not delistings** — EKDMR has 70 bars, MCARD 118, SVGYO 121. They fail the 260-bar minimum because they are new. Only a handful (KOZAL, IPEKE, EMLAK, FINBN…) are genuine delistings. Earlier notes in this file called all 32 "delisted"; that was wrong.
+
+The real bias is invisible by construction: companies liquid eight years ago that no longer exist never enter `get_scan_universe()` at all, and no historical constituent list is available from our sources. So it is **bounded by simulation** instead — positions are silently zeroed at various annual rates:
+
+| Annual blow-up rate | Real CAGR | Cost |
+|---|---|---|
+| 0% (current) | +21.0% | — |
+| 1% | +20.0% | −1.0 pt |
+| 2% | +18.9% | −2.1 pts |
+| 5% | +15.7% | −5.3 pts |
+
+BIST delisting runs at roughly 1–2% of listed companies per year, so the defensible upper bound on this bias is about **2 points of real CAGR**. It does not reverse any conclusion, and it is now a number rather than a disclaimer.
 
 ### Backtest results in REAL terms, and the bias list (2026-07-30)
 

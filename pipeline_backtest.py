@@ -119,7 +119,7 @@ EVREN_DOSYA     = "backtest_evren.json"
 PANEL_ONBELLEK  = "backtest_panel_{yil}y.pkl"
 
 
-def _download_panel(tickers, years, tekrar=2):
+def _download_panel(tickers, years, tekrar=2, ek=".IS"):
     """Kapanış/hacim panelleri (chunked bulk) + eksikleri yeniden deneme."""
     closes, vols = {}, {}
     period = f"{years + 2}y"
@@ -131,7 +131,7 @@ def _download_panel(tickers, years, tekrar=2):
                 bulk = yf.download(parti, period=period, interval="1d",
                                    auto_adjust=True, progress=False, group_by="ticker")
                 for s in parti:
-                    t = s[:-3]
+                    t = s[:-len(ek)] if ek else s
                     if t in closes:
                         continue
                     try:
@@ -145,7 +145,7 @@ def _download_panel(tickers, years, tekrar=2):
             except Exception as exc:
                 print(f"  indirme hatası (parti {i}): {exc}")
 
-    syms = [t + ".IS" for t in tickers]
+    syms = [t + ek for t in tickers]
     _al(syms, 100)
     print(f"  veri: {len(closes)}/{len(syms)} sembol (ilk geçiş)")
 
@@ -1002,6 +1002,217 @@ def pozisyon(years=8, katman=5):
     print(f"Tamamlandı ({time.time()-t0:.0f}s)")
 
 
+def us_transfer(years=8):
+    """US TRANSFER TESTİ — mekânda örneklem-dışı doğrulama.
+
+    Zamanda örneklem-dışı test (walk-forward) yıllar ister; mekânda olan
+    istemez. Aynı kurulum mantığı tamamen farklı bir piyasada da çalışıyorsa,
+    bu "yöntem genelleniyor" demektir ve beklemeden öğrenilir.
+
+    KRİTİK KURAL: davranışsal parametrelere DOKUNULMAZ. skor_cikis,
+    takas_farki, trailing_pct, max_pozisyon, MAX_POS, sector_cap, corr_limit
+    — hepsi BIST'te seçilmiş değerlerle kalır. Ayarlarsam iyi bir US sonucu
+    hiçbir şey kanıtlamaz; testin bütün değeri parametrelerin BAŞKA bir
+    piyasada seçilmiş olmasından geliyor.
+
+    Yalnızca YAPISAL/BİRİM dönüşümler yapılır (ayar değil, çeviri):
+      sembol eki .IS → yok | benchmark XU100 → ^GSPC
+      işlem maliyeti %0.4 → %0.2 (US komisyonu yarısı)
+      hacim eşiği 20M TL → 50M USD (her iki piyasada da evren eşiğine eşit)
+      ENAG reel düzeltmesi YOK — US nominal USD (bkz. CLAUDE.md US parite)
+    """
+    import json
+    import os
+    import pickle
+    t0 = time.time()
+    print(f"=== US TRANSFER TESTİ | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    print("Davranışsal parametreler BIST'ten AYNEN alındı — hiçbiri US için ayarlanmadı.")
+    print()
+
+    ev_dosya, pn_dosya = "backtest_evren_us.json", f"backtest_panel_us_{years}y.pkl"
+    if os.path.exists(pn_dosya):
+        with open(pn_dosya, "rb") as f:
+            d = pickle.load(f)
+        closes, vols = d["closes"], d["vols"]
+        print(f"US panel ÖNBELLEKTEN: {len(closes)} hisse | parmak izi {d['iz']}")
+    else:
+        if os.path.exists(ev_dosya):
+            uni = json.load(open(ev_dosya, encoding="utf-8"))["tickers"]
+        else:
+            uni = list(get_scan_universe("US"))[:600]
+            json.dump({"tarih": datetime.now().strftime("%Y-%m-%d"), "tickers": uni},
+                      open(ev_dosya, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            print(f"US evreni donduruldu → {ev_dosya} ({len(uni)} hisse)")
+        closes, vols = _download_panel(uni, years, ek="")
+        import hashlib
+        iz = hashlib.sha256("|".join(f"{t}:{len(closes[t])}" for t in sorted(closes))
+                            .encode()).hexdigest()[:12]
+        with open(pn_dosya, "wb") as f:
+            pickle.dump({"closes": closes, "vols": vols, "iz": iz}, f)
+        print(f"US panel yazıldı → {pn_dosya} | {len(closes)} hisse | iz {iz}")
+
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+    spx = yf.download("^GSPC", period=f"{years+1}y", interval="1d",
+                      auto_adjust=True, progress=False)
+    if isinstance(spx.columns, pd.MultiIndex):
+        spx.columns = spx.columns.get_level_values(0)
+    spx = spx["Close"].dropna()
+    dates = list(spx.index[spx.index >= spx.index[-1] - pd.DateOffset(years=years)])
+    reb = pd.date_range(dates[0], dates[-1], freq="MS")
+    reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+    wbd = {}
+    for d in reb:
+        w = _pick_at(d, feats, ret_panel, kur={"min_tl_vol": 50e6})
+        if w:
+            wbd[d] = w
+    print(f"Panel {len(feats)} hisse | {len(wbd)}/{len(reb)} rebalans | "
+          f"{dates[0]:%Y-%m-%d} → {dates[-1]:%Y-%m-%d} ({time.time()-t0:.0f}s)")
+    print()
+
+    global COST_RT
+    _eski_cost = COST_RT
+    COST_RT = 0.002                     # US komisyonu BIST'in yarısı
+    try:
+        nav_u = _walk(wbd, closes, dates)
+        nav_m = _walk_managed(wbd, closes, dates, feats, dict(MGMT_VARSAYILAN))
+        spx_n = spx.loc[dates] / spx.loc[dates].iloc[0]
+        rng_finals = []
+        all_t = sorted(feats)
+        for seed in range(RANDOM_SEEDS):
+            rng = np.random.default_rng(seed)
+            wr = {}
+            for d in reb:
+                elig = [t for t in all_t if feats[t]["close"].index.searchsorted(d) > 260]
+                if len(elig) >= MAX_POS:
+                    wr[d] = {t: 1.0 / MAX_POS for t in rng.choice(elig, MAX_POS, replace=False)}
+            rng_finals.append(_walk(wr, closes, dates).iloc[-1])
+    finally:
+        COST_RT = _eski_cost
+
+    def _oz(nav, ad):
+        tot = (nav.iloc[-1] / nav.iloc[0] - 1) * 100
+        yrs = (nav.index[-1] - nav.index[0]).days / 365.25
+        cagr = ((nav.iloc[-1] / nav.iloc[0]) ** (1 / yrs) - 1) * 100
+        dd = ((nav / nav.cummax()) - 1).min() * 100
+        r = nav.pct_change().dropna()
+        sh = r.mean() / r.std() * np.sqrt(252) if r.std() > 0 else 0
+        print(f"{ad:<26} toplam %{tot:>8.1f} | CAGR %{cagr:>6.1f} | "
+              f"MaxDD %{dd:>6.1f} | Sharpe {sh:>5.2f}")
+        return nav.iloc[-1]
+    print("=" * 84)
+    f_u = _oz(nav_u, "YÖNETİMSİZ (US)")
+    f_m = _oz(nav_m, "YÖNETİLEN (US)")
+    _oz(spx_n, "S&P 500")
+    rf = np.array(rng_finals)
+    print(f"{'Rastgele-6 (50 tohum)':<26} medyan son NAV {np.median(rf):.2f} | "
+          f"%5-%95 [{np.percentile(rf,5):.2f}, {np.percentile(rf,95):.2f}]")
+    print("=" * 84)
+    print(f"Sistem son NAV {f_u:.2f} → rastgele dağılımında "
+          f"%{(rf < f_u).mean()*100:.0f} persentil "
+          f"{'✅ >%95' if f_u > np.percentile(rf,95) else '⚠️ %95 ALTI'}")
+    print()
+    print("Not: US nominal USD, enflasyon düzeltmesi yok. Davranışsal")
+    print("parametreler BIST'te seçildi ve burada DEĞİŞTİRİLMEDİ.")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
+def dsr(years=8):
+    """DEFLATED SHARPE RATIO — çoklu test düzeltmesi.
+
+    Bailey & López de Prado (2014) ve Arnott/Harvey/Markowitz'in backtest
+    protokolünün merkezî uyarısı: bir araştırmacı yüzlerce konfigürasyon
+    dener ve EN İYİSİNİ raporlar. Deneme sayısı arttıkça, tesadüfen yüksek
+    Sharpe bulma olasılığı hızla büyür. Dolayısıyla raporlanan Sharpe
+    şişkindir ve deneme sayısına göre indirilmelidir.
+
+    Bu projede ~700 parametre konfigürasyonu denendi. O yüzden "Sharpe 0.88"
+    ham hâliyle savunulamaz; asıl soru şu: SIFIR kenarı olan bir stratejiyi
+    bu kadar çok deneseydik, şans eseri 0.88 görme olasılığımız neydi?
+
+    Hesap:
+      SR0 = sqrt(V[SR]) × [(1-γ)Z⁻¹(1-1/N) + γZ⁻¹(1-1/(Ne))]
+        = N denemede beklenen EN YÜKSEK Sharpe (kenar yokken)
+      DSR = Φ[(SR - SR0)·√(T-1) / √(1 - γ₃·SR + (γ₄-1)/4·SR²)]
+        = gerçek kenarın SR0'ı aştığına dair olasılık
+
+    V[SR] uydurulmuyor: bu projede fiilen taranan konfigürasyonların
+    Sharpe'larından ampirik olarak hesaplanıyor.
+    """
+    from scipy import stats as _st
+    t0 = time.time()
+    print(f"=== Deflated Sharpe Ratio | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(xu.columns, pd.MultiIndex):
+        xu.columns = xu.columns.get_level_values(0)
+    xu = xu["Close"].dropna()
+    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    reb = pd.date_range(dates[0], dates[-1], freq="MS")
+    reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+    wbd = {}
+    for d in reb:
+        w = _pick_at(d, feats, ret_panel)
+        if w:
+            wbd[d] = w
+
+    # 1) Denenen konfigürasyonların Sharpe DAĞILIMI (V[SR] için ampirik temel)
+    izgara = {
+        "trailing_pct": [10, 15, 20, 25, 100],
+        "dusus_freni":  [10, 15, 20, 100],
+        "max_pozisyon": [20, 25, 30, 40],
+        "takas_farki":  [0, 3, 6, 9, 12, 20],
+        "skor_cikis":   [30, 35, 39, 43, 47, 52],
+    }
+    gunluk_sr = []
+    for ad, degerler in izgara.items():
+        for d0 in degerler:
+            par = dict(MGMT_VARSAYILAN); par[ad] = float(d0)
+            nav = _walk_managed(wbd, closes, dates, feats, par)
+            r = _reel_seri(nav).pct_change().dropna()
+            if r.std() > 0:
+                gunluk_sr.append(float(r.mean() / r.std()))
+    N = len(gunluk_sr)
+    V_SR = float(np.var(gunluk_sr, ddof=1))
+    print(f"Panel {len(feats)} hisse | {N} konfigürasyon tarandı ({time.time()-t0:.0f}s)")
+    print(f"Deneme Sharpe'larının varyansı V[SR] = {V_SR:.3e} (günlük birimde)")
+    print()
+
+    # 2) En iyi (mevcut varsayılan) konfigürasyonun serisi
+    nav = _walk_managed(wbd, closes, dates, feats, dict(MGMT_VARSAYILAN))
+    r = _reel_seri(nav).pct_change().dropna()
+    T = len(r)
+    SR = float(r.mean() / r.std())
+    g3 = float(_st.skew(r)); g4 = float(_st.kurtosis(r, fisher=False))
+    print(f"Mevcut yapılandırma: günlük SR {SR:.4f} → yıllık {SR*np.sqrt(252):.2f}")
+    print(f"Gözlem T={T} | çarpıklık {g3:+.2f} | basıklık {g4:.2f} (normal=3)")
+    print()
+
+    # 3) N denemede beklenen EN YÜKSEK Sharpe (kenar yokken)
+    EULER = 0.5772156649015329
+    for N_var in (N, 100, 300, 695):
+        z1 = _st.norm.ppf(1 - 1.0 / N_var)
+        z2 = _st.norm.ppf(1 - 1.0 / (N_var * np.e))
+        SR0 = np.sqrt(V_SR) * ((1 - EULER) * z1 + EULER * z2)
+        pay = (SR - SR0) * np.sqrt(T - 1)
+        payda = np.sqrt(1 - g3 * SR + (g4 - 1) / 4 * SR ** 2)
+        DSR = float(_st.norm.cdf(pay / payda))
+        etiket = "bu koşuda" if N_var == N else "tüm oturum" if N_var == 695 else ""
+        print(f"  N={N_var:<5} SR0(beklenen en yüksek) = {SR0*np.sqrt(252):>5.2f} yıllık | "
+              f"DSR = {DSR:.4f} {'✅ anlamlı' if DSR > 0.95 else '⚠️ ANLAMSIZ'} {etiket}")
+    print()
+    z0 = (SR - 0) * np.sqrt(T - 1) / np.sqrt(1 - g3 * SR + (g4 - 1) / 4 * SR ** 2)
+    print(f"Karşılaştırma — düzeltmesiz PSR (SR*=0): {_st.norm.cdf(z0):.4f}")
+    print()
+    print("Okuma: DSR > 0.95 ise Sharpe, denenen konfigürasyon sayısı hesaba")
+    print("katıldıktan SONRA da anlamlıdır. Altındaysa raporlanan Sharpe,")
+    print("çoklu testin ürettiği şansla açıklanabilir demektir.")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
 def sanstest(years=8, katman=5):
     """SİSTEM vs RASTGELE — her dönemde ayrı ayrı.
 
@@ -1452,6 +1663,10 @@ if __name__ == "__main__":
     elif _cmd == "walkforward":
         walkforward(int(sys.argv[2]) if len(sys.argv) > 2 else 8,
                     int(sys.argv[3]) if len(sys.argv) > 3 else 5)
+    elif _cmd == "us":
+        us_transfer(yrs)
+    elif _cmd == "dsr":
+        dsr(yrs)
     elif _cmd == "sanstest":
         sanstest(yrs)
     elif _cmd == "kurulum":

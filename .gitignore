@@ -41,3 +41,5 @@ pipeline_yonetim.csv
 # DİKKAT: backtest_evren.json GITIGNORE EDİLMEZ. Tekrarlanabilirliğin çapası
 # odur; panel silinse bile o listeden birebir aynı veri indirilir.
 backtest_panel_*.pkl
+backtest_panel_us_*.pkl
+skor_karsilastirma.csv
