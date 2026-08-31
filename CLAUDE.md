@@ -29,6 +29,8 @@ python pipeline_backtest.py kurulum 8   # construction params (score_min, sector
 python pipeline_backtest.py sanstest 8  # system vs random-6, period by period
 python pipeline_backtest.py dsr 8       # deflated Sharpe — multiple-testing correction
 python pipeline_backtest.py us 8        # US transfer test — out-of-sample in space
+python pipeline_backtest.py kasa        # data vault status — what is locked
+python pipeline_backtest.py kasa-ac 8 EVET  # OPEN the vault — once, in October
 ```
 
 `tools/pmdb_admin.py` exists so DB maintenance doesn't require handing Claude Code a blanket "run any Python" permission — the local `.claude/settings.local.json` allows only `python tools/pmdb_admin.py:*`, so the possible operations are bounded by this script's subcommands. Add new maintenance actions as subcommands here rather than widening the permission rule.
@@ -335,6 +337,8 @@ Same frozen panel and window, `python pipeline_backtest.py run`:
 | XU100 | +858% | −61.6% | −17.4% | −22.9% | −0.54 |
 
 **The system's final NAV (98.60) sits above the 95th percentile of the random-6 distribution (5–95% band [4.73, 22.29]).** It is not a lucky draw: random 6-stock portfolios from the same universe, rebalanced monthly with the same costs, land nowhere near it. This — not the management layer — is the evidence that the *selection* model works, and it is the strongest thing in the project.
+
+> **Qualified hard by the data vault (2026-08-31).** This is the *five-year* window. On the six-year development window that remains after reserving 2024-08→2026-08, the same measurement puts the selection model at the **10th percentile** of random draws (final NAV 13.20, random median 27.46), and the managed track at the 62nd. The claim above is not withdrawn — it is measured — but it is window-dependent, and the window that carries it is largely the one now locked away. See "The data vault" section.
 
 Honest caveat to state alongside it: the system also takes **more drawdown than the index** (−49.1% vs −22.9%). It wins on return, not on smoothness. That is precisely the gap the management layer was built to close, and per the table above it closes it (−25.8%) by giving back real return.
 
@@ -691,6 +695,139 @@ Going 6 → 10 costs about **15 points of real CAGR**. The edge lives at the ver
 
 So: the single-window optimum was wrong for the fourth time in this project, and the walk-forward gate caught it again.
 
+### The data vault (2026-08-31) — the last two years are locked, and locking them changed the picture
+
+Step 1 of the agreed plan, and it had to come first: every result in this file
+was computed on a window whose last two years had already been used by every
+decision, so there was nothing left to check anything against. The reserve is
+now **2024-08-31 → today**, and no command in `pipeline_backtest.py` or
+`weight_calibration.py` can see past that date.
+
+**Mechanism, and why it is built this way.** The cutoff lives in
+`veri_kasasi.json` (tracked in git — one date, one source of truth). The lock
+is the **default**, not a flag: every command takes its window from the single
+gate `_endeks_penceresi()`, and the price panel is trimmed a second time on
+load by `_kasa_panel()`. Two layers because one missed code path is all it
+takes — the same trap as the robot's market isolation, where a restriction was
+added in one place and silently skipped the weekly cohort loop. A trimmed panel
+prints its **own** fingerprint (`45f4f3dc809a` against the full panel's
+`47a4ec949c92`), so a vault-era number can never be mistaken for a pre-vault one.
+
+The calibration side is locked too, and there the subtlety matters: a panel row
+dated 2024-08-01 carries `fwd_90d`, computed from prices running into November
+— its *date* is outside the vault but its *content* is not. `_panel_oku()`
+therefore cuts rows at `cutoff − horizon`, not at the cutoff. Locking only the
+backtest would have been theatre, because weights and the scoring style come
+from these ICs.
+
+**Window semantics:** the start still counts back from today, only the end
+moves. So `8` now means **2018-08-31 → 2024-08-29 (6.0 years)** — the same
+start as the published 8-year results, minus the reserve. Every number this
+repo produces from now on therefore differs from the ones above; compare
+against the new baseline below, never against a pre-vault figure.
+
+#### The baseline on the development window — this is uncomfortable and it is the point
+
+`karsilastir 8` and `run 8` under the lock, 448 stocks, 72/72 rebalances,
+2018-08-31 → 2024-08-29:
+
+| | Nominal | ENAG-real | **Real CAGR** | MaxDD | Sharpe |
+|---|---|---|---|---|---|
+| System, unmanaged (selection only) | +1220% | −61.5% | **−14.7%** | −69.9% | −0.09 |
+| System, managed | +3175% | −4.5% | **−0.8%** | −25.8% | 0.10 |
+| Equal-weight BIST-30 | +1694% | −47.7% | −10.2% | −32.8% | −0.23 |
+| Random-6 (50 seeds, mean) | +3468% | +4.1% | +0.7% | −39.3% | 0.16 |
+| XU100 | +960% | −69.1% | −17.8% | −31.8% | −0.59 |
+
+And the control comparison that the whole thesis rests on, measured exactly
+rather than as "inside the band" (final NAV against the 50 random seeds):
+
+| | Final NAV | Percentile | Seeds beaten |
+|---|---|---|---|
+| **Selection only (unmanaged)** | 13.20 | **10th** | 5 / 50 |
+| **Managed** | 32.75 | 62nd | 31 / 50 |
+| Random-6 median | 27.46 | — | — |
+
+**Strip the reserved two years and the selection model is in the bottom decile
+of random 6-stock portfolios.** The published headline — "the system's final
+NAV sits above the 95th percentile of random draws" — is a *five-year*
+(2021-08 → 2026-08) result, and the vault window is a different six years.
+
+The decomposition is not new; it is already in the `sanstest` table above,
+which reported the system's per-period percentile as 0%, 40%, 98%, 8%, 94%,
+100%. The five-year window happens to **exclude both weak periods** (2018-08 →
+2021-04) and **include both strongest ones** (2023-12 → 2026-08, now mostly
+reserved). What is new is seeing it compounded: on the BIST data we are still
+allowed to develop on, selection does not beat luck. (In the US over the
+same six years it does — see below, and that difference is the finding.)
+
+Note also which leg survives. On this window the **management layer** is the
+one carrying the result (62nd percentile vs 10th, real CAGR −0.8% vs −14.7%,
+MaxDD −25.8% vs −69.9%). That is the reverse of the reading taken after the US
+transfer test, where selection was the strong general leg and management the
+market-specific overlay. Both readings are window-dependent, which is itself
+the finding: **neither leg is robust enough for an unconditional claim.**
+
+`dsr 8` under the lock says the same thing without ambiguity: annualised
+Sharpe falls to **0.10** (it was 0.88 on the full window) and DSR is **0.03–0.14**
+across every trial count. On the development window there is no statistically
+defensible edge at all.
+
+#### The US leg survives the lock, and that is what saves the selection claim
+
+`us 8` under the same lock (585 US stocks, 72/72 rebalances, 2018-08-31 →
+2024-08-30, vault fingerprint `d24dd47f7e48`):
+
+| | Total | CAGR | MaxDD | Sharpe |
+|---|---|---|---|---|
+| **Unmanaged (selection only)** | **+355.1%** | **+28.7%** | −32.0% | **0.95** |
+| Managed (BIST rules) | −0.5% | −0.1% | −40.7% | 0.10 |
+| S&P 500 | +94.7% | +11.7% | −33.9% | 0.65 |
+| Random-6, 50 seeds | median NAV 2.38 | | 5–95%: [1.40, 4.43] | |
+
+Final NAV 4.55 — above the 95th-percentile value (4.43), beating 47 of 50
+random draws. **The US result does not depend on the reserved period at all.**
+Same parameters, chosen on BIST, on six years that end where the vault begins:
+still beats the index on return and on Sharpe, still beats random.
+
+So the two markets now say different things about the same model on the same
+six years — **10th percentile in BIST, 94th in the US** — and the management
+layer inverts too: it rescues BIST (62nd vs 10th) and destroys the US result
+(+28.7% → −0.1% CAGR), which is the market-specific pattern the earlier US
+transfer test already found.
+
+The defensible summary going into October: *the selection method has
+out-of-sample support in the US on data that took no part in tuning; its BIST
+evidence is concentrated in periods that are either early-window strong (2021-04
+→ 2022-08) or inside the reserve, and over the six-year development window BIST
+selection does not beat random.* Both halves have to be said. Quoting only the
+US half is salesmanship; quoting only the BIST half throws away the one leg that
+survived every test applied to it so far.
+
+#### What the vault does and does not prove
+
+It must not be oversold, because the reserve is **not unseen data**. Every
+8-year table in this file already covered it, `sanstest` reported it
+period-by-period, and two parameter decisions were taken on windows containing
+it — `takas_farki` 12→6 (2026-08-03) and `skor_cikis` 43→39 (2026-08-29). So
+the October run cannot be described as "a test on data never looked at". The
+defensible claim is narrower and still worth having: **no decision taken after
+2026-08-31 can have been fitted to it.**
+
+A blunt consequence: the vault as specified **cannot produce a surprise**. We
+already know from published runs that the system did well in 2024-2026, so
+opening it in October will confirm what we know, and a confirmation you can
+predict is weak evidence. The genuinely uncontaminated evidence remains what it
+was — the live shadow cohorts running forward in time, and transfer to markets
+the parameters never saw.
+
+The temptation now is obvious and must be named: the development window looks
+bad, so re-tune until it looks good. That is precisely the overfitting the
+vault exists to prevent, and it would also burn the reserve, since parameters
+fitted post-cutoff make the October number meaningless. **The standing rule
+applies with more force, not less** — a change needs a stated hypothesis
+tested once, not a sweep for whatever rescues 2018-2024.
+
 ### Agreed next steps (2026-08-31, carried into a new session)
 
 The deflated-Sharpe result changed the plan. Testing more configurations on the same
@@ -698,13 +835,12 @@ The deflated-Sharpe result changed the plan. Testing more configurations on the 
 from searching to getting more independent evidence out of what we have. Three tasks,
 in this order:
 
-**1. Lock a data vault — do this FIRST, before any further testing.**
-Every result so far used the entire 8-year window, so nothing is untouched. Reserve
-the most recent 2 years and do not read them again until October. All development
-happens on the remaining 6; at the end the vault is opened **once**. That single
-number will be worth more than the ~695 trials already run, precisely because it is
-uncontaminated. Once opened it cannot be a vault again — so open it only when there
-is something final to check.
+**1. Lock a data vault — DONE 2026-08-31.** Cutoff 2024-08-31, enforced by
+default in both `pipeline_backtest.py` and `weight_calibration.py`; open it once
+with `kasa-ac 8 EVET`. Full write-up, the new development-window baseline, and the
+limits of what the vault can prove are in "The data vault" section above — read that
+before running anything, because every command now returns different numbers than
+the tables in this file.
 
 **2. Combinatorial cross-validation (CPCV).**
 The current design splits the window one way (train/test) or into expanding folds.

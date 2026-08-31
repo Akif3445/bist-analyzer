@@ -54,6 +54,79 @@ MIN_HISTORY = 260
 WINDOW = 320
 
 
+# VERİ KASASI — kalibrasyon tarafı (2026-08-31)
+#
+# Kasa pipeline_backtest.py'de kuruldu ama oraya kilitlemek TEK BAŞINA yetmez:
+# ağırlıklar, skor stili ve eşikler bu dosyadaki IC ölçümlerinden çıkıyor. Kasa
+# dönemini gören bir kalibrasyon, kararları dolaylı yoldan rezerv veriye
+# uydurur ve Ekim'deki tek örneklem-dışı sayıyı sessizce kirletir. Kesim tek
+# kaynaktan (veri_kasasi.json) okunur; iki dosyada iki tarih tutmak, bu projede
+# birkaç kez canımızı yakan hata sınıfı.
+#
+# İKİ AYRI KESİM GEREKİYOR, ve bu incelik atlanırsa kilit delik kalır:
+#   • FİYAT indirmeleri kesimde biter.
+#   • PANEL satırları kesimden UFUK KADAR ÖNCE biter. Çünkü 2024-08-01 tarihli
+#     bir satırın fwd_90d kolonu, 2024-11'e kadarki fiyatlardan hesaplanmıştır
+#     — yani satırın tarihi kesimden küçük olsa bile İÇERİĞİ kasadan veri
+#     taşır. Ufuk işlem günü cinsinden verildiği için takvim gününe 1.5 ile
+#     çevrilir (haftasonu/tatil payı, muhafazakâr yönde).
+_KASA_KESIM = "?"          # bir kez okunur (build_tech her hisse için çağırıyor)
+
+
+def _kasa_kesim():
+    """veri_kasasi.json'daki kesim tarihi (Timestamp) — yoksa None.
+
+    Yol BETİĞE görelidir: başka bir dizinden çalıştırmak kilidi sessizce
+    kaldırmamalı (bkz. pipeline_backtest.py VERİ KASASI).
+    """
+    global _KASA_KESIM
+    if _KASA_KESIM != "?":
+        return _KASA_KESIM
+    import json
+    import os
+    yol = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "veri_kasasi.json")
+    _KASA_KESIM = None
+    if not os.path.exists(yol):
+        print(f"UYARI: {yol} yok — VERİ KASASI KİLİDİ YOK.")
+        return None
+    try:
+        with open(yol, encoding="utf-8") as f:
+            m = json.load(f)
+        _KASA_KESIM = pd.Timestamp(m["kesim"]) if m.get("kesim") else None
+    except Exception:
+        _KASA_KESIM = None
+    return _KASA_KESIM
+
+
+def _kasa_fiyat(df):
+    """İndirilen fiyat çerçevesini kasa kesiminde budar."""
+    kes = _kasa_kesim()
+    if kes is None or df is None or getattr(df, "empty", True):
+        return df
+    return df[df.index <= kes]
+
+
+def _panel_oku(yol, ufuk_gun=0):
+    """Kalibrasyon panelini okur ve kasa kesimine göre budar.
+
+    ufuk_gun: paneldeki en uzun ileri-getiri ufku (İŞLEM GÜNÜ). Satır tarihi
+    kesimden bu kadar önce bitmelidir, yoksa ileri-getiri kolonları kasadan
+    veri taşır.
+    """
+    df = pd.read_csv(yol)
+    kes = _kasa_kesim()
+    if kes is None or "date" not in df.columns:
+        return df
+    sinir = kes - pd.Timedelta(days=int(ufuk_gun * 1.5))
+    d = pd.to_datetime(df["date"])
+    kirpik = df[d <= sinir]
+    print(f"[KASA] {yol}: {len(df)} → {len(kirpik)} satır "
+          f"(kesim {kes:%Y-%m-%d}, ufuk payı {int(ufuk_gun*1.5)} gün → "
+          f"{sinir:%Y-%m-%d})")
+    return kirpik.reset_index(drop=True)
+
+
 def _all_tickers() -> list:
     return sorted({t for cats in BIST_STOCKS.values() for t in cats})
 
@@ -75,7 +148,7 @@ def build_tech():
         try:
             df = yf.download(f"{ticker}.IS", period="6y", interval="1d",
                              auto_adjust=True, progress=False)
-            df = _flatten_columns(df)
+            df = _kasa_fiyat(_flatten_columns(df))
             if df is None or df.empty or len(df) < MIN_HISTORY + 40:
                 print(f"[{n}/{len(tickers)}] {ticker}: yetersiz veri ({0 if df is None else len(df)} bar) — atlandı")
                 continue
@@ -171,7 +244,11 @@ def build_sentiment():
 
         # Şirket adı + borsa bağlamı: alakasız haberleri (uçuş, market kampanyası) azaltır
         query = f'"{company}"'
-        points = _gdelt_tone(query, "20200701000000", datetime.now().strftime("%Y%m%d%H%M%S"))
+        # Bitiş kasa kesiminde (yoksa bugün) — haber tonu paneli de rezerv
+        # dönemi görmemeli, bkz. VERİ KASASI.
+        _kes = _kasa_kesim()
+        _bit = (_kes if _kes is not None else pd.Timestamp.now()).strftime("%Y%m%d%H%M%S")
+        points = _gdelt_tone(query, "20200701000000", _bit)
 
         for p in points:
             d = p.get("date", "")[:8]
@@ -191,7 +268,7 @@ def build_sentiment():
 
 
 def analyze():
-    tech = pd.read_csv(TECH_CSV)
+    tech = _panel_oku(TECH_CSV, max(HORIZONS))
     print(f"Teknik panel: {len(tech)} gözlem, {tech['ticker'].nunique()} hisse, "
           f"{tech['date'].min()} → {tech['date'].max()}\n")
 
@@ -229,7 +306,7 @@ def analyze():
     # 3) SENTIMENT IC'leri (GDELT paneli varsa)
     sent_ic = {}
     try:
-        sent = pd.read_csv(SENT_CSV)
+        sent = _panel_oku(SENT_CSV, max(HORIZONS))
         # Son 7 günlük ortalama ton (uygulamanın haber lookback'iyle uyumlu)
         sent["date"] = pd.to_datetime(sent["date"])
         sent = sent.sort_values(["ticker", "date"])
@@ -286,7 +363,7 @@ def analyze_stops():
     ileriye yürütülür: önce stop mu kesilir, hedef mi vurulur, süre mi dolar?
     Not: aynı gün ikisi de gerçekleşirse STOP sayılır (muhafazakâr varsayım).
     """
-    tech = pd.read_csv(TECH_CSV)
+    tech = _panel_oku(TECH_CSV, max(HORIZONS))
     score_col = "tech_score_momentum" if "tech_score_momentum" in tech.columns else "tech_score"
 
     # Giriş olayları: tarih bazında üst %20
@@ -300,7 +377,7 @@ def analyze_stops():
         try:
             df = yf.download(f"{tk}.IS", period="6y", interval="1d",
                              auto_adjust=True, progress=False)
-            df = _flatten_columns(df)
+            df = _kasa_fiyat(_flatten_columns(df))
             if df is None or len(df) < 300:
                 continue
             close, high, low = df["Close"], df["High"], df["Low"]
@@ -396,7 +473,7 @@ def stability():
     Ekim sunumundaki 'parametreler zamanla kararlı mı?' kanıtı buradan çıkar.
     """
     build_tech()
-    tech = pd.read_csv(TECH_CSV)
+    tech = _panel_oku(TECH_CSV, max(HORIZONS))
     bugun = datetime.now().strftime("%Y-%m-%d")
 
     metrikler = {}
@@ -420,7 +497,7 @@ def stability():
     # ~3 dk; hata verirse BIST metrikleri yine yazılır.
     try:
         build_tech_us(offset=300, csv_yol="calibration_tech_us_mid.csv")
-        us = pd.read_csv("calibration_tech_us_mid.csv")
+        us = _panel_oku("calibration_tech_us_mid.csv", max(US_HORIZONS))
         for ad, col, fwd in [("us_ic_momentum_30g", "tech_score_momentum", "fwd_30"),
                              ("us_ic_52hafta_90g",  "week52_position",     "fwd_90")]:
             if fwd not in us.columns:
@@ -536,7 +613,7 @@ def build_tech_us(offset: int = 0, csv_yol: str = None):
             for t in parca:
                 try:
                     d = bulk[t] if isinstance(bulk.columns, pd.MultiIndex) else bulk
-                    d = _flatten_columns(d.dropna(how="all"))
+                    d = _kasa_fiyat(_flatten_columns(d.dropna(how="all")))
                     if d is not None and not d.empty:
                         veri[t] = d
                 except Exception:
@@ -581,7 +658,7 @@ def build_tech_us(offset: int = 0, csv_yol: str = None):
 
 def analyze_us():
     """US panelinde momentum vs kontrarian IC karşılaştırması."""
-    panel = pd.read_csv(US_TECH_CSV)
+    panel = _panel_oku(US_TECH_CSV, max(US_HORIZONS))
     print(f"US panel: {len(panel)} gözlem, {panel['ticker'].nunique()} hisse, "
           f"{panel['date'].min()} → {panel['date'].max()}\n")
 
@@ -640,16 +717,16 @@ def analyze_us_regime():
     Genişlik panelin kendi above_sma200 kolonundan gelir (o tarihte
     gerçekten bilinen bilgi — look-ahead yok).
     """
-    panel = pd.read_csv(US_TECH_CSV)
+    panel = _panel_oku(US_TECH_CSV, max(US_HORIZONS))
     panel["date"] = pd.to_datetime(panel["date"])
 
     # 1) Endeks + VIX geçmişi
     spx = yf.download("^GSPC", period="10y", interval="1d",
                       auto_adjust=True, progress=False)
-    spx = _flatten_columns(spx)["Close"].dropna()
+    spx = _kasa_fiyat(_flatten_columns(spx))["Close"].dropna()
     vix = yf.download("^VIX", period="10y", interval="1d",
                       auto_adjust=True, progress=False)
-    vix = _flatten_columns(vix)["Close"].dropna()
+    vix = _kasa_fiyat(_flatten_columns(vix))["Close"].dropna()
 
     sma50, sma200 = spx.rolling(50).mean(), spx.rolling(200).mean()
     mom1m = spx / spx.shift(21) - 1

@@ -26,13 +26,23 @@ Tekrarlanabilirlik: evren backtest_evren.json'a, fiyat paneli yerel
 backtest_panel_<yil>y.pkl'e DONDURULUR. Tüm komutlar bu sabit paneli kullanır,
 yani aynı komut her koşuda aynı sayıyı verir (bkz. TEKRARLANABİLİRLİK ÇAPASI).
 
+VERİ KASASI (2026-08-31): son 2 yıl KİLİTLİ. Aşağıdaki komutların HİÇBİRİ
+veri_kasasi.json'daki kesim tarihinden sonrasını görmez; kilit varsayılandır,
+bayrak gerektirmez (bkz. VERİ KASASI bölümü). Bu yüzden bu dosyadaki komutlar
+2026-08-31 öncesinde yayımlanmış sayılardan FARKLI sonuç verir — pencere artık
+2 yıl kısa. Karşılaştırmayı kasa-öncesi sayılarla değil, kasa altındaki yeni
+taban çizgisiyle yap.
+
 Kullanım: python pipeline_backtest.py dondur [yil=5]        # evren+panel dondur
           python pipeline_backtest.py run   [yil_sayisi=5]   # tam simülasyon
           python pipeline_backtest.py karsilastir [yil=5]    # yönetilen vs yönetimsiz
           python pipeline_backtest.py sweep [yil_sayisi=5]   # yönetim kuralı taraması
           python pipeline_backtest.py validate [yil=8]        # örneklem-dışı doğrulama
+          python pipeline_backtest.py kasa                    # kasa durumu
+          python pipeline_backtest.py kasa-ac [yil=8] EVET    # REZERV DÖNEM — tek sefer
 """
 
+import os as _os
 import sys
 import time
 import warnings
@@ -119,6 +129,124 @@ EVREN_DOSYA     = "backtest_evren.json"
 PANEL_ONBELLEK  = "backtest_panel_{yil}y.pkl"
 
 
+# VERİ KASASI (2026-08-31) — geliştirmenin GÖREMEDİĞİ rezerv dönem
+#
+# Bugüne dek her ölçüm 8 yıllık pencerenin TAMAMINI gördü. Deflated Sharpe
+# sonucu bunun bedelini sayıyla söylüyor: ~695 konfigürasyon denendiği için
+# DSR 0.68 < 0.95, yani backtest TEK BAŞINA kenarın varlığını kuramıyor.
+# Kritik sonuç şu: aynı veri üzerinde daha fazla test yapmak güveni ARTIRMAZ,
+# her yeni deneme N'i büyütüp DSR'yi düşürür.
+#
+# Bu yüzden pencerenin son 2 yılı KİLİTLENİR. Tüm geliştirme kalan 6 yılda
+# yapılır; kasa Ekim'de BİR KEZ açılır.
+#
+# İDDİANIN SINIRI — abartmamak şart: rezerv dönem "hiç bakılmamış veri"
+# DEĞİLDİR. Bu dosyadaki 8 yıllık tablolar onu zaten kapsıyordu ve iki
+# parametre kararı (takas_farki 12→6, skor_cikis 43→39) onu içeren
+# pencerelerde alındı. Kasanın verdiği garanti daha dar ama yine de değerli:
+# 2026-08-31'DEN SONRAKİ hiçbir karar ona uydurulmuş olamaz. Gerçekten
+# kirlenmemiş kanıt hâlâ ileri zamandır (canlı gölge kohortlar) ve
+# parametrelerin görmediği piyasalardır (US transfer testi).
+#
+# Mekanizma bilerek "unutulamaz" kuruldu:
+#
+#   1. Kilit VARSAYILANDIR, opsiyonel değil. Hiçbir komuta bayrak eklemek
+#      gerekmez; hepsi penceresini _endeks_penceresi() üzerinden alır.
+#   2. Panel yüklenirken de kesim tarihinde budanır (_kasa_panel). İki
+#      katmanlı: gözden kaçan bir kod yolu bile kasadaki günlere erişemez.
+#   3. Açmak tek yönlüdür ve açık onay ister; açılış veri_kasasi.json'a
+#      tarih/gerekçe/sonuçla yazılır. Bir kez görülen veri bir daha kasa
+#      olamaz, dolayısıyla bu dosya sonucun ne kadar temiz olduğunun kaydı.
+#
+# Pencere semantiği: BAŞLANGIÇ bugünden geriye sayılmaya devam eder, yalnız
+# SON kasa kesiminde biter. Böylece yayımlanmış sonuçların başlangıç tarihleri
+# değişmez ve karşılaştırılabilir kalır — kilitliyken `8` = 2018-08 → 2024-08
+# (yani 6 yıllık geliştirme penceresi), `karsilastir 8` hâlâ aynı krizleri
+# içerir. Alternatif (kesimden geriye saymak) 2016-08 → 2024-08 verirdi ve
+# bu dosyadaki hiçbir sayıyla kıyaslanamazdı.
+# Yol BETİĞE görelidir, çalışma dizinine değil: kasa dosyası bulunamazsa kilit
+# sessizce KALKAR ve bu, sessizce yanlış sonuç üreten türden bir hatadır.
+# Başka bir dizinden çalıştırmak yeterliydi.
+KASA_DOSYA = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                           "veri_kasasi.json")
+_KASA_ACIK = False          # yalnızca `kasa-ac` komutu True yapar
+_KASA_META = None
+
+
+def _kasa_meta() -> dict:
+    global _KASA_META
+    if _KASA_META is None:
+        import json
+        if _os.path.exists(KASA_DOSYA):
+            with open(KASA_DOSYA, encoding="utf-8") as f:
+                _KASA_META = json.load(f)
+        else:
+            _KASA_META = {}
+            print(f"UYARI: {KASA_DOSYA} bulunamadı — VERİ KASASI KİLİDİ YOK, "
+                  "bu koşu rezerv dönemi de görüyor.")
+    return _KASA_META
+
+
+def _kasa_tarihi():
+    """Kilitliyken veri kesim tarihi (Timestamp), kasa açıkken None."""
+    if _KASA_ACIK:
+        return None
+    k = _kasa_meta().get("kesim")
+    return pd.Timestamp(k) if k else None
+
+
+def _kasa_panel(closes, vols):
+    """Paneli kasa kesiminde budar — ikinci güvence katmanı.
+
+    Tüm göstergeler geriye dönük (SMA, ATR, rolling hacim), dolayısıyla
+    kuyruğu kesmek kesimden ÖNCEKİ hiçbir değeri değiştirmez. Budanmış panel
+    için AYRI bir parmak izi basılır: donmuş panelin izi tüm veriyi kapsar,
+    kasa altındaki bir sonuç ise başka bir veri kümesinden gelir ve çıktıda
+    ayırt edilebilmesi gerekir.
+    """
+    import hashlib
+    kes = _kasa_tarihi()
+    if kes is None:
+        return closes, vols
+    c = {t: s[s.index <= kes] for t, s in closes.items()}
+    c = {t: s for t, s in c.items() if len(s) > 0}
+    v = {t: vols[t][vols[t].index <= kes] for t in c if t in vols}
+    iz = hashlib.sha256(
+        "|".join(f"{t}:{len(c[t])}:{c[t].iloc[-1]:.4f}"
+                 for t in sorted(c)).encode()).hexdigest()[:12]
+    print(f"[KASA] panel {kes:%Y-%m-%d} tarihinde budandı → {len(c)} hisse "
+          f"| kasa parmak izi {iz}")
+    return c, v
+
+
+def _endeks_penceresi(sembol, years):
+    """İndeks kapanışı + simülasyon penceresi, kasa kesimi uygulanmış.
+
+    Tüm komutlar penceresini buradan alır. Tek kapı olması şart: kasa
+    kilidini her komuta ayrı ayrı eklemek, er geç bir komutta unutulur ve
+    kilit sessizce delinir (bkz. robot piyasa izolasyonundaki tuzak).
+    """
+    ix = yf.download(sembol, period=f"{years+1}y", interval="1d",
+                     auto_adjust=True, progress=False)
+    if isinstance(ix.columns, pd.MultiIndex):
+        ix.columns = ix.columns.get_level_values(0)
+    seri = ix["Close"].dropna()
+    start = seri.index[-1] - pd.DateOffset(years=years)
+    dates = seri.index[seri.index >= start]
+    kes = _kasa_tarihi()
+    if kes is not None:
+        seri = seri[seri.index <= kes]
+        dates = dates[dates <= kes]
+        if len(dates) < 60:
+            raise SystemExit(
+                f"Kasa kesimi ({kes:%Y-%m-%d}) sonrası pencerede yalnız "
+                f"{len(dates)} gün kaldı — daha uzun bir yıl sayısı ver.")
+        print(f"[KASA] pencere {dates[0]:%Y-%m-%d} → {dates[-1]:%Y-%m-%d} "
+              f"({(dates[-1]-dates[0]).days/365.25:.1f} yıl) | son "
+              f"{_kasa_meta().get('rezerv_yil', 2)} yıl KİLİTLİ")
+    return seri, dates
+
+
 def _download_panel(tickers, years, tekrar=2, ek=".IS"):
     """Kapanış/hacim panelleri (chunked bulk) + eksikleri yeniden deneme."""
     closes, vols = {}, {}
@@ -188,7 +316,7 @@ def _panel_hazirla(years=5, yenile=False, evren_yenile=False):
             d = pickle.load(f)
         print(f"Panel ÖNBELLEKTEN: {len(d['closes'])} hisse | dondurma {d['tarih']} "
               f"| parmak izi {d['iz']}")
-        return d["closes"], d["vols"]
+        return _kasa_panel(d["closes"], d["vols"])
 
     # Evren: dosyadan oku (varsa), yoksa canlı çek ve dondur
     if os.path.exists(EVREN_DOSYA) and not evren_yenile:
@@ -219,7 +347,7 @@ def _panel_hazirla(years=5, yenile=False, evren_yenile=False):
                      "evren": len(uni)}, f)
     print(f"Panel ÖNBELLEĞE yazıldı → {onbellek} | {len(closes)}/{len(uni)} hisse "
           f"| parmak izi {iz}")
-    return closes, vols
+    return _kasa_panel(closes, vols)
 
 
 def _precompute(closes, vols):
@@ -387,13 +515,7 @@ def run(years=5):
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
 
     # Ortak tarih ekseni + aylık rebalans günleri
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    start = xu.index[-1] - pd.DateOffset(years=years)
-    dates = xu.index[xu.index >= start]
+    xu, dates = _endeks_penceresi("XU100.IS", years)
     rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
     rebal_dates = [dates[dates.searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
 
@@ -435,9 +557,15 @@ def run(years=5):
     s3 = _stats(nav_rng_mean, xu_n, "Rastgele-6 (ortalama)")
     s4 = _stats(xu_n, xu_n, "XU100")
     beat = (nav_sys.iloc[-1] > np.percentile(rng_final, 95))
+    # Ampirik persentil de basılır: "bandın içinde" bir hakeme yetmez, nerede
+    # olduğu sorulur. Bandın alt ucundaki bir sonuçla üst ucundaki aynı cümleyle
+    # raporlanmamalı — kasa altındaki koşu tam da bu ayrımı gerektirdi.
+    _yzd = float((rng_final < nav_sys.iloc[-1]).mean() * 100)
     print(f"\nRastgele dağılımda sistemin yeri: son NAV {nav_sys.iloc[-1]:.2f} | "
+          f"medyan {np.median(rng_final):.2f} | "
           f"rastgele %5-%95 bandı [{np.percentile(rng_final,5):.2f}, {np.percentile(rng_final,95):.2f}] "
-          f"→ {'>%95 (rastgeleden anlamlı iyi)' if beat else 'bandın içinde (rastgeleden ayrışamadı)'}")
+          f"→ %{_yzd:.0f} persentil ({(rng_final < nav_sys.iloc[-1]).sum()}/{len(rng_final)} tohum) "
+          f"{'>%95 (rastgeleden anlamlı iyi)' if beat else '— bandın içinde'}")
 
     out = pd.DataFrame({"sistem": nav_sys, "bist30_esit": nav_b30,
                         "rastgele_ort": nav_rng_mean, "xu100": xu_n})
@@ -678,13 +806,8 @@ def sweep(years=5):
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
     print(f"Panel: {len(feats)} hisse ({time.time()-t0:.0f}s)")
 
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    start = xu.index[-1] - pd.DateOffset(years=years)
-    dates = list(xu.index[xu.index >= start])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
     rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
 
@@ -788,13 +911,8 @@ def validate(years=8):
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
 
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    start = xu.index[-1] - pd.DateOffset(years=years)
-    dates = list(xu.index[xu.index >= start])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     kesme = int(len(dates) * 0.60)
     egitim, test = dates[:kesme], dates[kesme:]
     print(f"Panel: {len(feats)} hisse | EĞİTİM {egitim[0]:%Y-%m} → {egitim[-1]:%Y-%m} "
@@ -901,12 +1019,8 @@ def pozisyon(years=8, katman=5):
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
 
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
     rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
     xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
@@ -1051,14 +1165,15 @@ def us_transfer(years=8):
             pickle.dump({"closes": closes, "vols": vols, "iz": iz}, f)
         print(f"US panel yazıldı → {pn_dosya} | {len(closes)} hisse | iz {iz}")
 
+    # Kasa US panelinde de geçerli: pencere zaten _endeks_penceresi ile
+    # kesiliyor ama panelin kendisini de budamak ikinci güvence katmanı
+    # (BIST tarafındaki _panel_hazirla ile aynı gerekçe).
+    closes, vols = _kasa_panel(closes, vols)
+
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
-    spx = yf.download("^GSPC", period=f"{years+1}y", interval="1d",
-                      auto_adjust=True, progress=False)
-    if isinstance(spx.columns, pd.MultiIndex):
-        spx.columns = spx.columns.get_level_values(0)
-    spx = spx["Close"].dropna()
-    dates = list(spx.index[spx.index >= spx.index[-1] - pd.DateOffset(years=years)])
+    spx, dates = _endeks_penceresi("^GSPC", years)
+    dates = list(dates)
     reb = pd.date_range(dates[0], dates[-1], freq="MS")
     reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
     wbd = {}
@@ -1108,9 +1223,14 @@ def us_transfer(years=8):
     print(f"{'Rastgele-6 (50 tohum)':<26} medyan son NAV {np.median(rf):.2f} | "
           f"%5-%95 [{np.percentile(rf,5):.2f}, {np.percentile(rf,95):.2f}]")
     print("=" * 84)
-    print(f"Sistem son NAV {f_u:.2f} → rastgele dağılımında "
-          f"%{(rf < f_u).mean()*100:.0f} persentil "
-          f"{'✅ >%95' if f_u > np.percentile(rf,95) else '⚠️ %95 ALTI'}")
+    # AMPİRİK persentil ile bayrağı AYNI şeyden türet. Önceki hâli ampirik
+    # persentili yazdırıp bayrağı np.percentile'ın ARA DEĞERLİ eşiğinden
+    # üretiyordu; 50 tohumla bu ikisi ayrışıyor ve çıktı kendi kendisiyle
+    # çelişiyordu ("%94 persentil ✅ >%95"). Bir hakem bunu ilk bakışta görür.
+    _yzd = (rf < f_u).mean() * 100
+    print(f"Sistem son NAV {f_u:.2f} → rastgele dağılımında %{_yzd:.0f} "
+          f"persentil ({(rf < f_u).sum()}/{len(rf)} tohumu geçti) "
+          f"{'✅ >=%95' if _yzd >= 95 else '⚠️ %95 ALTI'}")
     print()
     print("Not: US nominal USD, enflasyon düzeltmesi yok. Davranışsal")
     print("parametreler BIST'te seçildi ve burada DEĞİŞTİRİLMEDİ.")
@@ -1145,12 +1265,8 @@ def dsr(years=8):
     closes, vols = _panel_hazirla(years)
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     reb = pd.date_range(dates[0], dates[-1], freq="MS")
     reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
     wbd = {}
@@ -1230,12 +1346,8 @@ def sanstest(years=8, katman=5):
     closes, vols = _panel_hazirla(years)
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     reb = pd.date_range(dates[0], dates[-1], freq="MS")
     reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
     wbd = {}
@@ -1278,6 +1390,9 @@ def sanstest(years=8, katman=5):
               f"%{p95:>9.1f} {pct:>10.0f}%  {'%95 ÜSTÜ' if sg > p95 else ''}")
     print("-" * 84)
     print(f"Sistem {ustte}/{katman + 1} dönemde rastgelenin %95 persentilinin üstünde.")
+    print("Ölçüt: getiri > np.percentile(rastgele, 95) (ara değerli eşik). Ampirik")
+    print("persentil kolonu 50 tohumla 2 puan adımlıdır, bu yüzden %94 yazan bir")
+    print("satır bu eşiği yine de geçebilir — çelişki değil, iki farklı tanım.")
     print("Not: dönemler bağımsız değil (aynı sürekli koşunun dilimleri) ve")
     print("rastgele portföyler her dönemde aynı tohumlarla üretiliyor — yani")
     print("bu bir kesin anlamlılık testi değil, tutarlılık göstergesidir.")
@@ -1300,12 +1415,8 @@ def kurulum(years=8, katman=5):
     closes, vols = _panel_hazirla(years)
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     reb = pd.date_range(dates[0], dates[-1], freq="MS")
     reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
     xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
@@ -1382,12 +1493,8 @@ def slippage(years=8):
     closes, vols = _panel_hazirla(years)
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     reb = pd.date_range(dates[0], dates[-1], freq="MS")
     reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
     wbd = {}
@@ -1451,12 +1558,8 @@ def walkforward(years=8, katman=5):
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
 
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    dates = list(xu.index[xu.index >= xu.index[-1] - pd.DateOffset(years=years)])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
     rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
     wbd = {}
@@ -1595,13 +1698,8 @@ def karsilastir(years=5):
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
 
-    xu = yf.download("XU100.IS", period=f"{years+1}y", interval="1d",
-                     auto_adjust=True, progress=False)
-    if isinstance(xu.columns, pd.MultiIndex):
-        xu.columns = xu.columns.get_level_values(0)
-    xu = xu["Close"].dropna()
-    start = xu.index[-1] - pd.DateOffset(years=years)
-    dates = list(xu.index[xu.index >= start])
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
     rebal_dates = pd.date_range(dates[0], dates[-1], freq="MS")
     rebal_dates = [dates[pd.Index(dates).searchsorted(d)] for d in rebal_dates if d <= dates[-1]]
     wbd = {}
@@ -1634,6 +1732,152 @@ def karsilastir(years=5):
     out = pd.DataFrame({"yonetimsiz": nav_u, "yonetilen": nav_m, "xu100": xu_n})
     out.to_csv("pipeline_yonetim.csv")
     print(f"\npipeline_yonetim.csv yazıldı | toplam süre {time.time()-t0:.0f}s")
+
+
+def kasa_durum():
+    """Kasanın durumu: nerede kesiliyor, ne kilitli, daha önce açıldı mı."""
+    meta = _kasa_meta()
+    if not meta.get("kesim"):
+        print(f"{KASA_DOSYA} yok → kasa KURULU DEĞİL, tüm veri geliştirmeye açık.")
+        return
+    kes = pd.Timestamp(meta["kesim"])
+    gecmis = meta.get("acilis_kaydi", [])
+    print("=" * 78)
+    print("VERİ KASASI")
+    print("=" * 78)
+    print(f"Kesim tarihi   : {kes:%Y-%m-%d}")
+    print(f"Kuruldu        : {meta.get('kuruldu', '?')}")
+    print(f"Rezerv         : son {meta.get('rezerv_yil', 2)} yıl "
+          f"({kes:%Y-%m-%d} → bugün) — hiçbir komut buraya bakmaz")
+    print(f"Durum          : {'AÇILDI' if gecmis else 'KİLİTLİ'}"
+          f"{' (' + str(len(gecmis)) + ' açılış)' if gecmis else ''}")
+    for a in gecmis:
+        print(f"   • {a.get('tarih')} | {a.get('pencere')} | {a.get('gerekce', '')}")
+    # Pencere başlangıcı BUGÜNDEN geriye sayılır (bkz. _endeks_penceresi),
+    # kesimden değil — yayımlanmış sonuçların başlangıç tarihi değişmesin diye.
+    bas = pd.Timestamp.today().normalize() - pd.DateOffset(years=8)
+    print(f"\nGeliştirme penceresi: `8` → {bas:%Y-%m-%d} → {kes:%Y-%m-%d} "
+          f"({(kes - bas).days / 365.25:.1f} yıl). Başlangıç bugünden geriye")
+    print("sayılır, son kasa kesiminde biter; yayımlanmış sonuçların başlangıcı aynı kalır.")
+    print("\nAçmak için:  python pipeline_backtest.py kasa-ac 8 EVET")
+
+
+def kasa_ac(years=8, onay=""):
+    """REZERV DÖNEM TESTİ — kasayı açar. Tek seferlik ve geri alınamaz.
+
+    Ekim sunumunun tek örneklem-dışı sayısı burada üretilir: donmuş
+    parametrelerle, hiçbir kararın etkilemediği son 2 yıl. Bu yüzden komut
+    açık onay ister ve açılışı dosyaya yazar — "kaç kez bakıldı" sorusunun
+    cevabı kayıtta durmalı, hafızada değil.
+
+    Açıldıktan SONRA parametre değiştirmek sonucu geçersiz kılar: o noktadan
+    itibaren rezerv dönem de sıradan bir eğitim penceresidir.
+    """
+    global _KASA_ACIK
+    import json
+    meta = _kasa_meta()
+    if not meta.get("kesim"):
+        print(f"{KASA_DOSYA} yok — açılacak kasa yok.")
+        return
+    kes = pd.Timestamp(meta["kesim"])
+    gecmis = meta.get("acilis_kaydi", [])
+    print("=" * 78)
+    print("VERİ KASASI — REZERV DÖNEM TESTİ (tek seferlik, geri alınamaz)")
+    print("=" * 78)
+    print(f"Kesim {kes:%Y-%m-%d} | kuruldu {meta.get('kuruldu', '?')} | "
+          f"önceki açılış: {len(gecmis)}")
+    if onay != "EVET":
+        print("\nBu komut kasayı AÇAR. Rezerv dönem bir kez görüldükten sonra bir")
+        print("daha 'hiç bakılmamış veri' değildir; sonraki hiçbir koşu aynı kanıt")
+        print("değerini taşımaz. Ekim'de, sistem donmuşken çalıştırılmalıdır.")
+        print(f"\n    python pipeline_backtest.py kasa-ac {years} EVET")
+        return
+    if gecmis:
+        print("\nUYARI: kasa DAHA ÖNCE açılmış "
+              f"({', '.join(str(a.get('tarih')) for a in gecmis)}). Bu koşu "
+              "örneklem-dışı DEĞİLDİR — sonucu öyle sunma.")
+
+    _KASA_ACIK = True                      # bundan sonra panel budanmaz
+    t0 = time.time()
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+
+    xu, tum = _endeks_penceresi("XU100.IS", years)
+    dates = [d for d in tum if d > kes]
+    if len(dates) < 60:
+        print(f"Rezerv dönemde yalnız {len(dates)} işlem günü var — test anlamsız.")
+        return
+    # İlk rebalans pencerenin İLK günü olmalı: ay başına beklemek portföyü
+    # haftalarca boş bırakır ve rezerv dönemin başını ölçüm dışı kılar.
+    reb = pd.date_range(dates[0], dates[-1], freq="MS")
+    reb = sorted({dates[0], *(dates[pd.Index(dates).searchsorted(d)]
+                              for d in reb if d <= dates[-1])})
+
+    wbd = {}
+    for d in reb:
+        w = _pick_at(d, feats, ret_panel)
+        if w:
+            wbd[d] = w
+    print(f"\nPanel {len(feats)} hisse | {len(wbd)}/{len(reb)} rebalans | "
+          f"{dates[0]:%Y-%m-%d} → {dates[-1]:%Y-%m-%d} ({time.time()-t0:.0f}s)")
+    print(f"Donmuş parametreler: {MGMT_VARSAYILAN} | MAX_POS={MAX_POS} "
+          f"SCORE_MIN={SCORE_MIN} SECTOR_CAP={SECTOR_CAP} "
+          f"CORR_LIMIT={CORR_LIMIT} MIN_TL_VOL={MIN_TL_VOL:,}\n")
+
+    xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
+    nav_u = _walk(wbd, closes, dates)
+    nav_m = _walk_managed(wbd, closes, dates, feats, dict(MGMT_VARSAYILAN))
+
+    # Rastgele-6 kontrol: projenin en güçlü iddiası ("rastgeleden anlamlı iyi")
+    # asıl burada sınanır — rezerv dönemde de tutuyor mu?
+    all_t = sorted(feats)
+    rng_navs = []
+    for seed in range(RANDOM_SEEDS):
+        rng = np.random.default_rng(seed)
+        wbd_r = {}
+        for d in reb:
+            elig = [t for t in all_t
+                    if feats[t]["close"].index.searchsorted(d) > 260]
+            if len(elig) >= MAX_POS:
+                wbd_r[d] = {t: 1 / MAX_POS for t in rng.choice(elig, MAX_POS,
+                                                               replace=False)}
+        rng_navs.append(_walk(wbd_r, closes, dates))
+    rng_final = np.array([n.iloc[-1] for n in rng_navs])
+    nav_rng = pd.concat(rng_navs, axis=1).mean(axis=1)
+
+    print("=" * 118)
+    su = _stats(nav_u, xu_n, "YÖNETİMSİZ (seçim)")
+    sm = _stats(nav_m, xu_n, "YÖNETİLEN")
+    sr = _stats(nav_rng, xu_n, "Rastgele-6 (ortalama)")
+    sx = _stats(xu_n, xu_n, "XU100")
+    print("=" * 118)
+    yuzde = float((rng_final < nav_u.iloc[-1]).mean() * 100)
+    print(f"\nRastgele dağılımda seçim modelinin yeri: son NAV {nav_u.iloc[-1]:.2f} | "
+          f"rastgele %5-%95 bandı [{np.percentile(rng_final,5):.2f}, "
+          f"{np.percentile(rng_final,95):.2f}] → {yuzde:.0f}. yüzdelik")
+    print("\nBu sayı bir kez üretilir. Sonucu beğenmeyip parametre değiştirmek,")
+    print("rezerv dönemi sıradan bir eğitim penceresine çevirir — kasanın")
+    print("tüm değeri buna direnmekte.")
+
+    kayit = {
+        "tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "pencere": f"{dates[0]:%Y-%m-%d} → {dates[-1]:%Y-%m-%d}",
+        "gun": len(dates),
+        "yil_argumani": years,
+        "panel_hisse": len(feats),
+        "parametreler": {**{k: MGMT_VARSAYILAN[k] for k in sorted(MGMT_VARSAYILAN)},
+                         "MAX_POS": MAX_POS, "SCORE_MIN": SCORE_MIN,
+                         "SECTOR_CAP": SECTOR_CAP, "CORR_LIMIT": CORR_LIMIT,
+                         "MIN_TL_VOL": MIN_TL_VOL},
+        "sonuc": {"yonetimsiz": su, "yonetilen": sm, "rastgele6_ort": sr,
+                  "xu100": sx, "rastgele_yuzdelik": yuzde},
+    }
+    meta.setdefault("acilis_kaydi", []).append(kayit)
+    meta["durum"] = "acildi"
+    with open(KASA_DOSYA, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=1)
+    print(f"\nAçılış {KASA_DOSYA} dosyasına yazıldı | süre {time.time()-t0:.0f}s")
 
 
 if __name__ == "__main__":
@@ -1673,6 +1917,12 @@ if __name__ == "__main__":
         kurulum(yrs)
     elif _cmd == "slippage":
         slippage(yrs)
+    elif _cmd == "kasa":
+        kasa_durum()
+    elif _cmd == "kasa-ac":
+        # Onay argümanı ZORUNLU — yanlışlıkla açılabilen bir kasa, kasa değildir.
+        kasa_ac(int(sys.argv[2]) if len(sys.argv) > 2 else 8,
+                sys.argv[3] if len(sys.argv) > 3 else "")
     elif _cmd == "pozisyon":
         pozisyon(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     else:

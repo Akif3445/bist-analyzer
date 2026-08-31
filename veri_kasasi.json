@@ -1,0 +1,14 @@
+{
+ "kesim": "2024-08-31",
+ "rezerv_yil": 2,
+ "kuruldu": "2026-08-31",
+ "durum": "kilitli",
+ "gerekce": "DSR 0.68 < 0.95 (N~695 deneme): aynı 8 yıllık panelde daha fazla test yapmak güveni artırmıyor, azaltıyor. Son 2 yıl rezerve alındı; tüm geliştirme kalan ~6 yılda yapılacak, kasa Ekim sunumundan hemen önce BİR KEZ açılacak.",
+ "kural": [
+  "Kilit varsayılandır: pipeline_backtest.py'deki her komut penceresini _endeks_penceresi() üzerinden alır ve panel _kasa_panel() ile budanır.",
+  "Kasayı açmak tek yönlüdür. Açıldıktan sonra parametre değiştirilirse rezerv dönem sıradan bir eğitim penceresine döner ve sonuç örneklem-dışı sayılamaz.",
+  "Açılış bu dosyaya yazılır; 'kaç kez bakıldı' sorusunun cevabı kayıtta durur, hafızada değil."
+ ],
+ "kapsam_notu": "Kilit backtest hattını (pipeline_backtest.py) kapsar. weight_calibration.py panelleri hâlâ 6 yıl geriye BUGÜNDEN kurulur; Ekim öncesi yeniden kalibrasyon yapılacaksa kesim oraya da uygulanmalı, yoksa kasa dolaylı olarak kirlenir.",
+ "acilis_kaydi": []
+}
