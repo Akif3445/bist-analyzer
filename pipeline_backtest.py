@@ -231,12 +231,31 @@ def _endeks_penceresi(sembol, years):
     if isinstance(ix.columns, pd.MultiIndex):
         ix.columns = ix.columns.get_level_values(0)
     seri = ix["Close"].dropna()
-    start = seri.index[-1] - pd.DateOffset(years=years)
-    dates = seri.index[seri.index >= start]
     kes = _kasa_tarihi()
-    if kes is not None:
+    if kes is None:
+        start = seri.index[-1] - pd.DateOffset(years=years)
+        dates = seri.index[seri.index >= start]
+    else:
+        # PENCERE İKİ UCUNDAN DA SABİT (2026-09-13 düzeltmesi).
+        #
+        # Kasa yalnız SONU sabitlemişti; başlangıç "bugünden geriye" sayılmaya
+        # devam ediyordu. Sonuç: pencere her gün bir gün kayıyor ve iki hafta
+        # sonra aynı komut başka bir sayı veriyordu. Ölçüldü — `us 8`
+        # 2026-08-31'de 2018-08-31→2024-08-29 (72 rebalans, NAV 4.55) iken
+        # 2026-09-13'te 2018-09-11→2024-08-30 (71 rebalans, NAV 4.58) oldu.
+        # Dosyaya yazılmış bir sayının iki hafta sonra tekrarlanamaması, tam
+        # da donmuş panelin engellemek için var olduğu şey.
+        #
+        # Çözüm: başlangıcı da KESİME çıpala. `years` anlamını korur —
+        # "kasa olmasaydı kullanacağım pencere" — ve rezerv yıl düşülür:
+        #   years=8, rezerv=2 → 2024-08-31 − 6 yıl = 2018-08-31
+        # Bu, yayımlanmış 8 yıllık sonuçların başlangıç tarihinin AYNISIDIR,
+        # yani hem karşılaştırılabilirlik hem tekrarlanabilirlik korunur.
+        rezerv = float(_kasa_meta().get("rezerv_yil", 2))
+        gelistirme = max(1.0, years - rezerv)
+        start = kes - pd.DateOffset(months=int(round(gelistirme * 12)))
         seri = seri[seri.index <= kes]
-        dates = dates[dates <= kes]
+        dates = seri.index[(seri.index >= start) & (seri.index <= kes)]
         if len(dates) < 60:
             raise SystemExit(
                 f"Kasa kesimi ({kes:%Y-%m-%d}) sonrası pencerede yalnız "
@@ -391,6 +410,11 @@ def _pick_at(date, feats, ret_panel, max_pos=None, kur=None):
     _skor_min = k.get("score_min", SCORE_MIN)
     _sek_cap = k.get("sector_cap", SECTOR_CAP)
     _kor_lim = k.get("corr_limit", CORR_LIMIT)
+    # Sektör kaynağı dışarıdan verilebilir. _sector_of yalnız BIST ve US
+    # sektörlerini biliyor; üçüncü bir piyasada HER hisse "Diğer"e düşer, tek
+    # sektör olur ve sector_cap=2 portföyü 6 yerine 2 pozisyona indirir —
+    # sessizce, hata vermeden, bambaşka bir stratejiyi ölçerek.
+    _sek_map = k.get("sektor")
     cands = []
     for t, f in feats.items():
         cl = f["close"]
@@ -411,7 +435,7 @@ def _pick_at(date, feats, ret_panel, max_pos=None, kur=None):
     picks, sec_n, kept = [], {}, []
     win = ret_panel.loc[:date].tail(120)
     for t, _rank, atr in cands:
-        sec = _sector_of(t)
+        sec = _sek_map.get(t, "Diğer") if _sek_map else _sector_of(t)
         if sec_n.get(sec, 0) >= _sek_cap:
             continue
         if kept and t in win.columns:
@@ -1116,8 +1140,102 @@ def pozisyon(years=8, katman=5):
     print(f"Tamamlandı ({time.time()-t0:.0f}s)")
 
 
-def us_transfer(years=8):
-    """US TRANSFER TESTİ — mekânda örneklem-dışı doğrulama.
+# TRANSFER TESTİ PİYASALARI (2026-09-13)
+#
+# us_transfer bir kopyala-yapıştır ile üçüncü piyasaya genişletilebilirdi ve
+# bu, bu projede birkaç kez canımızı yakan hata sınıfının ta kendisi olurdu
+# (bkz. MGMT_VARSAYILAN'ın elle kopyalanmış hâli, _walk vs _walk_managed).
+# Tek fonksiyon, piyasa başına yalnız YAPISAL çeviri tablosu:
+#
+#   ek          yfinance sembol eki (.L, .DE — US'te yok)
+#   endeks      karşılaştırma endeksi
+#   maliyet     round-trip işlem maliyeti (KOMİSYON YAPISI, ayar değil)
+#   hacim_esigi likidite tabanı, o piyasanın KENDİ para biriminde
+#   tv          TradingView pazar adı (evreni dondururken)
+#
+# Davranışsal parametrelerin hiçbiri burada yok ve OLMAMALI: skor_cikis,
+# takas_farki, trailing_pct, max_pozisyon, MAX_POS, sector_cap, corr_limit,
+# score_min hepsi BIST'te seçilmiş değerlerinde kalır. Testin bütün kanıt
+# değeri bundan geliyor.
+TRANSFER_PIYASA = {
+    "US": {
+        "ad": "ABD", "tv": "america", "ek": "", "endeks": "^GSPC",
+        "endeks_ad": "S&P 500", "maliyet": 0.002, "hacim_esigi": 50e6,
+        "birim": "USD", "limit": 600,
+        "not": "US nominal USD, enflasyon düzeltmesi yok.",
+    },
+    "UK": {
+        # LSE fiyatları PENİ (GBp) cinsinden gelir: AZN 11708 = 117.08 sterlin.
+        # Getiriler ölçekten bağımsız olduğu için bu sonuçları etkilemez, AMA
+        # hacim eşiğini etkiler — eşik de peni cinsinden verilmeli.
+        # 100_000_000 peni = 1M sterlin/gün.
+        "ad": "Birleşik Krallık", "tv": "uk", "ek": ".L", "endeks": "^FTSE",
+        "endeks_ad": "FTSE 100", "maliyet": 0.006, "hacim_esigi": 100e6,
+        "birim": "GBp", "limit": 700,
+        # Maliyet BIST'ten YÜKSEK ve bu bilerek: %0.5 damga vergisi (stamp
+        # duty) alışta alınır, üstüne komisyon/spread. Yanlış tarafa yuvarlamak
+        # sonucu BİZE KARŞI bozar — güvenli yön budur.
+        "not": "UK nominal GBP. Maliyet %0.6 (damga vergisi dahil), BIST'in "
+               "üstünde — bilerek muhafazakâr.",
+    },
+}
+
+
+def _transfer_evren(piyasa, cfg):
+    """Piyasanın evrenini TV'den çeker ve DONDURUR (ticker + SEKTÖR).
+
+    Sektörün de donması şart: _sector_of yalnız BIST/US biliyor, üçüncü bir
+    piyasada her hisse "Diğer" olur, tek sektör kalır ve sector_cap portföyü
+    6 yerine 2 pozisyona düşürürdü — sessizce, hata vermeden, bambaşka bir
+    stratejiyi ölçerek. Ayrıca evren dosyası BIST/US'teki gibi
+    tekrarlanabilirlik çapasıdır (bkz. TEKRARLANABİLİRLİK ÇAPASI).
+    """
+    import json
+    dosya = f"backtest_evren_{piyasa.lower()}.json"
+    if _os.path.exists(dosya):
+        with open(dosya, encoding="utf-8") as f:
+            m = json.load(f)
+        print(f"{piyasa} evreni DOSYADAN: {len(m['tickers'])} hisse "
+              f"(donduruldu {m.get('tarih')})")
+        return m["tickers"], m.get("sektor", {})
+
+    from tradingview_screener import Query
+    _n, df = (Query().set_markets(cfg["tv"])
+              .select("name", "close", "average_volume_30d_calc", "sector")
+              .limit(cfg["limit"]).get_scanner_data())
+    df["_hacim"] = df["close"] * df["average_volume_30d_calc"]
+    df = df[df["_hacim"] >= cfg["hacim_esigi"]].sort_values("_hacim", ascending=False)
+
+    tickers, sektor = [], {}
+    for _, r in df.iterrows():
+        ham = str(r.get("name") or "").strip()
+        if not ham:
+            continue
+        # LSE sembolleri sonda nokta taşıyabilir (BP., RR.) — yfinance'te
+        # "BP..L" diye bir sembol yok, "BP.L" var.
+        t = ham.rstrip(".")
+        if not t or not any(c.isalpha() for c in t):
+            continue
+        tickers.append(t)
+        sek = r.get("sector")
+        sektor[t] = sek if isinstance(sek, str) and sek else "Diğer"
+    tickers = list(dict.fromkeys(tickers))
+
+    meta = {"tarih": datetime.now().strftime("%Y-%m-%d"), "piyasa": piyasa,
+            "kaynak": f"TradingView {cfg['tv']}, hacme göre azalan",
+            "hacim_esigi": cfg["hacim_esigi"], "birim": cfg["birim"],
+            "not": "Tekrarlanabilirlik çapası — bu listeyi değiştirmek geçmiş "
+                   "sonuçları karşılaştırılamaz kılar.",
+            "tickers": tickers, "sektor": sektor}
+    with open(dosya, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=1)
+    print(f"{piyasa} evreni DONDURULDU -> {dosya} ({len(tickers)} hisse, "
+          f"eşik {cfg['hacim_esigi']/1e6:.0f}M {cfg['birim']})")
+    return tickers, sektor
+
+
+def _transfer(piyasa="US", years=8):
+    """TRANSFER TESTİ — mekânda örneklem-dışı doğrulama.
 
     Zamanda örneklem-dışı test (walk-forward) yıllar ister; mekânda olan
     istemez. Aynı kurulum mantığı tamamen farklı bir piyasada da çalışıyorsa,
@@ -1125,73 +1243,78 @@ def us_transfer(years=8):
 
     KRİTİK KURAL: davranışsal parametrelere DOKUNULMAZ. skor_cikis,
     takas_farki, trailing_pct, max_pozisyon, MAX_POS, sector_cap, corr_limit
-    — hepsi BIST'te seçilmiş değerlerle kalır. Ayarlarsam iyi bir US sonucu
+    — hepsi BIST'te seçilmiş değerlerle kalır. Ayarlarsam iyi bir sonuç
     hiçbir şey kanıtlamaz; testin bütün değeri parametrelerin BAŞKA bir
-    piyasada seçilmiş olmasından geliyor.
-
-    Yalnızca YAPISAL/BİRİM dönüşümler yapılır (ayar değil, çeviri):
-      sembol eki .IS → yok | benchmark XU100 → ^GSPC
-      işlem maliyeti %0.4 → %0.2 (US komisyonu yarısı)
-      hacim eşiği 20M TL → 50M USD (her iki piyasada da evren eşiğine eşit)
-      ENAG reel düzeltmesi YOK — US nominal USD (bkz. CLAUDE.md US parite)
+    piyasada seçilmiş olmasından geliyor. Yalnızca YAPISAL/BİRİM çevirileri
+    yapılır ve hepsi TRANSFER_PIYASA tablosunda görünür durur.
     """
-    import json
-    import os
+    import hashlib
     import pickle
+    cfg = TRANSFER_PIYASA[piyasa]
     t0 = time.time()
-    print(f"=== US TRANSFER TESTİ | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
-    print("Davranışsal parametreler BIST'ten AYNEN alındı — hiçbiri US için ayarlanmadı.")
+    print(f"=== {cfg['ad'].upper()} TRANSFER TESTİ | {years} yıl | "
+          f"{datetime.now():%Y-%m-%d %H:%M} ===")
+    print("Davranışsal parametreler BIST'ten AYNEN alındı — hiçbiri bu piyasa "
+          "için ayarlanmadı.")
     print()
 
-    ev_dosya, pn_dosya = "backtest_evren_us.json", f"backtest_panel_us_{years}y.pkl"
-    if os.path.exists(pn_dosya):
+    pn_dosya = f"backtest_panel_{piyasa.lower()}_{years}y.pkl"
+    sektor = {}
+    if _os.path.exists(pn_dosya):
         with open(pn_dosya, "rb") as f:
             d = pickle.load(f)
         closes, vols = d["closes"], d["vols"]
-        print(f"US panel ÖNBELLEKTEN: {len(closes)} hisse | parmak izi {d['iz']}")
+        sektor = d.get("sektor", {})
+        print(f"{piyasa} panel ÖNBELLEKTEN: {len(closes)} hisse | "
+              f"parmak izi {d['iz']}")
     else:
-        if os.path.exists(ev_dosya):
-            uni = json.load(open(ev_dosya, encoding="utf-8"))["tickers"]
-        else:
-            uni = list(get_scan_universe("US"))[:600]
-            json.dump({"tarih": datetime.now().strftime("%Y-%m-%d"), "tickers": uni},
-                      open(ev_dosya, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-            print(f"US evreni donduruldu → {ev_dosya} ({len(uni)} hisse)")
-        closes, vols = _download_panel(uni, years, ek="")
-        import hashlib
+        uni, sektor = _transfer_evren(piyasa, cfg)
+        closes, vols = _download_panel(uni, years, ek=cfg["ek"])
         iz = hashlib.sha256("|".join(f"{t}:{len(closes[t])}" for t in sorted(closes))
                             .encode()).hexdigest()[:12]
         with open(pn_dosya, "wb") as f:
-            pickle.dump({"closes": closes, "vols": vols, "iz": iz}, f)
-        print(f"US panel yazıldı → {pn_dosya} | {len(closes)} hisse | iz {iz}")
+            pickle.dump({"closes": closes, "vols": vols, "iz": iz,
+                         "sektor": sektor}, f)
+        print(f"{piyasa} panel yazıldı -> {pn_dosya} | {len(closes)} hisse | iz {iz}")
 
-    # Kasa US panelinde de geçerli: pencere zaten _endeks_penceresi ile
-    # kesiliyor ama panelin kendisini de budamak ikinci güvence katmanı
-    # (BIST tarafındaki _panel_hazirla ile aynı gerekçe).
+    # Kasa bu panelde de geçerli: pencere zaten _endeks_penceresi ile kesiliyor
+    # ama panelin kendisini de budamak ikinci güvence katmanı (BIST tarafındaki
+    # _panel_hazirla ile aynı gerekçe).
     closes, vols = _kasa_panel(closes, vols)
 
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
-    spx, dates = _endeks_penceresi("^GSPC", years)
+    endeks, dates = _endeks_penceresi(cfg["endeks"], years)
     dates = list(dates)
     reb = pd.date_range(dates[0], dates[-1], freq="MS")
     reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+
+    # US yolu sektörü _sector_of'tan almaya DEVAM eder (yayımlanmış US sayıları
+    # oradan üretildi, kaynağı değiştirmek onları sessizce oynatırdı); donmuş
+    # sektör haritası olan piyasalar kendi haritasını kullanır.
+    kur = {"min_tl_vol": cfg["hacim_esigi"]}
+    if sektor:
+        kur["sektor"] = sektor
     wbd = {}
     for d in reb:
-        w = _pick_at(d, feats, ret_panel, kur={"min_tl_vol": 50e6})
+        w = _pick_at(d, feats, ret_panel, kur=kur)
         if w:
             wbd[d] = w
     print(f"Panel {len(feats)} hisse | {len(wbd)}/{len(reb)} rebalans | "
-          f"{dates[0]:%Y-%m-%d} → {dates[-1]:%Y-%m-%d} ({time.time()-t0:.0f}s)")
+          f"{dates[0]:%Y-%m-%d} -> {dates[-1]:%Y-%m-%d} ({time.time()-t0:.0f}s)")
+    if sektor:
+        _kap = len({sektor.get(t, "Diğer") for t in feats})
+        print(f"Sektör haritası donmuş evrenden: {_kap} ayrı sektör "
+              f"(tek sektöre düşseydi sector_cap portföyü 2'ye indirirdi)")
     print()
 
     global COST_RT
     _eski_cost = COST_RT
-    COST_RT = 0.002                     # US komisyonu BIST'in yarısı
+    COST_RT = cfg["maliyet"]
     try:
         nav_u = _walk(wbd, closes, dates)
         nav_m = _walk_managed(wbd, closes, dates, feats, dict(MGMT_VARSAYILAN))
-        spx_n = spx.loc[dates] / spx.loc[dates].iloc[0]
+        endeks_n = endeks.loc[dates] / endeks.loc[dates].iloc[0]
         rng_finals = []
         all_t = sorted(feats)
         for seed in range(RANDOM_SEEDS):
@@ -1216,9 +1339,9 @@ def us_transfer(years=8):
               f"MaxDD %{dd:>6.1f} | Sharpe {sh:>5.2f}")
         return nav.iloc[-1]
     print("=" * 84)
-    f_u = _oz(nav_u, "YÖNETİMSİZ (US)")
-    f_m = _oz(nav_m, "YÖNETİLEN (US)")
-    _oz(spx_n, "S&P 500")
+    f_u = _oz(nav_u, f"YÖNETİMSİZ ({piyasa})")
+    f_m = _oz(nav_m, f"YÖNETİLEN ({piyasa})")
+    _oz(endeks_n, cfg["endeks_ad"])
     rf = np.array(rng_finals)
     print(f"{'Rastgele-6 (50 tohum)':<26} medyan son NAV {np.median(rf):.2f} | "
           f"%5-%95 [{np.percentile(rf,5):.2f}, {np.percentile(rf,95):.2f}]")
@@ -1228,13 +1351,18 @@ def us_transfer(years=8):
     # üretiyordu; 50 tohumla bu ikisi ayrışıyor ve çıktı kendi kendisiyle
     # çelişiyordu ("%94 persentil ✅ >%95"). Bir hakem bunu ilk bakışta görür.
     _yzd = (rf < f_u).mean() * 100
-    print(f"Sistem son NAV {f_u:.2f} → rastgele dağılımında %{_yzd:.0f} "
+    print(f"Sistem son NAV {f_u:.2f} -> rastgele dağılımında %{_yzd:.0f} "
           f"persentil ({(rf < f_u).sum()}/{len(rf)} tohumu geçti) "
           f"{'✅ >=%95' if _yzd >= 95 else '⚠️ %95 ALTI'}")
     print()
-    print("Not: US nominal USD, enflasyon düzeltmesi yok. Davranışsal")
-    print("parametreler BIST'te seçildi ve burada DEĞİŞTİRİLMEDİ.")
+    print(f"Not: {cfg['not']} Davranışsal parametreler")
+    print("BIST'te seçildi ve burada DEĞİŞTİRİLMEDİ.")
     print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
+def us_transfer(years=8):
+    """US transfer testi — ince sarmalayıcı, bkz. _transfer."""
+    _transfer("US", years)
 
 
 def dsr(years=8):
@@ -1753,12 +1881,14 @@ def kasa_durum():
           f"{' (' + str(len(gecmis)) + ' açılış)' if gecmis else ''}")
     for a in gecmis:
         print(f"   • {a.get('tarih')} | {a.get('pencere')} | {a.get('gerekce', '')}")
-    # Pencere başlangıcı BUGÜNDEN geriye sayılır (bkz. _endeks_penceresi),
-    # kesimden değil — yayımlanmış sonuçların başlangıç tarihi değişmesin diye.
-    bas = pd.Timestamp.today().normalize() - pd.DateOffset(years=8)
+    # Pencere İKİ UCUNDAN DA kesime çıpalı (bkz. _endeks_penceresi): takvim
+    # ilerledikçe kaymasın diye. `8` = kesim − (8 − rezerv) yıl → kesim.
+    rez = float(meta.get("rezerv_yil", 2))
+    bas = kes - pd.DateOffset(months=int(round(max(1.0, 8 - rez) * 12)))
     print(f"\nGeliştirme penceresi: `8` → {bas:%Y-%m-%d} → {kes:%Y-%m-%d} "
-          f"({(kes - bas).days / 365.25:.1f} yıl). Başlangıç bugünden geriye")
-    print("sayılır, son kasa kesiminde biter; yayımlanmış sonuçların başlangıcı aynı kalır.")
+          f"({(kes - bas).days / 365.25:.1f} yıl), takvimden bağımsız sabit.")
+    print(f"Kural: başlangıç = kesim − (yıl − {rez:.0f}) yıl. Bu, yayımlanmış 8 yıllık")
+    print("sonuçların başlangıç tarihiyle aynıdır; aynı komut her gün aynı sayıyı verir.")
     print("\nAçmak için:  python pipeline_backtest.py kasa-ac 8 EVET")
 
 
@@ -1908,7 +2038,16 @@ if __name__ == "__main__":
         walkforward(int(sys.argv[2]) if len(sys.argv) > 2 else 8,
                     int(sys.argv[3]) if len(sys.argv) > 3 else 5)
     elif _cmd == "us":
-        us_transfer(yrs)
+        _transfer("US", yrs)
+    elif _cmd == "uk":
+        _transfer("UK", yrs)
+    elif _cmd == "transfer":
+        # Genel biçim: transfer <PIYASA> [yil]
+        _p = sys.argv[2].upper() if len(sys.argv) > 2 else "US"
+        if _p not in TRANSFER_PIYASA:
+            raise SystemExit(f"Bilinmeyen piyasa: {_p} "
+                             f"(tanimli: {', '.join(TRANSFER_PIYASA)})")
+        _transfer(_p, int(sys.argv[3]) if len(sys.argv) > 3 else 8)
     elif _cmd == "dsr":
         dsr(yrs)
     elif _cmd == "sanstest":

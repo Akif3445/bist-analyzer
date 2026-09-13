@@ -29,6 +29,8 @@ python pipeline_backtest.py kurulum 8   # construction params (score_min, sector
 python pipeline_backtest.py sanstest 8  # system vs random-6, period by period
 python pipeline_backtest.py dsr 8       # deflated Sharpe — multiple-testing correction
 python pipeline_backtest.py us 8        # US transfer test — out-of-sample in space
+python pipeline_backtest.py uk 8        # UK transfer test — the method did NOT transfer
+python pipeline_backtest.py transfer UK 8   # generic form; markets in TRANSFER_PIYASA
 python pipeline_backtest.py kasa        # data vault status — what is locked
 python pipeline_backtest.py kasa-ac 8 EVET  # OPEN the vault — once, in October
 ```
@@ -242,6 +244,8 @@ The likely mechanism is that the management thresholds are volatility-scaled qua
 **What this changes:**
 
 1. The strongest claim in the project is now the **selection** model, and it rests on two independent legs — above the 95th percentile of random draws in BIST *and* in the US, with the same parameters. That is real out-of-sample evidence, and it is what partially answers the deflated-Sharpe problem.
+
+> **Withdrawn 2026-09-13 by the UK transfer test.** A third market, same parameters, same six-year window: the system finishes at the **22nd percentile** of random draws and loses money in absolute terms. The BIST leg had already collapsed to the 10th percentile once the data vault removed the reserved period. One market in three works, so "two independent legs" is no longer the right description of the evidence — see "Third market: the UK".
 2. The **management layer's claim shrinks to BIST**. It must be presented as a market-specific risk overlay, not a general property of the method. Do not describe it as validated.
 3. The US live cohorts currently run with `managed=1` and BIST thresholds. On this evidence that is the wrong configuration, but it is **not changed here** — a parameter decision needs its own walk-forward and editor approval, and this measurement is one window in one market.
 
@@ -720,11 +724,22 @@ therefore cuts rows at `cutoff − horizon`, not at the cutoff. Locking only the
 backtest would have been theatre, because weights and the scoring style come
 from these ICs.
 
-**Window semantics:** the start still counts back from today, only the end
-moves. So `8` now means **2018-08-31 → 2024-08-29 (6.0 years)** — the same
-start as the published 8-year results, minus the reserve. Every number this
-repo produces from now on therefore differs from the ones above; compare
-against the new baseline below, never against a pre-vault figure.
+**Window semantics:** `8` means **2018-08-31 → 2024-08-31 (6.0 years)** — the
+same start as the published 8-year results, minus the reserve. Every number this
+repo produces from now on therefore differs from the ones above; compare against
+the new baseline below, never against a pre-vault figure.
+
+> **Both ends are anchored to the cutoff (fixed 2026-09-13).** As first written,
+> the vault pinned only the *end*; the start was still counted back from *today*,
+> so the window slid forward one day per day. Caught two weeks later by re-running
+> `us 8`: on 2026-08-31 it covered 2018-08-31→2024-08-29 (72 rebalances, final NAV
+> 4.55), on 2026-09-13 it covered 2018-09-11→2024-08-30 (71 rebalances, NAV 4.58).
+> A number written into this file was already unreproducible a fortnight later,
+> which is exactly what the frozen panel exists to prevent — the anchor had a hole
+> in it. The rule is now `start = cutoff − (years − rezerv_yil)`, so `8` gives
+> 2018-08-31 → 2024-08-31 on any calendar date. Verified after the change: `run 8`
+> returns NAV 13.20 at the 10th percentile and `us 8` returns NAV 4.55 with 47/50
+> seeds — both identical to the figures recorded here before it.
 
 #### The baseline on the development window — this is uncomfortable and it is the point
 
@@ -800,7 +815,11 @@ The defensible summary going into October: *the selection method has
 out-of-sample support in the US on data that took no part in tuning; its BIST
 evidence is concentrated in periods that are either early-window strong (2021-04
 → 2022-08) or inside the reserve, and over the six-year development window BIST
-selection does not beat random.* Both halves have to be said. Quoting only the
+selection does not beat random.* Both halves have to be said.
+
+> **Qualified again 2026-09-13:** a third market (UK) fails as well — 22nd
+> percentile, −32.3% absolute. With one market working out of three, the US is
+> better described as the outlier than as confirmation. See "Third market: the UK". Quoting only the
 US half is salesmanship; quoting only the BIST half throws away the one leg that
 survived every test applied to it so far.
 
@@ -828,6 +847,148 @@ fitted post-cutoff make the October number meaningless. **The standing rule
 applies with more force, not less** — a change needs a stated hypothesis
 tested once, not a sweep for whatever rescues 2018-2024.
 
+### Third market: the UK (2026-09-13) — `pipeline_backtest.py uk` — the method does NOT transfer
+
+Step 3 of the agreed plan, and it is the most consequential result in this file
+since the vault. The US transfer test was read as evidence that the selection
+method generalises. A second transfer test says it does not.
+
+**Why the UK and not Germany.** Germany was measured first and rejected on
+breadth: TradingView lists 429 German names in total, of which only **20** clear
+€50M/day, 59 clear €10M and 133 clear €1M. A universe that thin cannot support a
+6-position portfolio with a sector cap plus a 50-seed random control — the
+control would be drawing from nearly the same names as the system. The UK lists
+1081, of which **298** clear £1M/day, which is comparable breadth to BIST (448)
+and the US (585). Breadth is what makes the random control meaningful, so the UK
+is the fairer test. (Recorded so nobody re-derives it: Germany is not a bad
+market, it is a *narrow* one, and the narrowness is the disqualifier.)
+
+**No behavioural parameter was touched**, same rule as the US test. What changed
+is structural only, and all of it lives visibly in one table (`TRANSFER_PIYASA`):
+symbol suffix `.L`, benchmark `^FTSE`, liquidity floor £1M/day, cost 0.6%.
+
+Two traps were found while building it, both of which would have produced a
+confident wrong number:
+
+1. **Sector data does not exist outside BIST and the US.** `_sector_of` knows
+   those two markets only, so every UK stock would have returned "Diğer" — one
+   single sector — and `sector_cap=2` would have silently capped every portfolio
+   at **2 positions instead of 6**. The run would have completed, printed a
+   plausible table, and measured a completely different strategy. Sectors are now
+   frozen into the universe file alongside the tickers (20 distinct sectors for
+   the UK), and `_pick_at` takes an explicit map via `kur={"sektor": ...}`.
+2. **`us_transfer` was not copy-pasted.** It is now a thin wrapper over a
+   parameterised `_transfer(piyasa, years)`. Duplicating 120 lines to change a
+   suffix is the exact error class this file keeps recording. Verified by
+   re-running `us 8` after the refactor: byte-identical to the pre-refactor
+   numbers (+355.1%, NAV 4.55, 47/50 seeds).
+
+**Cost is set deliberately against us:** 0.6% round-trip versus BIST's 0.4% and
+the US's 0.2%, because UK stamp duty is 0.5% on purchases. Rounding a structural
+assumption the *unfavourable* way is the safe direction — and, as the sensitivity
+table below shows, it turned out not to matter.
+
+#### Result — 292 stocks, 72/72 rebalances, 2018-08-31 → 2024-08-30, vault fingerprint `caca1fd8abc6`
+
+| | Total | CAGR | MaxDD | Sharpe |
+|---|---|---|---|---|
+| **Unmanaged (selection only)** | **−32.3%** | **−6.3%** | −47.3% | −0.18 |
+| Managed (BIST rules) | −20.7% | −3.8% | −28.0% | −0.22 |
+| FTSE 100 | +12.7% | +2.0% | −35.0% | +0.20 |
+| Random-6, 50 seeds | median NAV 0.89 | | 5–95%: [0.55, 1.38] | |
+
+System final NAV **0.68** against a random median of 0.89 — the **22nd
+percentile**, beating 11 of 50 random draws. It loses money, loses to the index,
+and loses to luck.
+
+Note what the random control establishes. UK small and mid caps fell over this
+window (random median 0.89) while the FTSE 100 rose 12.7%, so part of the loss is
+simply the segment the strategy lives in. But the system finished **below** the
+random median *drawn from that same segment*, so this is not only segment
+exposure — the selection itself subtracted value.
+
+#### It is not the cost assumption — checked, because the assumption was mine
+
+Same window, same picks, only `COST_RT` varied:
+
+| Round-trip cost | System NAV | Random median | System percentile |
+|---|---|---|---|
+| 0.6% (used above) | 0.68 | 0.89 | 22nd |
+| 0.4% (BIST's) | 0.77 | 1.03 | 20th |
+| 0.2% (the US test's) | 0.88 | 1.18 | 20th |
+| **0.0% (frictionless)** | **1.00** | **1.36** | **20th** |
+
+**Even with zero transaction costs the system is at the 20th percentile and still
+below the random median.** The percentile is flat across the whole range, and for
+a mechanical reason worth understanding: random-6 redraws six names every month,
+so it turns over far more than the system does and is *hurt more* by costs. A
+lower cost assumption therefore helps the control more than it helps us. My
+conservative 0.6% was, if anything, flattering the system.
+
+#### What this does to the "the method generalises" claim
+
+Three markets, same parameters, same six-year development window, same control:
+
+| Market | Selection-only percentile vs random-6 | Verdict |
+|---|---|---|
+| BIST | 10th | fails |
+| **US** | **94th** | **works** |
+| UK | 22nd | fails |
+
+One win out of three. The honest reading is no longer "the selection method
+transfers"; it is that **the US result is the outlier and needs its own
+explanation.**
+
+The explanation most consistent with all the evidence is that the system is a
+**long-only momentum vehicle**, and its results track whether momentum paid in
+that market over that window rather than any market-independent selection skill:
+
+- US 2018–2024: momentum paid exceptionally (mega-cap tech). System wins big.
+- UK 2018–2024: a value- and dividend-weighted market where momentum was weak.
+  System loses.
+- BIST 2018–2024: system loses to random.
+- BIST 2024–2026 (reserved, known from pre-vault runs): a momentum melt-up.
+  System wins big.
+
+Every result lines up with "did momentum work here, then?" — which is a factor
+exposure, not an edge. This is consistent with the existing calibration finding
+that 52-week position is the single strongest signal in the scoring, and with the
+regime-conditional US result (momentum IC +0.056 in Boğa, **−0.088 in Ayı**).
+
+Stated carefully, because three markets is still a small sample: this does not
+prove the system has no selection skill. It does mean **the burden of proof has
+moved.** A claim of generalisation now requires showing the system beats a
+momentum benchmark, not just an index and a random draw — a long-only momentum
+factor portfolio is the control that is actually missing, and it is the natural
+next measurement.
+
+#### Benchmark dividend bias — found on the way, affects every "vs index" number in this file
+
+Stock panels are downloaded with `auto_adjust=True`, which makes them **total
+return** series (dividends reinvested). The benchmarks — `^GSPC`, `^FTSE`,
+`XU100.IS` — are **price** indices, which exclude dividends. So every
+index comparison in this file has been comparing a total-return portfolio against
+a price-return benchmark, and the gap always favours the system.
+
+Measured exactly for the US over the vault window, using `^SP500TR`:
+
+| | Total | CAGR |
+|---|---|---|
+| S&P 500 price (`^GSPC`, used everywhere in this file) | +94.7% | +11.7% |
+| S&P 500 total return (`^SP500TR`) | +115.4% | **+13.6%** |
+
+**+1.9 percentage points per year of unearned advantage.** The UK is worse — the
+FTSE 100 yields more than the S&P, so the understatement there is roughly 3.5–4
+points a year, which makes the UK result above *even worse* than the table shows.
+For BIST the yield is around 2–3 points.
+
+No conclusion in this file reverses: the US win is far larger than 1.9 points and
+the UK/BIST losses only deepen. It is **disclosed rather than fixed**, for the
+same reason as the `min_tl_vol` mismatch — a total-return benchmark is not
+available on our data source for BIST or the UK, so switching only the US would
+make the three markets mutually incomparable while invalidating every published
+table. State it in the presentation; a reviewer will ask.
+
 ### Agreed next steps (2026-08-31, carried into a new session)
 
 The deflated-Sharpe result changed the plan. Testing more configurations on the same
@@ -849,12 +1010,14 @@ CPCV generates many train/test block combinations from the same data and returns
 Probability of Backtest Overfitting directly. Better use of data already held, no
 waiting. This is the natural companion to `dsr`.
 
-**3. A third market.**
-The US transfer test took three minutes and produced evidence no amount of BIST
-backtesting could. Repeat for another market (Germany or the UK) via the same route:
-`get_scan_universe` supports market parameterisation, `us_transfer` is the template,
-and **behavioural parameters must again stay untouched** — that constraint is what
-makes the result meaningful.
+**3. A third market — DONE 2026-09-13, and it came back negative.**
+The UK was chosen over Germany on universe breadth. Same parameters, same window,
+same control: the system lands at the **22nd percentile** of random draws and loses
+32.3%. Not a cost artifact — it holds at every cost level including zero. Full
+write-up in "Third market: the UK". The natural follow-up it created: **benchmark
+the system against a long-only momentum portfolio**, since every result across four
+market-periods now lines up with "did momentum pay here, then?" rather than with
+selection skill.
 
 **Standing rule agreed with the user:** stop grid-searching for the best value of a
 parameter. Future changes should come from a stated hypothesis tested once (e.g.
