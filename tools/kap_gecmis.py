@@ -88,6 +88,7 @@ def cek(bas: str, son: str, yenile: bool = False) -> None:
     gunler = list(_gunler(bas, son))
     yeni = atlanan = toplam = 0
     tavana_carpan = []
+    atlanan_gun = []
     t0 = time.time()
 
     with httpx.Client(timeout=60, headers=BASLIKLAR, follow_redirects=True) as c:
@@ -98,15 +99,34 @@ def cek(bas: str, son: str, yenile: bool = False) -> None:
                 with open(yol, encoding="utf-8") as f:
                     toplam += len(json.load(f))
                 continue
-            try:
-                r = c.post(UC, json=_yuk(gun))
-                r.raise_for_status()
-                d = r.json()
-                if not isinstance(d, list):
-                    d = []
-            except Exception as exc:
-                print(f"  {gun}: HATA {type(exc).__name__} {str(exc)[:70]}")
-                time.sleep(2.0)
+            # KAP yogun istekte yavaslatiyor/kesiyor: 3 deneme, artan bekleme.
+            # Ilk surumde tek deneme vardi ve is 121. gunde sessizce takildi.
+            # KAP bazi gunlerde (olculdu: 2018-05-21) yaniti keserek baglantiyi
+            # dusuruyor. KRITIK: kopan baglanti HAVUZDA kaliyor ve SONRAKI
+            # gunler de dusuyor -- tek bozuk gun ardindan gelenleri de goturuyor.
+            # Olculdu: 2018-05-22 dongude ATLANDI, tek basina test edilince 169
+            # kayit dondurdu. Bu yuzden hatada istemci YENIDEN KURULUR.
+            d = None
+            for deneme in range(3):
+                try:
+                    r = c.post(UC, json=_yuk(gun), timeout=30)
+                    r.raise_for_status()
+                    j = r.json()
+                    d = j if isinstance(j, list) else []
+                    break
+                except Exception as exc:
+                    print(f"  {gun}: deneme {deneme+1}/3 {type(exc).__name__} "
+                          f"{str(exc)[:60]}", flush=True)
+                    try:
+                        c.close()
+                    except Exception:
+                        pass
+                    c = httpx.Client(timeout=60, headers=BASLIKLAR,
+                                     follow_redirects=True)
+                    time.sleep(2.0 * (deneme + 1))
+            if d is None:
+                print(f"  {gun}: ATLANDI (3 deneme)", flush=True)
+                atlanan_gun.append(gun)
                 continue
 
             # Tavana çarpma SESSİZ bir veri kaybıdır — mutlaka bağır.
@@ -119,11 +139,13 @@ def cek(bas: str, son: str, yenile: bool = False) -> None:
             toplam += len(d)
             if i % 20 == 0:
                 print(f"  {i}/{len(gunler)} gün | {toplam} bildirim "
-                      f"| {time.time()-t0:.0f}s")
+                      f"| {time.time()-t0:.0f}s", flush=True)
             time.sleep(BEKLE)
 
     print(f"\nBitti: {len(gunler)} iş günü | {yeni} indirildi, {atlanan} zaten vardı "
           f"| {toplam} bildirim | {time.time()-t0:.0f}s")
+    if atlanan_gun:
+        print(f"ATLANAN {len(atlanan_gun)} gün (KAP yanıt vermedi): {atlanan_gun}")
     if tavana_carpan:
         print(f"DİKKAT: {len(tavana_carpan)} gün {TAVAN} tavanına çarptı, o günler "
               f"EKSİK olabilir: {tavana_carpan[:5]}")
