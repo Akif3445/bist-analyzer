@@ -21,6 +21,7 @@
   "Şirket Genel Bilgi Formu":                                              {"sinif": "rutin", "yon": 0, "hisse": 23, "not": "Adres/yonetim gibi kunye guncellemesi."},
   "Borsada İşlem Gören Tipe Dönüşüm Duyurusu":                             {"sinif": "rutin", "yon": 0, "hisse": 18, "not": "Nama/hamiline donusum, teknik."},
   "Pay Dışında Sermaye Piyasası Aracı İşlemlerine İlişkin Bildirim (Faiz İçeren)": {"sinif": "rutin", "yon": 0, "hisse": 14, "not": "Tahvil/bono rutini. Eski sistemde bu basliklar 'olumlu' sayiliyordu."},
+  "Pay Dışında Sermaye Piyasası Aracı İşlemlerine İlişkin Bildirim (Faizsiz)": {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "Yukaridakinin faizsiz varyanti; ayni rutin."},
   "Kredi Derecelendirmesi":                                                {"sinif": "icerik", "yon": null, "hisse": 14, "not": "Not ARTISI mi INDIRIMI mi, ancak metinden. Ikisi zit yonlu."},
   "TSRS Uyumlu Sürdürülebilirlik Raporu":                                  {"sinif": "rutin", "yon": 0, "hisse": 12, "not": "Zorunlu surdurulebilirlik raporu."},
   "BIST Pay Endeksleri":                                                   {"sinif": "icerik", "yon": null, "hisse": 12, "not": "Endekse GIRIS pozitif, CIKIS negatif (pasif fon akisi). Yon metinde."},

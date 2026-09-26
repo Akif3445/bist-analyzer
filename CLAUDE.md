@@ -237,6 +237,63 @@ on the same day, so both get the new scores and the difference between them
 stays clean. The most valuable live experiment survives a scoring change; only
 the weaker one restarts.
 
+#### KAP history is reachable after all — the news layer can finally be validated (2026-09-26)
+
+The audit above closed with "this component can never be validated
+historically". That turned out to be wrong, and the correction matters more
+than the audit: **KAP's own query API serves the full disclosure history of the
+entire market, free, back to at least 2018.**
+
+Found by reading `borsapy`'s KAP provider, noticing it fetches a Next.js page
+and truncates client-side, then extracting the real API routes from the site's
+own JS bundles rather than guessing:
+
+    POST https://www.kap.org.tr/tr/api/disclosure/members/byCriteria
+    {"fromDate": "2024-03-01", "toDate": "2024-03-01", "memberTypes": ["IGS"],
+     "mkkMemberOidList": [], ...}        # empty list = the whole market
+
+Measured: ASELS returns 145 disclosures for 2018 and 168 for 2023, so the
+archive spans the entire backtest window. One market-wide day comes back in
+~0.2 s. A full month of every BIST company took **11 seconds: 7,302
+disclosures, 723 stocks, 125 distinct types**. Eight years is roughly 17
+minutes of polite pulling.
+
+**The returned record is far better than the disclosure title we were parsing:**
+
+| Field | Why it matters |
+|---|---|
+| `subject` | the disclosure **type** — the closed vocabulary already labelled in `kap_sozluk.json` |
+| `summary` | a short human-written description, **91% populated** — "Yatırım Teşvik Belgesi Alımı Hakkında", "Uzun Vadeli Kredi Anlaşması", "Genel Müdür Ataması". Vastly more informative than the form title, and it is what any classifier should read |
+| `publishDate` | date **and time**, so an event study can align to the next open |
+| `isLate` | late-filing flag — a candidate signal on its own |
+| `disclosureIndex` | id for `get_news_content` when the full text is needed |
+| `disclosureClass` | ODA / DKB / DG / FR top-level taxonomy |
+
+Note the `summary` examples answer a question raised separately: **government
+incentives are in this data as a searchable field** ("Yatırım Teşvik Belgesi
+Alımı"), with eight years of history — so the subsidy idea is testable the same
+way everything else is, without hand-building an event list from memory.
+
+**Two limits, both measured, and the first one bites silently.** The endpoint
+caps a response at **2000 records and returns only the tail of the range
+without saying so** — a one-month query came back with 2000 rows covering only
+the last seven days. Daily chunking avoids it (300–700/day) and
+`tools/kap_gecmis.py` shouts if any day reaches the cap. Second, no filter
+other than `fromDate`/`toDate` is honoured; paging parameters are ignored.
+
+`tools/kap_gecmis.py` does the collection: day-by-day, resumable, one JSON per
+day under `kap_veri/` (gitignored, regenerable), 0.35 s between requests.
+
+**What this unblocks, and the discipline that applies.** With dates, tickers and
+the frozen price panel we can now run a proper event study: for each disclosure
+type, the average abnormal return over the following 1/7/30/90 days. That turns
+every direction in `kap_sozluk.json` from a hypothesis into a measurement — and
+several of them deserve to fail. **The data vault applies here too**: disclosures
+after 2024-08-31 are inside the reserve, so the event study must stop at the
+cutoff minus the horizon, exactly as `_panel_oku` already does for the
+calibration panels. Building the news layer on reserve data would burn the vault
+for the sake of a component measured at ~0 contribution.
+
 ### Persistence
 
 **`_PMDB` never silently falls back to local SQLite when Turso is configured (2026-08-03).** It used to: any network error dropped through to `sqlite3.connect(DB_PATH)`, which on Streamlit Cloud is `/tmp` and dies with the container. Some portfolio writes reached Turso and some went to a disk that was about to be erased — split-brain, with a NAV series that silently forks and no way to tell afterwards which row was right. Now: 3 attempts with exponential backoff (the session is discarded between attempts so a half-broken TLS connection isn't reused), then `TursoUnavailable` is raised. SQL errors still raise immediately — retrying an invalid statement is pointless. Note `is_cloud()` means "Turso is configured", not "running on Streamlit Cloud": with Turso set up locally, **offline local development now errors instead of falling back**. That is intended — a local fallback would fork the data just the same. `_safe_render` catches it and shows the error rather than a blank page.

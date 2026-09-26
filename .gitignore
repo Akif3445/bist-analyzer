@@ -43,3 +43,6 @@ pipeline_yonetim.csv
 backtest_panel_*.pkl
 backtest_panel_us_*.pkl
 skor_karsilastirma.csv
+
+# KAP tarihsel bildirim verisi (tools/kap_gecmis.py ile yeniden uretilebilir)
+kap_veri/
