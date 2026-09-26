@@ -46,3 +46,5 @@ skor_karsilastirma.csv
 
 # KAP tarihsel bildirim verisi (tools/kap_gecmis.py ile yeniden uretilebilir)
 kap_veri/
+kap_veri_gun_eski/
+kap_oid.json
