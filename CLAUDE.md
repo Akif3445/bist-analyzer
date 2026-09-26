@@ -372,6 +372,82 @@ per-stock queries return **HTTP 500 for any range beyond about a year** (ASELS:
 stay under the 2000-record cap, and the 21 weeks that did hit the cap were split
 to daily automatically.
 
+#### Reading the content: the bonus-issue signal, and dilution theory backwards (2026-09-26)
+
+The event study left 27% of the flow in a "read the body" bucket. Before
+downloading 400k disclosure bodies it was worth checking the cheap route: the
+`summary` field is already on disk for all 411,656 records and is 90%
+populated. Measured which types carry their direction in the summary:
+
+| Type | Direction in summary? |
+|---|---|
+| Sermaye Artırımı | **yes** — "bedelli" 985, "bedelsiz" 1396 |
+| İhale Süreci / Sonucu | partly — "Sonucu" 22%, "Süreci" 19%, "kazan" only 4% |
+| Kredi Derecelendirmesi | **no** — "yükseltildi" appears twice, "düşürüldü" never |
+| Geleceğe Dönük Değerlendirmeler | no |
+
+So the capital-increase split is free, and it is the one with a clean
+pre-specified hypothesis: **bedelli** (rights issue) dilutes existing holders
+and should underperform **bedelsiz** (bonus issue), which is an accounting
+operation and should be neutral. `tools/kap_ayrim.py` tests it.
+
+**The hypothesis is falsified, and the sign is reversed:**
+
+| Group | n | 7d | 30d | pos% | t |
+|---|---|---|---|---|---|
+| BEDELLİ (theoretically dilutive) | 664 | −0.89% | −1.04% | 48 | −0.2 |
+| **BEDELSİZ (theoretically neutral)** | **1160** | **−1.62%** | **−3.86%** | **41** | **−5.0** |
+| AZALTIM | 50 | +0.43% | +4.23% | 51 | −0.1 |
+
+Bedelli is noise. **Bedelsiz — the one that should do nothing — is the strongest
+single content-derived effect found so far.** It also explains the type-level
+−2.01%: that number was bedelsiz, not dilution.
+
+**Checked for the obvious artifact first, because a bonus issue mechanically
+cuts the share price** (share count rises, price divides). If the panel's split
+adjustment were imperfect the −3.86% would be arithmetic, not information.
+Daily abnormal returns indexed to the announcement:
+
+| Day | −3 | −2 | −1 | **0** | +1 | +2 | +3 | +5 | +15 → +30 |
+|---|---|---|---|---|---|---|---|---|---|
+| median | +0.26 | +0.28 | +0.43 | 0.00 | −0.52 | −0.41 | −0.35 | −0.22 | ≈0 |
+
+No single-day cliff, so it is not a split artifact. The shape is a **run-up into
+the announcement and a bleed out of it**, concentrated in the first week and
+done by day 15 — textbook buy-the-rumour-sell-the-news, and in BIST the
+"bedelsiz" chase is a well-known retail habit. The pre-announcement run-up (+0.26
+/ +0.28 / +0.43 on days −3/−2/−1) is itself notable: something leaks.
+
+One more detail worth keeping. On almost every day after the event the **mean is
+positive while the median is negative** (day +1: mean +0.00 vs median −0.52; day
++7: mean +0.42 vs median −0.06). Bonus issues are a lottery — the typical stock
+drifts down, a minority rip. For a long-only system built on medians that
+matters: the expected pick is a loser even though the headline cases are winners.
+
+**Usable form**, since the system cannot short: treat a bedelsiz announcement as
+a reason **not to buy for the following week or two**, not as a buy trigger. It
+is the second measured signal after buybacks, and unlike buybacks it is
+*negative*, which is the kind the scoring layer currently has none of.
+
+İhale Süreci/Sonucu was split the same way and came back empty — result −0.99%,
+process −0.33%, neither significant (|t|≈0.1). So the tender type needs the body
+text or nothing at all.
+
+**A tool bug found on the way, and it was the dangerous kind.** The
+hypothesis-verdict line hardcoded `fark < 0` as "matches", which was right for
+the capital-increase case it was written against. Applied to the tender split —
+whose hypothesis runs the other way — it printed **UYUYOR for the exact
+opposite** of the stated hypothesis. The expected sign is now declared per split
+in the config, and the verdict refuses to rule at all when neither group clears
+|t|>2.5 rather than reading meaning into a difference of two insignificant
+numbers.
+
+Scoreboard on content so far: **two splits attempted, one real signal.** Better
+than the 1-in-12 record of labelling types by reasoning, and the reason is the
+same as with buybacks — the effects that survive are the ones with a mechanical
+cause (a company buying its own shares; retail crowding into a bonus issue),
+not the ones where I reasoned about whether news sounded good or bad.
+
 ### Persistence
 
 **`_PMDB` never silently falls back to local SQLite when Turso is configured (2026-08-03).** It used to: any network error dropped through to `sqlite3.connect(DB_PATH)`, which on Streamlit Cloud is `/tmp` and dies with the container. Some portfolio writes reached Turso and some went to a disk that was about to be erased — split-brain, with a NAV series that silently forks and no way to tell afterwards which row was right. Now: 3 attempts with exponential backoff (the session is discarded between attempts so a half-broken TLS connection isn't reused), then `TursoUnavailable` is raised. SQL errors still raise immediately — retrying an invalid statement is pointless. Note `is_cloud()` means "Turso is configured", not "running on Streamlit Cloud": with Turso set up locally, **offline local development now errors instead of falling back**. That is intended — a local fallback would fork the data just the same. `_safe_render` catches it and shows the error rather than a blank page.
