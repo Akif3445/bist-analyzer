@@ -448,6 +448,70 @@ same as with buybacks — the effects that survive are the ones with a mechanica
 cause (a company buying its own shares; retail crowding into a bonus issue),
 not the ones where I reasoned about whether news sounded good or bad.
 
+#### Where the KAP signal search stands, and two more free tests that failed (2026-09-26)
+
+**Standing: two measured signals out of sixteen attempts.**
+
+| Signal | n | 30d median | t | Usable as |
+|---|---|---|---|---|
+| **Payların Geri Alınması** (buyback) | 5,158 | **+2.63%** | +4.6 | positive |
+| **Bedelsiz sermaye artırımı** (bonus issue) | 1,160 | **−3.86%** | −5.0 | avoid for ~2 weeks |
+
+Failed: 11 directional type hypotheses, the tender process-vs-result split, the
+late-filing flag, and seven subgroups of the biggest category. Both survivors
+have a **mechanical** cause — a company buying its own stock, retail crowding
+into a bonus issue. Nothing I reasoned my way to survived.
+
+**Two more tests, both free** — the data was already on disk, no requests:
+
+*Late filing (`isLate`).* Present on all 411k records and a documented distress
+marker in the literature. 1,505 late filings, 616 matched to panel stocks:
+**−0.75% at t=−0.0.** Nothing. This also kills the dictionary's
+"Finansal Rapor Ek Süre Talebi" label, which was hypothesised negative.
+
+*The biggest category, split by summary.* "Özel Durum Açıklaması (Genel)" is
+47,408 stock-events. Seven subgroups defined **before** looking at results:
+
+| Subgroup | n | 30d | t |
+|---|---|---|---|
+| yatırım/teşvik | 538 | −2.70% | −2.2 |
+| kredi/borç | 255 | −2.51% | −2.1 |
+| üretim/kapatma | 1,224 | −1.24% | −1.3 |
+| satın alma | 254 | −1.02% | −0.5 |
+| sözleşme/ihale | 2,328 | −0.55% | −0.8 |
+| hukuk/ceza | 615 | −0.53% | −0.2 |
+| yönetim değişikliği | 3,134 | +0.00% | +0.3 |
+
+None clears |t|>2.5. Note the investment-incentive group: **announcing a
+government incentive or a new investment is followed by −2.70%**, the most
+negative of the seven. It does not clear the bar, but it is the opposite of the
+intuition that drove the original interest in subsidies — and it is the fourth
+time an "obviously good news" category has come back flat-to-negative.
+
+**A pattern across all of it worth stating: every subgroup is negative or zero,
+none positive.** Combined with the type-level −0.21% on 26k events, the honest
+reading is that KAP disclosures are, if anything, **mildly contrarian** — the
+announcement marks the point where the news is already in the price. That is a
+finding about the market, not a defect in the measurement, and it is consistent
+with the bedelsiz run-up-then-bleed shape.
+
+Also learned from the word counts: about 5,700 of those 47,408 summaries share
+one boilerplate template about the weighted-average price exceeding a multiple —
+i.e. exchange-mandated *responses to price moves*. Reverse causality is sitting
+inside the biggest category, which partly explains why it measures at zero.
+
+**Credit ratings are the remaining candidate and they need real work.** The body
+text is reachable — `oda_ExplanationTextBlock` in the disclosure's XBRL table,
+verified on 20 fetches with zero failures via `tools/kap_metin.py`. But keyword
+direction fails: 75% come back undetermined because the announcement **states**
+the rating ("Uzun Vadeli Ulusal Notunu AAA (Tr)") without saying whether it moved.
+Getting direction means parsing the rating symbol and comparing it to that
+company's previous rating — structured, no language understanding needed, and we
+have the history to do it. Cost: ~3,500 fetches at 2s, about two hours, plus
+normalising symbols across JCR / Kobirate / Fitch scales. Worth doing, but it is
+the expensive option and it was correctly deferred until the free tests were
+exhausted.
+
 ### Persistence
 
 **`_PMDB` never silently falls back to local SQLite when Turso is configured (2026-08-03).** It used to: any network error dropped through to `sqlite3.connect(DB_PATH)`, which on Streamlit Cloud is `/tmp` and dies with the container. Some portfolio writes reached Turso and some went to a disk that was about to be erased — split-brain, with a NAV series that silently forks and no way to tell afterwards which row was right. Now: 3 attempts with exponential backoff (the session is discarded between attempts so a half-broken TLS connection isn't reused), then `TursoUnavailable` is raised. SQL errors still raise immediately — retrying an invalid statement is pointless. Note `is_cloud()` means "Turso is configured", not "running on Streamlit Cloud": with Turso set up locally, **offline local development now errors instead of falling back**. That is intended — a local fallback would fork the data just the same. `_safe_render` catches it and shows the error rather than a blank page.
