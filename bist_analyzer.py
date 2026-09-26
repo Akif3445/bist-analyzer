@@ -178,16 +178,33 @@ SECTOR_FK_AVERAGES = {
 # (haber motorumuz KAP + TR kaynaklarıyla GDELT'ten iyi olabilir).
 # Sinyal Takip verisi biriktikçe yeniden kalibre edilecek.
 WEIGHTS = {
-    "teknik":    45,   # Teknik analiz (momentum stili — kalibrasyonla doğrulandı)
-    "sentiment": 25,   # Haber sentiment (kalibrasyonda öngörü gücü zayıf çıktı)
+    "teknik":    60,   # Teknik analiz (momentum stili — kalibrasyonla doğrulandı)
+    "sentiment": 10,   # Haber sentiment — 25'ten indirildi 2026-09-26, bkz. aşağı
     "prim":      20,   # Fiyat primi / hedef fiyat (tarihsel test edilemedi)
     "deger":     10,   # Değerleme (F/K, PD/DD) (tarihsel test edilemedi)
 }
 
+# HABER AĞIRLIĞI 25 -> 10 (2026-09-26), haber denetiminin sonucu.
+#
+# Ölçüldü: 12 büyük hissenin 8'inde haber bileşeni TAM 50.0 dönüyor (gerçek,
+# yön taşıyan haber haftada hisse başına 0-1 tane). %25 ağırlıkta sabit bir 50
+# "hiçbir şey katmamak" değildir — her hisseye AYNI 12.5 puanı verip skorun
+# hisseler arası farkını dörtte bir oranında EZER, yani ölçülmüş tek sinyali
+# (teknik) sulandırır. CLAUDE.md'deki "duygunun bileşik sıralamaya katkısı
+# -0.010" rakamının mekanizması budur.
+#
+# Üstüne bileşen tarihsel olarak DOĞRULANAMAZ: Google News after:/before:
+# arşiv vermiyor (en çok haber yapılan 10 BIST isminde 8'i sıfır makale).
+# Doğrulanamayan bir bileşen kararın dörtte birini taşıyamaz.
+#
+# %0 değil %10: denetimden sonra katman gerçek olayları yakalıyor (ASELSAN'ın
+# 1,23 milyar euroluk ROKETSAN sözleşmesi, YKBNK aleyhine dava). Az ama sıfır
+# değil, ağırlığı da öyle.
+
 # Sinyal kayıtlarına yazılan skor sistemi versiyonu — Sinyal Takip'te v1/v2
 # isabet karşılaştırması için. v1: kontrarian teknik + 35/35/20/10 ağırlıklar
 # (2026-07-13 öncesi). v2: momentum teknik + 45/25/20/10 (kalibrasyon sonrası).
-SCORING_VERSION = "v2"
+SCORING_VERSION = "v3"   # v3: haber 25->10 + habersizken teknige devir (2026-09-26)
 
 # BISTScore JSON serialization
 
@@ -1861,6 +1878,13 @@ def compute_bist_score(
     # Çözüm: Veri yoksa o bileşenin ağırlığını mevcut bileşenlere orantılı dağıt.
     has_target    = valuation.target_price is not None
     has_fk        = stock.pe_ratio is not None
+    # "Haber motoru çalıştı" ile "haber bulundu" AYNI ŞEY DEĞİL. Motor haber
+    # bulamadığında nötr 50 döner; o 50'yi ağırlıklı ortalamaya katmak
+    # "bu hisse hakkında haber bilgimiz yok" demek yerine "haber puanı
+    # ortalama" demektir ve ikisi farklı şeydir. Eksik hedef fiyatta zaten
+    # uygulanan kalıbın aynısı.
+    _nr           = getattr(result, "_news_result", None)
+    has_news      = bool(_nr is not None and getattr(_nr, "total_news", 0) > 0)
 
     # Temel ağırlıklar
     w_teknik    = WEIGHTS["teknik"]     # 45
@@ -1868,12 +1892,18 @@ def compute_bist_score(
     w_prim      = WEIGHTS["prim"]       # 20
     w_deger     = WEIGHTS["deger"]      # 10
 
-    # Hedef fiyat yoksa prim ağırlığını teknik + sentimente eşit böl
+    # Gerçek haber yoksa duygu ağırlığını TEKNİĞE devret (yukarıdaki gerekçe)
+    if not has_news:
+        w_teknik   += w_sentiment
+        w_sentiment = 0
+
+    # Hedef fiyat yoksa prim ağırlığı TEKNİĞE gider.
+    # Eskiden yarısı sentimente veriliyordu (25 -> 35). Haber bileşeninin
+    # ölçülen katkısı ~0 olduğu için, eksik veriyi onunla doldurmak boşluğu
+    # gürültüyle kapatmaktı; ağırlık ölçülmüş sinyale gitmeli.
     if not has_target:
-        extra = w_prim
-        w_teknik    += extra // 2         # +10 → 55
-        w_sentiment += extra - extra // 2  # +10 → 35
-        w_prim       = 0
+        w_teknik += w_prim
+        w_prim    = 0
 
     # F/K yoksa değer ağırlığını tekniğe ver
     if not has_fk:

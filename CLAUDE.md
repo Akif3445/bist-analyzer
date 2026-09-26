@@ -163,9 +163,66 @@ measurably adds no ranking information, and actively shrinks the signal it is
 averaged with, so **25% is indefensible**. The principled fix is the pattern the
 codebase already uses for missing analyst targets: when there is no real news,
 **redistribute the weight to Technical rather than applying a neutral 50**, and
-cut the base weight when there is. Not applied here — it is a production scoring
-change and would be the third break in the live cohorts (after `takas_farki`
-2026-08-03 and `skor_cikis` 2026-08-29), so it needs an explicit decision.
+cut the base weight when there is.
+
+**APPLIED 2026-09-26 (user-approved).** `WEIGHTS` is now Technical 60 / Sentiment
+10 / Premium 20 / Valuation 10, and `compute_bist_score` gained a `has_news`
+branch: when the engine found no real item (`total_news == 0`) the sentiment
+weight goes to Technical instead of averaging in a neutral 50. The
+missing-target branch was redirected too — it used to hand half the Premium
+weight to Sentiment (25 → 35), filling a data gap with the component measured at
+~0 contribution; it now all goes to Technical. Effective weights:
+
+| Case | Tech / Sent / Prem / Val |
+|---|---|
+| everything present | 60 / 10 / 20 / 10 |
+| no real news | **70 / 0** / 20 / 10 |
+| no analyst target | 80 / 10 / 0 / 10 |
+| neither | 90 / 0 / 0 / 10 |
+
+Verified end to end: ASELS 34.2×60 + 52.2×10 + 76.5×20 + 20.0×10 = 43.0. Not 0%
+but 10%, because after the audit the layer does catch real events (ASELSAN's
+€1.23bn ROKETSAN contract, the YKBNK lawsuit) — thin, but not nothing.
+`SCORING_VERSION` bumped to **v3** so Signal Tracker can separate v2 and v3 hit
+rates. This is the third live-cohort break (after `takas_farki` 2026-08-03 and
+`skor_cikis` 2026-08-29); per the note below it resets the selection-vs-random
+track but not managed-vs-passive.
+
+#### No usable Turkish financial sentiment model exists (researched 2026-09-26)
+
+Checked before considering a model swap, because hand-extending keyword lists is
+not sustainable. The obvious upgrade path turns out not to be available:
+
+| Model | Verdict |
+|---|---|
+| [`onerayhan/bert_finance_BIST100_turkish`](https://huggingface.co/onerayhan/bert_finance_BIST100_turkish) | The only *financial* Turkish model, and **unusable**. No `config.json`, no tokenizer, no safetensors — a bare TF SavedModel. Worse, its labels are **the sign of the XU100 daily return on the publication date**, so it learned "what text appears on up days", i.e. market beta rather than per-stock news direction. Binary, no neutral class. University coursework, ~3 years old. |
+| [`savasy/bert-base-turkish-sentiment-cased`](https://huggingface.co/savasy/bert-base-turkish-sentiment-cased) | The one `news_engine` already references. Movie/product reviews (48,290 rows), 95.4% accuracy *on reviews*, binary with **no neutral class**, and **no license stated**. |
+| [`saribasmetehan/bert-base-turkish-sentiment-analysis`](https://huggingface.co/saribasmetehan/bert-base-turkish-sentiment-analysis) | 3 classes, MIT, 444 MB, 0.962 accuracy — but fine-tuned on only 10k rows, and its **neutral class is Turkish Wikipedia prose**. A flat factual BIST headline reads like Wikipedia, so it would likely dump everything into neutral. |
+
+All three are ~110M-param BERT-base: roughly 1.2–1.8 GB peak RSS and 2–5 minutes
+for ~2500 headlines on CPU — comfortable on a **GitHub Actions runner (7 GB)**,
+which matters because the daily robot runs there, not on RAM-constrained
+Streamlit Cloud. Capacity is not the blocker; **suitability is**. None of them
+has seen "kâr", "zarar" or "temerrüt" in a financial sense.
+
+**The real blocker is measurement, not the classifier.** Every option — keywords,
+a BERT swap, a paid API — has to be scored against something, and there is no
+ground truth at all: no historical news (Google serves no archive), no labelled
+headlines, and component scores were never durably logged (`analysis_history`
+holds 32 rows and lives in `/tmp` on Streamlit Cloud). A model swap today would
+be one more untested change. The cheapest thing that unblocks every other option
+is **a few hundred hand-labelled Turkish headlines**: after that the current
+keyword system, any candidate model and any future method can all be scored on
+the same set, and a small fine-tune becomes possible.
+
+Ruled out on cost: `borsapy`'s `tweets()` needs Twitter auth plus a paid extra.
+Still untapped and free: `get_news_content(disclosure_id)` returns the **full KAP
+disclosure HTML** in ~0.2 s (verified — note the naive tag-strip returns the
+site's navigation chrome, so it needs a parser aimed at the disclosure body),
+and KAP form titles are a *closed* vocabulary of routine types rather than open
+language, so mapping them is finite work. `income_stmt` / `balance_sheet` /
+`cashflow` / `quarterly_*` expose actual financial statements, so earnings
+growth is computable numerically with no NLP at all.
 
 Also removed: the dead `NewsScraper` class in bist_analyzer.py (~50 lines), a
 second Yahoo-scraping news engine carrying its own cruder word list ("hedef" and
