@@ -636,9 +636,22 @@ POSITIVE_WORDS = [
     "kar", "kâr", "kazanc", "kazanç", "rekor", "buyume", "büyüme",
     "artis", "artış", "yukselis", "yükseliş", "guclu", "güçlü",
     "basari", "başarı", "olumlu", "pozitif", "iyilesme", "iyileşme",
-    "toparlanma", "temettu", "temettü", "yatirim", "yatırım",
+    "toparlanma", "temettu", "temettü",
+    # "yatirim"/"yatırım" TEK BASINA KALDIRILDI (2026-09-26): her aracı
+    # kurumun adında geçiyor ("Yatırım Kuruluşu Varant - Sertifika",
+    # "Ak Yatırım", "Garanti BBVA Yatırım"), dolayısıyla bir haber değil bir
+    # KURUM ADI yakalıyordu ve rutin evrak başlıklarını olumlu yapıyordu.
+    # Ölçüldü: GARAN'ın en yüksek skorunu (65.3) üreten "olumlu"ların
+    # kaynağı buydu. Yerine yönü belli olan kalıplar konuldu.
+    "yeni yatırım", "yatırım kararı", "yatırım teşvik", "yatırım yapacak",
     "ihracat", "anlasma", "anlaşma", "sozlesme", "sözleşme",
-    "ortaklik", "ortaklık", "genisleme", "genişleme", "kapasite",
+    # "ortaklik"/"ortaklık" KALDIRILDI (2026-09-26): KAP hukuk dilinde
+    # "Ortaklık" = borsaya kote şirket, yani her form başlığında geçen bir
+    # boilerplate. Ölçüldü — "Ortaklık Aleyhine DAVA Açılması" başlığı
+    # OLUMLU çıkıyordu: kelime iki varyantıyla iki olumlu oy üretip gerçek
+    # bir davayı bastırıyordu. "yatırım" ile aynı hata sınıfı.
+    "stratejik ortaklık", "iş ortaklığı",
+    "genisleme", "genişleme", "kapasite",
     "ihale kazandi", "kazandi", "kazandı", "asti", "aştı",
     "yukari", "yukarı", "ralli", "degerlenme", "değerlenme",
     "buyuyor", "büyüyor", "artti", "arttı", "bedelsiz",
@@ -810,6 +823,7 @@ class NewsAnalysisResult:
     neutral_count: int    = 0
     total_news: int       = 0
     filtered_count: int   = 0    # spekülasyon nedeniyle filtrelenen
+    bilgisiz_count: int   = 0    # evrak başlığı / TA spamı — skora girmeyen
     headlines: list       = field(default_factory=list)
     news_items: list      = field(default_factory=list)
     kap_disclosures: list = field(default_factory=list)
@@ -823,14 +837,95 @@ class NewsAnalysisResult:
 
 # YARDIMCI FONKSİYONLAR
 
+# KELİME SINIRI EŞLEŞMESİ (2026-09-26) — eskiden `w in t` idi, yani HARF
+# DİZİSİ araması. Türkçe'de bu felaket: "kar" kelimesi "KARar", "KARşılık",
+# "KARgo" içinde geçer. Ölçülen sonuç:
+#
+#   "Yönetim Kurulu KARar Özeti"              -> olumlu  (yalnız "kar" yüzünden)
+#   "Rekabet Kurulu KARarı açıklandı"         -> olumlu
+#   "KARşılık artışı nedeniyle zarar açıklandı" -> nötr   ("kar"+"artış",
+#                                                 gerçek olumsuzları iptal etti)
+#
+# 12 hisselik canlı örnekte 215 haberin 20'si "olumlu" çıkıyordu ve çoğunun
+# tek sebebi buydu; buna karşılık yalnızca 1 tanesi "olumsuz"du.
+#
+# Türkçe eklemeli bir dil, o yüzden salt \b...\b de yetmez ("kârı", "zararı"
+# kaçardı). Çözüm: kök + KAPALI bir ek listesi. "kar"+"a"="kara" olur ama
+# ardından "r" geldiği için "karar" yine eşleşmez.
+_TR_EKLER = (
+    r"(?:ı|i|u|ü|a|e|ya|ye|da|de|ta|te|dan|den|tan|ten|la|le|yla|yle|"
+    r"ın|in|un|ün|sı|si|su|sü|nı|ni|nu|nü|lar|ler|ları|leri|"
+    r"ında|inde|ından|inden|lık|lik|luk|lük|cı|ci|cu|cü)?"
+)
+
+
+def _kelime_kalibi(kelime: str) -> "re.Pattern":
+    """Tek kelime -> kök+ek kalıbı, çok kelimeli ifade -> sınırlı öbek."""
+    if " " in kelime or "-" in kelime:
+        return re.compile(r"\b" + re.escape(kelime) + r"\w*", re.IGNORECASE)
+    return re.compile(r"\b" + re.escape(kelime) + _TR_EKLER + r"\b",
+                      re.IGNORECASE)
+
+
+_POS_KALIP = [_kelime_kalibi(w) for w in POSITIVE_WORDS]
+_NEG_KALIP = [_kelime_kalibi(w) for w in NEGATIVE_WORDS]
+
+
 def _classify_keywords(text: str) -> str:
-    """Genel anahtar kelime tabanlı fallback sentiment."""
-    t   = text.lower()
-    pos = sum(1 for w in POSITIVE_WORDS if w in t)
-    neg = sum(1 for w in NEGATIVE_WORDS if w in t)
+    """Genel anahtar kelime tabanlı fallback sentiment (kelime sınırlı)."""
+    pos = sum(1 for k in _POS_KALIP if k.search(text))
+    neg = sum(1 for k in _NEG_KALIP if k.search(text))
     if pos > neg:  return "olumlu"
     if neg > pos:  return "olumsuz"
     return "notr"
+
+
+# BİLGİ TAŞIMAYAN KALEMLER (2026-09-26)
+#
+# Akışın yarısı haber değil: KAP'ın rutin EVRAK BAŞLIKLARI ("Özel Durum
+# Açıklaması (Genel)", "Şirket Genel Bilgi Formu"), içerik çiftliği teknik
+# analiz yazıları ve sadece şirket adından ibaret sayfalar. Bunlar yön
+# bilgisi taşımaz, ama skoru İKİ yoldan bozar:
+#   1. Yanlışlıkla olumlu/olumsuz etiketlenirler (bkz. yukarıdaki "kar" hatası)
+#   2. total_news'i şişirirler — confidence_factor = total_news/10 olduğu için
+#      sistem 36 evrak başlığıyla kendini "emin" sanar ve skoru 50'den uzağa
+#      taşır. Yani çöp, sahte GÜVEN de üretiyordu.
+# Bu yüzden spekülasyon filtresi gibi tamamen skor dışı bırakılırlar.
+_BILGISIZ_KALIP = [re.compile(p, re.IGNORECASE) for p in [
+    # KAP rutin evrak başlıkları
+    r"özel durum açıklaması", r"genel bilgi formu", r"yönetim kurulu komiteleri",
+    r"kurumsal yönetim bilgi formu", r"pay alım satım bildirimi",
+    r"toptan alış satış", r"sermaye piyasası aracı işlemlerine ilişkin",
+    r"tipe dönüşüm", r"devre kesici", r"bistech", r"işlem yasağı nedeniyle",
+    r"portföy dağılım raporu", r"risk ölçüm ve değerleme",
+    r"türev araç işlemlerine", r"borsa dışı repo", r"itfa/kupon",
+    r"yatırım kuruluşu varant", r"fon bilgilendirme", r"ihraç belgesi",
+    r"ihraç tavanına", r"sorumluluk beyanı", r"katılım finansı ilkeleri",
+    r"faaliyet raporu", r"finansal rapor$", r"kredi derecelendirmesi",
+    # Takasbank'ın rutin TAKAS bildirimi. Şirketle ilgisi yok: bir piyasa
+    # katılımcısı o gün takası kapatamamış demek. Ama "temerrüt" olumsuz
+    # kelime listesinde olduğu için ilk düzeltmeden sonra olumsuzların
+    # NEREDEYSE TAMAMINI bu üretti (FROTO skoru 21.8'e indi, sebebi buydu) —
+    # yani sahte olumluyu sahte olumsuzla değiştirmiş oluyorduk.
+    r"temerrüt işlemi", r"takas ve saklama bankası",
+    r"sürdürülebilirlik raporu", r"\btsrs\b", r"bilgi formu \(güncelleme\)",
+    # İçerik çiftliği / fiyat yankısı
+    r"teknik analiz", r"günlük analiz", r"canlı grafik", r"hisse yorumları",
+    r"hisse senedi canlı", r"seans öncesi", r"kap haberleri - \d{4}-\d{2}",
+    # Sadece şirket adı / kod (bilgi yok): "ASELS - ASELSAN", "Ford Otosan"
+    r"^[A-ZÇĞİÖŞÜ0-9]{3,6}\s*-\s*[A-ZÇĞİÖŞÜ\s\.]{3,40}$",
+]]
+
+
+def _bilgisiz_baslik(baslik: str) -> bool:
+    """Başlık yön bilgisi taşımıyor mu? True ise skorlamaya HİÇ girmez."""
+    b = (baslik or "").strip()
+    if len(b) < 12:                      # "Koç Holding", "ASELS - ASELSAN"
+        return True
+    for k in _BILGISIZ_KALIP:
+        if k.search(b):
+            return True
+    return False
 
 
 BERT_CONFIDENCE_THRESHOLD = 0.70  # BERT bu güvenin altındaysa finans sözlüğü devreye girer
@@ -1048,6 +1143,11 @@ def _is_relevant(title: str, ticker: str, company_tr: str) -> bool:
     tl = title.lower()
     tu = ticker.upper()
 
+    # 0. KAP biçimli başlıksa kod alanı belirleyicidir: bizim kod yoksa
+    #    bildirim başka şirkete aittir ve isim benzerliği bizi yanıltmamalı.
+    if _kap_baskasinin(title, ticker):
+        return False
+
     # 1. Ticker kodu direkt geçiyor mu?
     if tu in title.upper():
         return True
@@ -1065,11 +1165,34 @@ def _is_relevant(title: str, ticker: str, company_tr: str) -> bool:
         elif name_parts and name_parts[0] in tl:
             return True
 
-    # 3. Alias kontrolü
+    # 3. Alias kontrolü — KELİME SINIRINDA (2026-09-26)
+    #
+    # Eskiden `alias.lower() in tl` idi, yani harf dizisi. Ölçülen sonuç:
+    # KCHOL'ün haberleri arasına "İSKOÇYA, Galler ve Kuzey İrlanda liderleri
+    # bağımsızlık için buluşuyor" girmişti — çünkü İs-KOÇ-ya içinde "koç"
+    # geçiyor. Aynı hata "bim" ile BIMSA'yı, "ford" ile Oxford'u yakalar.
     for alias in TICKER_ALIASES.get(tu, []):
-        if alias.lower() in tl:
+        if re.search(r"\b" + re.escape(alias.lower()) + r"\w{0,4}\b", tl):
             return True
     return False
+
+
+# KAP başlığı "KAP *** ŞİRKET *** KOD1,KOD2 *** Form adı" biçiminde gelir.
+# Kod alanında bizim ticker yoksa bildirim BAŞKA bir şirkete aittir — GARAN
+# aramasına GARANTİ PORTFÖY (GPY) ve GARANTİ FAKTORİNG (GARFA) bildirimleri
+# bu yüzden karışıyordu.
+_KAP_BICIM = re.compile(
+    r"^KAP\s*\*+\s*(.+?)\s*\*+\s*([A-Z0-9ÇĞİÖŞÜ,\s\.]+?)\s*\*+", re.IGNORECASE)
+
+
+def _kap_baskasinin(baslik: str, ticker: str) -> bool:
+    """KAP biçimli başlıkta bizim kod yoksa True (başka şirketin bildirimi)."""
+    m = _KAP_BICIM.match(baslik or "")
+    if not m:
+        return False
+    kodlar = {k.strip().upper().replace(".", "")
+              for k in m.group(2).split(",")}
+    return ticker.upper().replace(".IS", "") not in kodlar
 
 def _compute_confidence(item: NewsItem) -> float:
     """
@@ -1705,6 +1828,15 @@ def analyze_news(
     clean_items    = [i for i in deduplicated if not i.is_speculation]
     filtered_count = len(deduplicated) - len(clean_items)
     result.filtered_count = filtered_count
+
+    # Bilgi taşımayan kalemleri SKORDAN tamamen çıkar (bkz. _bilgisiz_baslik).
+    # Spekülasyon filtresiyle aynı mantık: yön bilgisi olmayan bir kalem ne
+    # oy vermeli ne de total_news'i şişirip sahte güven üretmeli.
+    _oncesi = len(clean_items)
+    clean_items = [i for i in clean_items if not _bilgisiz_baslik(i.title)]
+    result.bilgisiz_count = _oncesi - len(clean_items)
+    if result.bilgisiz_count:
+        logger.info(f"{result.bilgisiz_count} bilgisiz kalem skor dışı bırakıldı")
 
     if filtered_count > 0:
         logger.info(f"{filtered_count} spekülatif haber filtrelendi")

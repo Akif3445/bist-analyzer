@@ -70,6 +70,116 @@ Three-layer classification, in order: (1) regex strong-pattern override for unam
 
 The asymmetry runs the opposite way from what it first looks like, and getting it backwards cost a bug: a Turkish headline wrongly called English merely skips BERT — layers 1 and 3 contain Turkish patterns and keywords, so classification still mostly works — whereas English text wrongly called Turkish is exactly the failure being fixed. The first implementation used only function words and rated `"Apple raises guidance"` as Turkish, because terse financial headlines contain no function words at all. The word list therefore includes headline verbs (`raises`, `beats`, `cuts`, `misses`, `plunges`…) and finance nouns (`earnings`, `guidance`, `quarter`…), not just stopwords. Layers 1 and 3 already carried English patterns and keywords; the gap found while testing was that the keyword bank only had past-tense forms (`raised guidance`) while headlines are present-tense (`raises guidance`), so US news fell through to neutral — present-tense variants were added. FinBERT was deliberately **not** added: a second ~400 MB model contradicts the RAM constraint that keeps BERT itself optional. Sources are tier-weighted (`_get_tier`/`_get_weight`, tier 1 = 3x ... tier 3 = 1x) and each source has its own `_src_*` fetcher function using feedparser. Recency weighting, duplicate-source confidence boosting, and a speculation filter (`_is_speculation`) are applied after classification.
 
+#### News engine audit (2026-09-26) — the 25% sentiment weight was measuring artifacts
+
+The sentiment component had never been checked end to end. It was audited on
+demand and the verdict is that it did not work — not because news is
+unpredictive, but because of four separate defects, each of which produced
+confident output from input that carried no information.
+
+**First, the finding that constrains everything else: the component cannot be
+validated historically.** `analyze_news_for_date` queries Google News with
+`after:`/`before:` operators, and Google serves almost no archive through that
+interface. Probed on ten of the most heavily covered BIST names across
+2019–2024: **eight returned zero articles**, and all ten returned "notr".
+GARAN having no news in a week of January 2022 is not reality, it is a
+retrieval failure. So `news_backtest_cache` (1019 rows, 42.6% with zero
+articles) is largely an artifact of the same failure, and **no backtest can
+ever measure whether the news layer helps.** Only forward logging can.
+
+**What the live feed actually contains.** 12 major stocks, 215 items:
+
+| | Share |
+|---|---|
+| KAP bureaucratic form titles ("Özel Durum Açıklaması", "Şirket Genel Bilgi Formu") | 48% |
+| Technical-analysis content farms, live-chart pages, bare company names | ~18% |
+| Other companies matched by name similarity | ~5% |
+| Genuinely informative, company-specific news | a handful |
+
+And the classification of those 215 items was **20 positive, 1 negative, 194
+neutral**. One negative item across twelve large caps in a week is not a
+market observation; it is a broken classifier.
+
+**The four defects, each measured before fixing:**
+
+1. **Keyword matching was substring, not word, matching.** Turkish is
+   agglutinative and `"kar" in text` matches *kar*ar, *kar*şılık, *kar*go.
+   Measured: `"Yönetim Kurulu KARar Özeti"` → **positive**; `"Rekabet Kurulu
+   KARarı açıklandı"` → **positive**; `"KARşılık artışı nedeniyle zarar
+   açıklandı"` → **neutral**, because the spurious positives cancelled two real
+   negatives. Fixed with a root-plus-closed-suffix-set regex (`_kelime_kalibi`)
+   — `\bkar(ı|a|da|…)?\b` matches "kârı" but not "karar".
+2. **Corporate boilerplate sat in the positive word list.** `"yatırım"` appears
+   in the name of every Turkish brokerage, so `"Yatırım Kuruluşu Varant -
+   Sertifika"` — a routine warrant filing — scored positive. This is what
+   produced GARAN's 65.3, the highest score in the sample. `"ortaklık"` is worse:
+   in KAP legal language it simply means "the listed company", and it fired
+   **twice** (both spellings) on `"Ortaklık Aleyhine DAVA Açılması"`, outvoting
+   the lawsuit and marking it **positive**. Both removed and replaced with
+   directional phrases.
+3. **Relevance matching was substring too.** KCHOL's feed contained *"İskoçya,
+   Galler ve Kuzey İrlanda liderleri bağımsızlık için buluşuyor"* — because
+   İs-**koç**-ya contains the alias "koç". The same defect matches BIMSA on
+   "bim" and Oxford on "ford". Aliases are now word-bounded. Separately, KAP
+   titles arrive as `KAP *** COMPANY *** TICKERS *** form`, so GARANTİ PORTFÖY
+   (GPY) and GARANTİ FAKTORİNG (GARFA) filings were landing in GARAN's feed;
+   `_kap_baskasinin` now requires our ticker in the code field.
+4. **Content-free items inflated confidence.** `confidence_factor =
+   total_news / 10` scales how far the score may move from 50, and form titles
+   counted toward `total_news`. So 36 bureaucratic headers made the system
+   *more* certain of a score built on nothing. Such items are now excluded from
+   scoring entirely (`_bilgisiz_baslik`), like the speculation filter.
+
+**The eyeball check between rounds is what kept this honest.** After the first
+fix the negative count jumped 1 → 13 and it looked like a success — until the
+headlines were read. Nearly every new negative was *"Temerrüt İşlemi"*, a
+routine Takasbank settlement-default notice about a market participant, not the
+company. FROTO's score had fallen to 21.8 entirely on those. The first round had
+swapped false positives for false negatives; only reading the output caught it.
+
+**After both rounds**, same 12 stocks: 188 of 236 items excluded as
+content-free, and the five items that move a score are
+
+| Stock | Label | Headline | Verdict |
+|---|---|---|---|
+| ASELS | positive | ROKETSAN contract, €1.23bn | correct, material |
+| YKBNK | negative | lawsuit filed against the company | correct (was positive before) |
+| GARAN | positive | analyst raises target to 169.30 TL | reasonable |
+| TUPRS | positive | 2027 dividend forecast article | weak |
+| BIMAS | positive | "dividend payment will cause price adjustment" | **wrong** — that is the ex-dividend drop |
+
+So the layer is now honest but thin: it says something for roughly a third of
+stocks and exactly 50.0 for the rest, and it still makes context errors of the
+same keyword-without-meaning kind.
+
+**Consequence for the weight, and it is the real output of this audit.** For 8
+of 12 stocks the component returns exactly 50.0. At a 25% weight that is not
+merely uninformative — every stock receives an identical 12.5-point
+contribution, which **compresses the composite's cross-sectional spread by a
+quarter** and dilutes the one component with measured predictive power. This is
+the mechanism behind the already-recorded −0.010 rank correlation between
+sentiment and the composite. The component cannot be validated historically,
+measurably adds no ranking information, and actively shrinks the signal it is
+averaged with, so **25% is indefensible**. The principled fix is the pattern the
+codebase already uses for missing analyst targets: when there is no real news,
+**redistribute the weight to Technical rather than applying a neutral 50**, and
+cut the base weight when there is. Not applied here — it is a production scoring
+change and would be the third break in the live cohorts (after `takas_farki`
+2026-08-03 and `skor_cikis` 2026-08-29), so it needs an explicit decision.
+
+Also removed: the dead `NewsScraper` class in bist_analyzer.py (~50 lines), a
+second Yahoo-scraping news engine carrying its own cruder word list ("hedef" and
+"uzerinde" positive, "risk" negative) with the same substring defect. It was
+never called. Removing it is not about dead weight but about the duplicate-copy
+hazard this file keeps recording — the one place a fix does not reach.
+
+**Note on the live-cohort break, for whenever the weight is changed.** A scoring
+change resets the "does selection beat random" track, but **not** the
+managed-vs-passive comparison: those two cohorts are built from the *same* picks
+on the same day, so both get the new scores and the difference between them
+stays clean. The most valuable live experiment survives a scoring change; only
+the weaker one restarts.
+
 ### Persistence
 
 **`_PMDB` never silently falls back to local SQLite when Turso is configured (2026-08-03).** It used to: any network error dropped through to `sqlite3.connect(DB_PATH)`, which on Streamlit Cloud is `/tmp` and dies with the container. Some portfolio writes reached Turso and some went to a disk that was about to be erased — split-brain, with a NAV series that silently forks and no way to tell afterwards which row was right. Now: 3 attempts with exponential backoff (the session is discarded between attempts so a half-broken TLS connection isn't reused), then `TursoUnavailable` is raised. SQL errors still raise immediately — retrying an invalid statement is pointless. Note `is_cloud()` means "Turso is configured", not "running on Streamlit Cloud": with Turso set up locally, **offline local development now errors instead of falling back**. That is intended — a local fallback would fork the data just the same. `_safe_render` catches it and shows the error rather than a blank page.

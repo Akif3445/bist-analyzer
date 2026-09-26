@@ -1108,54 +1108,20 @@ class SentimentResult:
     raw_score: float     = 0.0
 
 
-class NewsScraper:
-    POSITIVE_WORDS = [
-        "buyume", "kar", "rekor", "artis", "guclu", "olumlu", "basari",
-        "ihracat", "yatirim", "temettu", "hedef", "asti", "uzerinde",
-        "pozitif", "toparlanma", "yukselis", "genisleme", "anlasma",
-    ]
-    NEGATIVE_WORDS = [
-        "zarar", "dusus", "risk", "kriz", "olumsuz", "baski", "endise",
-        "daralma", "kayip", "uyari", "azalis", "negatif", "zayif",
-        "sorun", "belirsizlik", "cekilme",
-    ]
-
-    @staticmethod
-    def fetch_headlines(ticker: str, max_results: int = 15, market: str = "BIST") -> list:
-        yt = _yf_symbol(ticker, market)
-        url = f"https://finance.yahoo.com/quote/{yt}/news/"
-        headers = {"User-Agent": "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36"}
-        headlines = []
-        for _attempt in range(2):
-            try:
-                resp = requests.get(url, headers=headers, timeout=12)
-                resp.raise_for_status()
-                soup = BeautifulSoup(resp.text, "lxml")
-                for item in soup.select("h3.Mb\\(5px\\), h3[class*='title']")[:max_results]:
-                    text = item.get_text(strip=True)
-                    if text:
-                        headlines.append(text)
-                break  # success
-            except requests.exceptions.Timeout:
-                continue  # retry once
-            except Exception:
-                break
-        return headlines
-
-    @classmethod
-    def analyze(cls, ticker: str) -> SentimentResult:
-        headlines = cls.fetch_headlines(ticker)
-        result    = SentimentResult(headlines=headlines)
-        for headline in headlines:
-            lower = headline.lower()
-            result.positive_count += sum(1 for w in cls.POSITIVE_WORDS if w in lower)
-            result.negative_count += sum(1 for w in cls.NEGATIVE_WORDS if w in lower)
-        total = result.positive_count + result.negative_count
-        result.score = (
-            round((result.positive_count / total) * 100, 1) if total else 50.0
-        )
-        result.raw_score = result.positive_count - result.negative_count
-        return result
+# NewsScraper KALDIRILDI (2026-09-26) — hiçbir yerden çağrılmıyordu.
+#
+# Yahoo Finance HTML'ini kazıyan, KENDİ POSITIVE_WORDS/NEGATIVE_WORDS
+# listesini taşıyan ikinci bir haber motoruydu. Ölü olması iyi haberdi:
+# listesi news_engine'inkinden daha kaba ("hedef" ve "uzerinde" olumlu,
+# "risk" olumsuz) ve aynı harf-dizisi eşleşmesi hatasını taşıyordu.
+#
+# Kaldırılma sebebi ölü olması DEĞİL, tuzak olması: aynı işi yapan iki
+# kopya, bu projede defalarca canımızı yakan hata sınıfı (bkz. faz2_modules,
+# MGMT_VARSAYILAN'ın elle kopyalanmış hâli, _walk vs _walk_managed).
+# Birinde düzeltilen hata diğerinde kalır ve biri bir gün yanlışlıkla
+# bağlanır. Tek haber motoru: news_engine.analyze_news.
+#
+# SentimentResult dataclass'ı KALIYOR — BISTScore onu kullanıyor.
 
 
 # 3. TECHNICAL ANALYSIS ENGINE
