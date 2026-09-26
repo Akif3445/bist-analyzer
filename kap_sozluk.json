@@ -1,7 +1,7 @@
 {
- "surum": 1,
+ "surum": 2,
  "tarih": "2026-09-26",
- "kapsam": "40 BIST hissesi, 780 KAP bildirimi -> 62 ayri tur",
+ "kapsam": "v1: 40 hisse/780 bildirim/61 tür. v2: 115.842 arşiv bildirimi taranarak 52 tür daha eklendi.",
  "amac": "KAP bildirim TURLERININ kapali sozlugu. Ornekleri degil turleri etiketliyoruz: yeni gelen bir bildirim turunden taninir, yeniden etiketlemeye gerek kalmaz.",
  "UYARI": "Buradaki 'yon' degerleri HIPOTEZDIR, olculmus gercek degil. Hicbiri ileri getiriye karsi dogrulanmadi. Skorlamaya baglanmadan once dogrulanmali - bu projede 'apacik dogru' gorunen varsayimlar defalarca olculup yanlis cikti (kontrarian skor, dusus freni, siki stoplar).",
  "siniflar": {
@@ -11,67 +11,704 @@
   "sayisal": "Yon metinden degil RAKAMDAN gelir (bilanco, kar buyumesi). NLP gerekmez."
  },
  "turler": {
-  "Pay Bazında Devre Kesici Bildirimi":                                    {"sinif": "rutin", "yon": 0, "hisse": 36, "not": "Borsa mekanizmasi, sirket haberi degil."},
-  "Özel Durum Açıklaması (Genel)":                                         {"sinif": "icerik", "yon": null, "hisse": 35, "not": "EN ONEMLI TUR. 780 bildirimin 114'u. Basligi jenerik ama ICERIGI gercek haber - sozlesme, satin alma, ceza. Icerik okunmadan hicbir sey soylenemez."},
-  "Katılım Finansı İlkeleri Bilgi Formu":                                  {"sinif": "rutin", "yon": 0, "hisse": 26, "not": "Katilim endeksi uygunluk formu."},
-  "Sorumluluk Beyanı (Konsolide)":                                         {"sinif": "rutin", "yon": 0, "hisse": 25, "not": "Finansal rapor eki, imza beyani."},
-  "SPK İşlem Yasağı Nedeniyle Pay Duyurusu":                               {"sinif": "rutin", "yon": 0, "hisse": 24, "not": "Yasak SAHISLARA veriliyor, sirkete degil."},
-  "Faaliyet Raporu (Konsolide)":                                           {"sinif": "rutin", "yon": 0, "hisse": 24, "not": "Yillik rapor teslimi; icerik zaten bilancoda."},
-  "Finansal Rapor":                                                        {"sinif": "sayisal", "yon": null, "hisse": 24, "not": "Bilanco. Yon metinden degil rakamdan: kar/ciro buyumesi, beklenti sapmasi. borsapy income_stmt ile hesaplanir."},
-  "Şirket Genel Bilgi Formu":                                              {"sinif": "rutin", "yon": 0, "hisse": 23, "not": "Adres/yonetim gibi kunye guncellemesi."},
-  "Borsada İşlem Gören Tipe Dönüşüm Duyurusu":                             {"sinif": "rutin", "yon": 0, "hisse": 18, "not": "Nama/hamiline donusum, teknik."},
-  "Pay Dışında Sermaye Piyasası Aracı İşlemlerine İlişkin Bildirim (Faiz İçeren)": {"sinif": "rutin", "yon": 0, "hisse": 14, "not": "Tahvil/bono rutini. Eski sistemde bu basliklar 'olumlu' sayiliyordu."},
-  "Pay Dışında Sermaye Piyasası Aracı İşlemlerine İlişkin Bildirim (Faizsiz)": {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "Yukaridakinin faizsiz varyanti; ayni rutin."},
-  "Kredi Derecelendirmesi":                                                {"sinif": "icerik", "yon": null, "hisse": 14, "not": "Not ARTISI mi INDIRIMI mi, ancak metinden. Ikisi zit yonlu."},
-  "TSRS Uyumlu Sürdürülebilirlik Raporu":                                  {"sinif": "rutin", "yon": 0, "hisse": 12, "not": "Zorunlu surdurulebilirlik raporu."},
-  "BIST Pay Endeksleri":                                                   {"sinif": "icerik", "yon": null, "hisse": 12, "not": "Endekse GIRIS pozitif, CIKIS negatif (pasif fon akisi). Yon metinde."},
-  "Borçlanma Araçları, Yatırım Fonları ve Varant İtfa/Kupon/Getiri/ Nakdi Uzlaşı Ödeme İşlemleri": {"sinif": "rutin", "yon": 0, "hisse": 9, "not": "Ucuncu taraf urun odemesi."},
-  "Finansal Takvim":                                                       {"sinif": "rutin", "yon": 0, "hisse": 9, "not": "Bilanco tarihi duyurusu."},
-  "Temerrüt İşlemi":                                                       {"sinif": "rutin", "yon": 0, "hisse": 8, "not": "TAKASBANK bildirimi: bir piyasa katilimcisi takasi kapatamamis. Sirketle ilgisi YOK. Ilk duzeltme turunda olumsuzlarin neredeyse tamamini bu uretti."},
-  "Pay Alım Satım Bildirimi":                                              {"sinif": "icerik", "yon": null, "hisse": 8, "not": "Iceriden/ortak islemi. ALIM pozitif, SATIM negatif - yon metinde."},
-  "Geleceğe Dönük Değerlendirmeler":                                       {"sinif": "icerik", "yon": null, "hisse": 8, "not": "Sirket BEKLENTISI (guidance). Yatirimci icin en degerli turlerden; yon metinde."},
-  "Finansal Duran Varlık Edinimi":                                         {"sinif": "yonlu", "yon": 1, "hisse": 7, "guven": "dusuk", "not": "Satin alma. Buyume isareti ama nakit cikisi - yon zayif, dogrulanmali."},
-  "Kamuyu Aydınlatma Platformu Duyurusu":                                  {"sinif": "rutin", "yon": 0, "hisse": 6, "not": "Platformun kendi duyurusu."},
-  "Kurumsal Yönetim İlkelerine Uyum Derecelendirmesi":                     {"sinif": "rutin", "yon": 0, "hisse": 6, "not": "Yonetisim notu, fiyat etkisi beklenmez."},
-  "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Yönetim Kurulu-2":          {"sinif": "rutin", "yon": 0, "hisse": 5, "not": "Form guncellemesi."},
-  "Payların Geri Alınmasına İlişkin Bildirim":                             {"sinif": "yonlu", "yon": 1, "hisse": 4, "guven": "orta", "not": "GERI ALIM. Sirket kendi hissesini aliyor - hem talep hem 'ucuz' sinyali."},
-  "İhraç Tavanına İlişkin Bildirim":                                       {"sinif": "rutin", "yon": 0, "hisse": 4, "not": "Borclanma tavani izni; kullanilmasi ayri bildirim."},
-  "Borçlanma Araçlarının / Kira Sertifikalarının İşlem Görmeye Başlaması":  {"sinif": "rutin", "yon": 0, "hisse": 4, "not": "Tahvil kotasyonu."},
-  "BISTECH Pay Piyasası Alım Satım Sistemi Duyurusu":                      {"sinif": "rutin", "yon": 0, "hisse": 4, "not": "Borsa altyapi duyurusu."},
-  "Endekslerde Kullanılan Fiili Dolaşımdaki Pay Oranı Değişiklikleri":     {"sinif": "icerik", "yon": null, "hisse": 4, "not": "Fiili dolasim ARTISI endeks agirligini artirir (pozitif), azalis tersi."},
-  "İstanbul Takas ve Saklama Bankası A.Ş. Duyurusu":                       {"sinif": "rutin", "yon": 0, "hisse": 3, "not": "Takasbank operasyon duyurusu."},
-  "Sermaye Artırımı - Azaltımı İşlemlerine İlişkin Bildirim":              {"sinif": "icerik", "yon": null, "hisse": 3, "not": "BEDELLI artirim sulandirici (negatif), BEDELSIZ notrdur, AZALTIM ayri. Yon metinde - tur tek basina yetmez."},
-  "Genel Kurul İşlemlerine İlişkin Bildirim":                              {"sinif": "rutin", "yon": 0, "hisse": 3, "not": "Genel kurul cagri/sonuc."},
-  "Sürdürülebilirlik Raporu":                                              {"sinif": "rutin", "yon": 0, "hisse": 3, "not": "Rutin rapor."},
-  "Pay Mali Hak Kullanım İşlemi - Nakit Ödeme":                            {"sinif": "yonlu", "yon": 0, "hisse": 3, "guven": "orta", "not": "Temettu odemesi. DIKKAT: odeme gunu fiyat temettu kadar DUSER (temettu duzeltmesi). Notr isaretlendi - eski sistem bunu 'olumlu' sayip hata yapiyordu."},
-  "Hak Kullanımı":                                                         {"sinif": "icerik", "yon": null, "hisse": 3, "not": "Temettu/bedelsiz/ruchan - hangisi oldugu metinde."},
-  "İhraç Belgesi":                                                         {"sinif": "rutin", "yon": 0, "hisse": 3, "not": "Borclanma araci belgesi."},
-  "Kayıtlı Sermaye Tavanı İşlemlerine İlişkin Bildirim":                   {"sinif": "rutin", "yon": 0, "hisse": 2, "not": "Tavan izni; tek basina islem degil."},
-  "Toptan Alış Satış İşlemi Bildirimi":                                    {"sinif": "icerik", "yon": null, "hisse": 2, "not": "Blok islem. Ana ortak SATIYORSA arz baskisi, kurumsal ALICI giriyorsa tersi. Yon metinde."},
-  "Esas Sözleşme Tadili":                                                  {"sinif": "rutin", "yon": 0, "hisse": 2, "not": "Ana sozlesme degisikligi."},
-  "Yeni İş İlişkisi":                                                      {"sinif": "yonlu", "yon": 1, "hisse": 2, "guven": "orta", "not": "YENI IS/MUSTERI. Buyuklugu metinde ama yonu turden belli."},
-  "Haber ve Söylentilere İlişkin Açıklama":                                {"sinif": "icerik", "yon": null, "hisse": 2, "not": "Genelde soylenti YALANLAMASI. Yon soylentinin yonune bagli - metin sart."},
-  "Kar Payı Dağıtım İşlemlerine İlişkin Bildirim":                         {"sinif": "yonlu", "yon": 1, "hisse": 2, "guven": "dusuk", "not": "Temettu KARARI (odemeden farkli). Nakit uretimi sinyali; yon zayif, dogrulanmali."},
-  "Toptan Alış Satış İşlemi":                                              {"sinif": "icerik", "yon": null, "hisse": 2, "not": "Blok islem, yukaridakiyle ayni."},
-  "Faaliyetlerin Kısmen veya Tamamen Durdurulması ya da İmkansız Hale Gelmesi": {"sinif": "yonlu", "yon": -1, "hisse": 2, "guven": "yuksek", "not": "URETIM DURDU. KAP'taki en net olumsuz turlerden."},
-  "Esas Sözleşme":                                                         {"sinif": "rutin", "yon": 0, "hisse": 2, "not": "Metin teslimi."},
-  "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Yönetim Kurulu-1":          {"sinif": "rutin", "yon": 0, "hisse": 2, "not": "Form guncellemesi."},
-  "Sermaye Artırımından Elde Edilecek - Edilen Fonun Kullanımına İlişkin Rapor": {"sinif": "rutin", "yon": 0, "hisse": 2, "not": "Artirim sonrasi rutin rapor."},
-  "Herhangi Bir Otoriteye Mali Tablo Verilmesi":                           {"sinif": "rutin", "yon": 0, "hisse": 2, "not": "Kuruma tablo teslimi."},
-  "Yatırım Kuruluşu Varant - Sertifika - Senetlerine İlişkin Bildirim":    {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "UCUNCU TARAF araci kurum urunu ihrac ediyor, sirketin isi degil. Eski sistemde 'olumlu' sayiliyordu - GARAN'in 65.3 skorunun kaynagi buydu."},
-  "Birleşme İşlemlerine İlişkin Bildirim":                                 {"sinif": "icerik", "yon": null, "hisse": 1, "not": "Birlesme. Devralan mi devrolan mi, sartlari ne - metin sart."},
-  "Bağımsız Denetim Kuruluşunun Belirlenmesi":                             {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "Denetci atamasi."},
-  "İzahname (İhraççı Bilgi Dokümanı-SPK Onayına Sunulan)":                 {"sinif": "yonlu", "yon": -1, "hisse": 1, "guven": "dusuk", "not": "Sermaye/borc ihraci hazirligi - sulandirma ihtimali. Zayif, dogrulanmali."},
-  "İzahname (Sermaye Piyasası Aracı Notu-SPK Onayına Sunulan)":            {"sinif": "yonlu", "yon": -1, "hisse": 1, "guven": "dusuk", "not": "Ayni."},
-  "İzahname (Özet-SPK Onayına Sunulan)":                                   {"sinif": "yonlu", "yon": -1, "hisse": 1, "guven": "dusuk", "not": "Ayni."},
-  "Ortaklık Aleyhine Dava Açılması veya Davaya İlişkin Gelişmeler":        {"sinif": "yonlu", "yon": -1, "hisse": 1, "guven": "yuksek", "not": "SIRKET ALEYHINE DAVA. Eski sistem bunu OLUMLU sayiyordu ('Ortaklik' kelimesi olumlu listesindeydi)."},
-  "Finansal Duran Varlık Satışı":                                          {"sinif": "icerik", "yon": null, "hisse": 1, "not": "Varlik satisi: nakit girisi mi, zorunlu elden cikarma mi - metin sart."},
-  "Kurumsal Yönetim Uyum Raporu (Güncelleme)":                             {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "Rutin rapor."},
-  "Likidite Sağlayıcılık Kapsamındaki İşlemler":                           {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "Piyasa yapicilik islemi."},
-  "Yatırımcı Raporu":                                                      {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "Yatirimci sunumu."},
-  "Bilgilendirme Politikası":                                              {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "Politika metni."},
-  "VİOP İşlem İptali Duyuruları":                                          {"sinif": "rutin", "yon": 0, "hisse": 1, "not": "Turev piyasa islem iptali."},
-  "Finansal Rapor Ek Süre Taleplerine İlişkin SPK Değerlendirmesi":        {"sinif": "yonlu", "yon": -1, "hisse": 1, "guven": "orta", "not": "Bilancoyu GEC verme talebi. Literaturde gec raporlama olumsuz sinyaldir."},
-  "Genel Açıklama":                                                        {"sinif": "icerik", "yon": null, "hisse": 1, "not": "Jenerik sarmalayici, icerik sart."}
+  "Pay Bazında Devre Kesici Bildirimi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 36,
+   "not": "Borsa mekanizmasi, sirket haberi degil."
+  },
+  "Özel Durum Açıklaması (Genel)": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 35,
+   "not": "EN ONEMLI TUR. 780 bildirimin 114'u. Basligi jenerik ama ICERIGI gercek haber - sozlesme, satin alma, ceza. Icerik okunmadan hicbir sey soylenemez."
+  },
+  "Katılım Finansı İlkeleri Bilgi Formu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 26,
+   "not": "Katilim endeksi uygunluk formu."
+  },
+  "Sorumluluk Beyanı (Konsolide)": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 25,
+   "not": "Finansal rapor eki, imza beyani."
+  },
+  "SPK İşlem Yasağı Nedeniyle Pay Duyurusu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 24,
+   "not": "Yasak SAHISLARA veriliyor, sirkete degil."
+  },
+  "Faaliyet Raporu (Konsolide)": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 24,
+   "not": "Yillik rapor teslimi; icerik zaten bilancoda."
+  },
+  "Finansal Rapor": {
+   "sinif": "sayisal",
+   "yon": null,
+   "hisse": 24,
+   "not": "Bilanco. Yon metinden degil rakamdan: kar/ciro buyumesi, beklenti sapmasi. borsapy income_stmt ile hesaplanir."
+  },
+  "Şirket Genel Bilgi Formu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 23,
+   "not": "Adres/yonetim gibi kunye guncellemesi."
+  },
+  "Borsada İşlem Gören Tipe Dönüşüm Duyurusu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 18,
+   "not": "Nama/hamiline donusum, teknik."
+  },
+  "Pay Dışında Sermaye Piyasası Aracı İşlemlerine İlişkin Bildirim (Faiz İçeren)": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 14,
+   "not": "Tahvil/bono rutini. Eski sistemde bu basliklar 'olumlu' sayiliyordu."
+  },
+  "Pay Dışında Sermaye Piyasası Aracı İşlemlerine İlişkin Bildirim (Faizsiz)": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 1,
+   "not": "Yukaridakinin faizsiz varyanti; ayni rutin."
+  },
+  "Kredi Derecelendirmesi": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 14,
+   "not": "Not ARTISI mi INDIRIMI mi, ancak metinden. Ikisi zit yonlu."
+  },
+  "TSRS Uyumlu Sürdürülebilirlik Raporu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 12,
+   "not": "Zorunlu surdurulebilirlik raporu."
+  },
+  "BIST Pay Endeksleri": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 12,
+   "not": "Endekse GIRIS pozitif, CIKIS negatif (pasif fon akisi). Yon metinde."
+  },
+  "Borçlanma Araçları, Yatırım Fonları ve Varant İtfa/Kupon/Getiri/ Nakdi Uzlaşı Ödeme İşlemleri": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 9,
+   "not": "Ucuncu taraf urun odemesi."
+  },
+  "Finansal Takvim": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 9,
+   "not": "Bilanco tarihi duyurusu."
+  },
+  "Temerrüt İşlemi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 8,
+   "not": "TAKASBANK bildirimi: bir piyasa katilimcisi takasi kapatamamis. Sirketle ilgisi YOK. Ilk duzeltme turunda olumsuzlarin neredeyse tamamini bu uretti."
+  },
+  "Pay Alım Satım Bildirimi": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 8,
+   "not": "Iceriden/ortak islemi. ALIM pozitif, SATIM negatif - yon metinde."
+  },
+  "Geleceğe Dönük Değerlendirmeler": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 8,
+   "not": "Sirket BEKLENTISI (guidance). Yatirimci icin en degerli turlerden; yon metinde."
+  },
+  "Finansal Duran Varlık Edinimi": {
+   "sinif": "yonlu",
+   "yon": 1,
+   "hisse": 7,
+   "guven": "dusuk",
+   "not": "Satin alma. Buyume isareti ama nakit cikisi - yon zayif, dogrulanmali."
+  },
+  "Kamuyu Aydınlatma Platformu Duyurusu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 6,
+   "not": "Platformun kendi duyurusu."
+  },
+  "Kurumsal Yönetim İlkelerine Uyum Derecelendirmesi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 6,
+   "not": "Yonetisim notu, fiyat etkisi beklenmez."
+  },
+  "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Yönetim Kurulu-2": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 5,
+   "not": "Form guncellemesi."
+  },
+  "Payların Geri Alınmasına İlişkin Bildirim": {
+   "sinif": "yonlu",
+   "yon": 1,
+   "hisse": 4,
+   "guven": "orta",
+   "not": "GERI ALIM. Sirket kendi hissesini aliyor - hem talep hem 'ucuz' sinyali."
+  },
+  "İhraç Tavanına İlişkin Bildirim": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 4,
+   "not": "Borclanma tavani izni; kullanilmasi ayri bildirim."
+  },
+  "Borçlanma Araçlarının / Kira Sertifikalarının İşlem Görmeye Başlaması": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 4,
+   "not": "Tahvil kotasyonu."
+  },
+  "BISTECH Pay Piyasası Alım Satım Sistemi Duyurusu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 4,
+   "not": "Borsa altyapi duyurusu."
+  },
+  "Endekslerde Kullanılan Fiili Dolaşımdaki Pay Oranı Değişiklikleri": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 4,
+   "not": "Fiili dolasim ARTISI endeks agirligini artirir (pozitif), azalis tersi."
+  },
+  "İstanbul Takas ve Saklama Bankası A.Ş. Duyurusu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 3,
+   "not": "Takasbank operasyon duyurusu."
+  },
+  "Sermaye Artırımı - Azaltımı İşlemlerine İlişkin Bildirim": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 3,
+   "not": "BEDELLI artirim sulandirici (negatif), BEDELSIZ notrdur, AZALTIM ayri. Yon metinde - tur tek basina yetmez."
+  },
+  "Genel Kurul İşlemlerine İlişkin Bildirim": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 3,
+   "not": "Genel kurul cagri/sonuc."
+  },
+  "Sürdürülebilirlik Raporu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 3,
+   "not": "Rutin rapor."
+  },
+  "Pay Mali Hak Kullanım İşlemi - Nakit Ödeme": {
+   "sinif": "yonlu",
+   "yon": 0,
+   "hisse": 3,
+   "guven": "orta",
+   "not": "Temettu odemesi. DIKKAT: odeme gunu fiyat temettu kadar DUSER (temettu duzeltmesi). Notr isaretlendi - eski sistem bunu 'olumlu' sayip hata yapiyordu."
+  },
+  "Hak Kullanımı": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 3,
+   "not": "Temettu/bedelsiz/ruchan - hangisi oldugu metinde."
+  },
+  "İhraç Belgesi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 3,
+   "not": "Borclanma araci belgesi."
+  },
+  "Kayıtlı Sermaye Tavanı İşlemlerine İlişkin Bildirim": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 2,
+   "not": "Tavan izni; tek basina islem degil."
+  },
+  "Toptan Alış Satış İşlemi Bildirimi": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 2,
+   "not": "Blok islem. Ana ortak SATIYORSA arz baskisi, kurumsal ALICI giriyorsa tersi. Yon metinde."
+  },
+  "Esas Sözleşme Tadili": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 2,
+   "not": "Ana sozlesme degisikligi."
+  },
+  "Yeni İş İlişkisi": {
+   "sinif": "yonlu",
+   "yon": 1,
+   "hisse": 2,
+   "guven": "orta",
+   "not": "YENI IS/MUSTERI. Buyuklugu metinde ama yonu turden belli."
+  },
+  "Haber ve Söylentilere İlişkin Açıklama": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 2,
+   "not": "Genelde soylenti YALANLAMASI. Yon soylentinin yonune bagli - metin sart."
+  },
+  "Kar Payı Dağıtım İşlemlerine İlişkin Bildirim": {
+   "sinif": "yonlu",
+   "yon": 1,
+   "hisse": 2,
+   "guven": "dusuk",
+   "not": "Temettu KARARI (odemeden farkli). Nakit uretimi sinyali; yon zayif, dogrulanmali."
+  },
+  "Toptan Alış Satış İşlemi": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 2,
+   "not": "Blok islem, yukaridakiyle ayni."
+  },
+  "Faaliyetlerin Kısmen veya Tamamen Durdurulması ya da İmkansız Hale Gelmesi": {
+   "sinif": "yonlu",
+   "yon": -1,
+   "hisse": 2,
+   "guven": "yuksek",
+   "not": "URETIM DURDU. KAP'taki en net olumsuz turlerden."
+  },
+  "Esas Sözleşme": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 2,
+   "not": "Metin teslimi."
+  },
+  "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Yönetim Kurulu-1": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 2,
+   "not": "Form guncellemesi."
+  },
+  "Sermaye Artırımından Elde Edilecek - Edilen Fonun Kullanımına İlişkin Rapor": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 2,
+   "not": "Artirim sonrasi rutin rapor."
+  },
+  "Herhangi Bir Otoriteye Mali Tablo Verilmesi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 2,
+   "not": "Kuruma tablo teslimi."
+  },
+  "Yatırım Kuruluşu Varant - Sertifika - Senetlerine İlişkin Bildirim": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 1,
+   "not": "UCUNCU TARAF araci kurum urunu ihrac ediyor, sirketin isi degil. Eski sistemde 'olumlu' sayiliyordu - GARAN'in 65.3 skorunun kaynagi buydu."
+  },
+  "Birleşme İşlemlerine İlişkin Bildirim": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 1,
+   "not": "Birlesme. Devralan mi devrolan mi, sartlari ne - metin sart."
+  },
+  "Bağımsız Denetim Kuruluşunun Belirlenmesi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 1,
+   "not": "Denetci atamasi."
+  },
+  "İzahname (İhraççı Bilgi Dokümanı-SPK Onayına Sunulan)": {
+   "sinif": "yonlu",
+   "yon": -1,
+   "hisse": 1,
+   "guven": "dusuk",
+   "not": "Sermaye/borc ihraci hazirligi - sulandirma ihtimali. Zayif, dogrulanmali."
+  },
+  "İzahname (Sermaye Piyasası Aracı Notu-SPK Onayına Sunulan)": {
+   "sinif": "yonlu",
+   "yon": -1,
+   "hisse": 1,
+   "guven": "dusuk",
+   "not": "Ayni."
+  },
+  "İzahname (Özet-SPK Onayına Sunulan)": {
+   "sinif": "yonlu",
+   "yon": -1,
+   "hisse": 1,
+   "guven": "dusuk",
+   "not": "Ayni."
+  },
+  "Ortaklık Aleyhine Dava Açılması veya Davaya İlişkin Gelişmeler": {
+   "sinif": "yonlu",
+   "yon": -1,
+   "hisse": 1,
+   "guven": "yuksek",
+   "not": "SIRKET ALEYHINE DAVA. Eski sistem bunu OLUMLU sayiyordu ('Ortaklik' kelimesi olumlu listesindeydi)."
+  },
+  "Finansal Duran Varlık Satışı": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 1,
+   "not": "Varlik satisi: nakit girisi mi, zorunlu elden cikarma mi - metin sart."
+  },
+  "Kurumsal Yönetim Uyum Raporu (Güncelleme)": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 1,
+   "not": "Rutin rapor."
+  },
+  "Likidite Sağlayıcılık Kapsamındaki İşlemler": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 1,
+   "not": "Piyasa yapicilik islemi."
+  },
+  "Yatırımcı Raporu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 1,
+   "not": "Yatirimci sunumu."
+  },
+  "Bilgilendirme Politikası": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 1,
+   "not": "Politika metni."
+  },
+  "VİOP İşlem İptali Duyuruları": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hisse": 1,
+   "not": "Turev piyasa islem iptali."
+  },
+  "Finansal Rapor Ek Süre Taleplerine İlişkin SPK Değerlendirmesi": {
+   "sinif": "yonlu",
+   "yon": -1,
+   "hisse": 1,
+   "guven": "orta",
+   "not": "Bilancoyu GEC verme talebi. Literaturde gec raporlama olumsuz sinyaldir."
+  },
+  "Genel Açıklama": {
+   "sinif": "icerik",
+   "yon": null,
+   "hisse": 1,
+   "not": "Jenerik sarmalayici, icerik sart."
+  },
+  "Piyasa Yapıcılığı Kapsamında Gerçekleştirilen İşlemler Bildirimi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 7666,
+   "not": "Piyasa yapıcının kendi işlem raporu. Olay çalışmasında +%4.42 t=+10.2 çıktı ama bu SEÇİLİM: piyasa yapıcılık belirli hisselerde yapılır. Şirket haberi değil, sinyal olarak kullanılamaz."
+  },
+  "Sorumluluk Beyanı (Konsolide Olmayan)": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 2548,
+   "not": "Rapor eki."
+  },
+  "Faaliyet Raporu (Konsolide Olmayan)": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 2026,
+   "not": "Yıllık rapor."
+  },
+  "Borçlanma Araçlarının İşlem Görmeye Başlaması": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 1868,
+   "not": "Tahvil kotasyonu."
+  },
+  "Değerleme Raporu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 1685,
+   "not": "GYO gayrimenkul değerleme raporu; rutin yükümlülük, yön taşımaz."
+  },
+  "Haftalık Rapor": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 996,
+   "not": "Yatırım ortaklığı haftalık portföy raporu."
+  },
+  "Olağan Dışı Fiyat ve Miktar Hareketleri": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 968,
+   "not": "TERS NEDENSELLİK: bu bildirim hisse çok oynadığı İÇİN çıkar. Olay çalışmasında -%4.92 vermesi sinyal değil, ortalamaya dönüş. Asla sinyal olarak kullanılamaz."
+  },
+  "Yönetim Kurulu Komiteleri": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 752,
+   "not": "Komite listesi."
+  },
+  "İzahname (SPK Tarafından Onaylanan)": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 694,
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+  },
+  "Test Bildirimi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 639,
+   "not": "Düpedüz test kaydı. 639 adet."
+  },
+  "Tertip İhraç Belgesi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 560,
+   "not": "Kira sertifikası tertip belgesi."
+  },
+  "Takasbank Para Piyasası Günlük Bülten": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 528,
+   "not": "Takasbank günlük bülteni/duyurusu."
+  },
+  "İşlem İptali": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 519,
+   "not": "Borsa işlem iptali, operasyonel."
+  },
+  "Takasbank Ödünç Pay Piyasası Günlük Bülten": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 490,
+   "not": "Takasbank günlük bülteni/duyurusu."
+  },
+  "Fiyat Tespit Raporuna İlişkin Analist Raporu (Halka Arza Aracılık Eden Kuruluş Dışında Farklı bir Kuruluş Tarafından Hazırlanan)": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 464,
+   "not": "Halka arz fiyat tespiti."
+  },
+  "Merkezi Kayıt Kuruluşu A.Ş. Duyurusu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 460,
+   "not": "MKK duyurusu."
+  },
+  "Genel Kurul Bildirimi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 413,
+   "not": "Genel kurul çağrısı."
+  },
+  "İlişkili Taraf İşlemleri": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 298,
+   "not": "Yönetişim açısından riskli olabilir; koşulları metinde."
+  },
+  "Pay Alım Teklifi Yoluyla Pay Toplanmasına İlişkin Bildirim": {
+   "sinif": "yonlu",
+   "yon": 1,
+   "hacim": 273,
+   "not": "Çağrı/tender: genellikle piyasa üstü fiyattan pay toplama.",
+   "guven": "orta"
+  },
+  "Fonlara İlişkin Duyuru": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 252,
+   "not": "Fon duyurusu, hisse ile ilgisiz."
+  },
+  "Borsa İstanbul A.Ş. Duyurusu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 250,
+   "not": "Borsa operasyon duyurusu."
+  },
+  "İzahname-Sermaye Piyasası Aracı Notu (SPK Tarafından Onaylanan)": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 240,
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+  },
+  "İhale Süreci / Sonucu": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 226,
+   "not": "İhaleyi KAZANDI mı kaybetti mi, tutarı ne - metin şart."
+  },
+  "İzahname-Özet (SPK Tarafından Onaylanan)": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 221,
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+  },
+  "Kira Sertifikalarının İşlem Görmeye Başlaması": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 218,
+   "not": "Sukuk kotasyonu."
+  },
+  "İzahname-İhraççı Bİlgi Dokümanı (SPK Tarafından Onaylanan)": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 176,
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+  },
+  "Halka Arz Fiyatının Belirlenmesinde Esas Alınan Varsayımlara İlişkin Değerlendirme Raporu": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 159,
+   "not": "Halka arz."
+  },
+  "Faaliyet Raporu Sorumluluk Beyanı": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 151,
+   "not": "Rapor eki."
+  },
+  "Maddi Duran Varlık Satımı": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 148,
+   "not": "Nakit girişi mi zorunlu elden çıkarma mı - metin şart."
+  },
+  "Maddi Duran Varlık Kiraya Verilmesi veya Ayni Hak Tesisi": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 144,
+   "not": "Kiralama, yön metinde."
+  },
+  "İzahname (SPK Onayına Sunulan)": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 139,
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+  },
+  "SPK Bülteni": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 138,
+   "not": "Kurul bülteni."
+  },
+  "Kurumsal Yönetim Uyum Raporu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 137,
+   "not": "Yıllık uyum raporu."
+  },
+  "Kurumsal Yönetim Bilgi Formu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 136,
+   "not": "Yıllık form."
+  },
+  "Pay İşlem Sırası Kapatma / Açma": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 129,
+   "not": "Sıra açma/kapama, operasyonel."
+  },
+  "Devrolma İşlemlerine İlişkin Bildirim": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 129,
+   "not": "Birleşme/devir, koşullar metinde."
+  },
+  "Maddi Duran Varlık Alımı": {
+   "sinif": "yonlu",
+   "yon": 1,
+   "hacim": 124,
+   "not": "Yatırım işareti ama nakit çıkışı; yön zayıf.",
+   "guven": "dusuk"
+  },
+  "Finansal Tablo ve-veya Dipnot Değişikliği": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 124,
+   "not": "Tablo tipi/dipnot düzeltmesi."
+  },
+  "Hak Kullanım Süreç İptal Bildirimi": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 114,
+   "not": "Süreç iptali, operasyonel."
+  },
+  "Tasarruf Sahiplerine Satış Duyurusu": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 108,
+   "not": "Halka arz duyurusu."
+  },
+  "Sürdürülebilirlik Uyum Raporu": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 104,
+   "not": "Yıllık rapor."
+  },
+  "Ayrılma Hakkı Kullanımına İlişkin Bildirim": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 99,
+   "not": "Önemli işlem sonrası ayrılma hakkı."
+  },
+  "TTK'nın 376. Maddesi Kapsamında Yapılan İşlemler": {
+   "sinif": "yonlu",
+   "yon": -1,
+   "hacim": 96,
+   "not": "TTK 376 = sermayenin önemli kısmının KAYBI / teknik iflas eşiği. KAP'taki en net finansal sıkıntı sinyallerinden.",
+   "guven": "yuksek"
+  },
+  "Dışarıdan Sağlanan Hizmetler ve Personel İçin Ödenen Komisyon ve Ücretler": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 94,
+   "not": "Komisyon açıklaması."
+  },
+  "Aracılık Hizmetleri İçin Ödenen Komisyonlar": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 94,
+   "not": "Komisyon açıklaması."
+  },
+  "Fiyat Tespit Raporuna İlişkin Analist Raporu (Halka Arza Aracılık Eden Kuruluş Tarafından Hazırlanan)": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 70,
+   "not": "Halka arz fiyat tespiti."
+  },
+  "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Pay Sahipleri": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 55,
+   "not": "Yıllık form."
+  },
+  "İzahname veya İzahnameyi Oluşturan Belgelerde Değişiklik - Ekleme": {
+   "sinif": "icerik",
+   "yon": null,
+   "hacim": 51,
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+  },
+  "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Yönetim Kurulu-3": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 44,
+   "not": "Yıllık form."
+  },
+  "Pay Alım Teklifi Bilgi Formu": {
+   "sinif": "yonlu",
+   "yon": 1,
+   "hacim": 36,
+   "not": "Çağrı/tender: genellikle piyasa üstü fiyattan pay toplama.",
+   "guven": "orta"
+  },
+  "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Menfaat Sahipleri": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 6,
+   "not": "Yıllık form."
+  },
+  "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Kamuyu Aydınlatma ve Şeffaflık": {
+   "sinif": "rutin",
+   "yon": 0,
+   "hacim": 4,
+   "not": "Yıllık form."
+  }
  }
 }
