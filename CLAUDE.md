@@ -294,6 +294,84 @@ cutoff minus the horizon, exactly as `_panel_oku` already does for the
 calibration panels. Building the news layer on reserve data would burn the vault
 for the sake of a component measured at ~0 contribution.
 
+#### The KAP event study ran: one signal out of twelve hypotheses survived (2026-09-26)
+
+411,656 disclosures collected (2018-01-01 → 2024-08-30, 1,031 stocks, 192
+types, 90% carrying a summary), then measured against the frozen price panel:
+entry at the next close after publication, 30-day return minus the panel's
+cross-sectional median, t-statistics clustered by day. 163,919 events matched a
+panel stock. The vault applies — the panel is trimmed at the cutoff, so forward
+windows reaching into the reserve drop out.
+
+**The headline is a negative result about my own labels.** `kap_sozluk.json`
+carried 12 directional hypotheses, each derived by reading what the disclosure
+type means and reasoning about whether it should be good or bad news. **One
+survived.**
+
+| Type | n | 30d median | pos% | t | Hypothesis | Verdict |
+|---|---|---|---|---|---|---|
+| **Payların Geri Alınması** (buyback) | 5,158 | **+2.63%** | 58 | **+4.6** | + | **held** |
+| Kar Payı Dağıtımı (dividend) | 5,100 | +0.37% | 51 | +0.4 | + | noise |
+| Yeni İş İlişkisi (new business) | 2,098 | −1.23% | 47 | −1.2 | + | noise |
+| Finansal Duran Varlık Edinimi | 1,087 | +0.29% | 50 | −0.3 | + | noise |
+| Ortaklık Aleyhine Dava (lawsuit) | 494 | −0.41% | 48 | −0.5 | − | noise |
+| **Faaliyetlerin Durdurulması** (operations halted) | 360 | **+0.01%** | 50 | **+0.0** | − | noise |
+| Maddi Duran Varlık Alımı | 359 | −0.90% | 49 | +0.3 | + | noise |
+| Pay Alım Teklifi (tender offer) | 182 | +0.91% | 55 | +0.6 | + | noise |
+| **TTK 376** (capital erosion / technical insolvency) | 176 | **−0.51%** | 49 | **+0.0** | − | noise |
+| İzahname ×3 (prospectus) | 53–70 | +1.5 … +3.8% | 54–62 | +0.8…+1.3 | − | noise, wrong sign |
+
+The two I marked **high confidence** — a company halting operations and a
+lawsuit filed against it — came back at **+0.01%** and **−0.41%**, i.e. exactly
+nothing. So did TTK 376, which is the legal threshold for having lost a
+significant part of share capital. Reading a disclosure type and reasoning about
+its direction predicted returns **about as well as chance**. The dictionary's
+`yon` values are now set to 0 wherever the measurement said noise, and each type
+carries an `olcum` block with n, median, pos% and t so the claim is inspectable.
+
+**A small-sample lesson, and a sharp one.** On partial data (136 events) "Yeni
+İş İlişkisi" showed −4.73% at t=−4.3 and I reported it as a striking finding
+with the caveat that it was provisional. At 2,098 events it is −1.23% at t=−1.2.
+The whole effect was sampling noise, and the day-clustered t did not protect
+against it. This is the fifth or sixth time in this file that a confident number
+dissolved when the sample grew.
+
+**What actually survived, and why it is believable.** Of 92 types with n≥50, 9
+cleared |t|>2.5, and most of those are artifacts the tool already warns about:
+
+- **Buyback +2.63%** (n=5,158, t=+4.6) — the one real signal, and note it is the
+  one with a *mechanical* cause rather than an interpretive one: the company is
+  literally buying its own shares, which is demand, not news about prospects.
+- **Sermaye Artırımı − Azaltımı −2.01%** (n=3,480, t=−3.1) — capital increase,
+  negative as dilution predicts. Labelled "read the content" because bedelli
+  (rights, dilutive) and bedelsiz (bonus, neutral) differ; the negative average
+  says the dilutive cases dominate. Splitting it by summary text is the obvious
+  next step.
+- **Özel Durum Açıklaması (Genel) −0.21%** (n=25,988, t=−2.7) — the generic
+  material-event wrapper, slightly negative across 26k events. Tiny, but a real
+  "sell the news" tilt.
+- Discarded as artifacts: **Yatırım Kuruluşu Varant** (+3.39%, t=+8.4) and
+  **Piyasa Yapıcılığı** (+2.51%, t=+2.9) are *selection* — brokerages write
+  warrants and make markets in whatever is already hot; **Olağan Dışı Fiyat ve
+  Miktar Hareketleri** (−3.03%) is reverse causality, it fires because the stock
+  moved; **Entegre Rapor** (+5.17%, n=66) is a routine annual filing on a sample
+  too small to mean anything.
+
+**What this says about the original goal.** The ask was to generate signals from
+KAP disclosures. The measured answer is that KAP yields **one** robust signal,
+not many, and it is not the kind that comes from understanding the news — it
+comes from a company buying its own stock. That is worth having and it is worth
+wiring in. It is not a news-comprehension engine, and the 12-for-1 record says
+plainly that building one on top of type labels would be building on sand.
+
+Collection cost, for the record: `tools/kap_gecmis.py` pulled all 348 weeks in
+~35 minutes including retries. Three schemes were tried first and two were
+eliminated by measurement — day-by-day market-wide got rate-limited, and
+per-stock queries return **HTTP 500 for any range beyond about a year** (ASELS:
+1 year → 200 with 168 records, 2 years → 500). Weekly market-wide chunks work,
+stay under the 2000-record cap, and the 21 weeks that did hit the cap were split
+to daily automatically.
+
 ### Persistence
 
 **`_PMDB` never silently falls back to local SQLite when Turso is configured (2026-08-03).** It used to: any network error dropped through to `sqlite3.connect(DB_PATH)`, which on Streamlit Cloud is `/tmp` and dies with the container. Some portfolio writes reached Turso and some went to a disk that was about to be erased — split-brain, with a NAV series that silently forks and no way to tell afterwards which row was right. Now: 3 attempts with exponential backoff (the session is discarded between attempts so a half-broken TLS connection isn't reused), then `TursoUnavailable` is raised. SQL errors still raise immediately — retrying an invalid statement is pointless. Note `is_cloud()` means "Turso is configured", not "running on Streamlit Cloud": with Turso set up locally, **offline local development now errors instead of falling back**. That is intended — a local fallback would fork the data just the same. `_safe_render` catches it and shows the error rather than a blank page.

@@ -13,8 +13,9 @@ KAP'ın kendi sorgu ucu bunu çözüyor:
 Ölçüldü (2026-09-26): 2018'e kadar geçmiş var; ASELS 2018'de 145, 2023'te 168
 bildirim döndürüyor.
 
-NEDEN HİSSE BAŞINA, GÜN BAŞINA DEĞİL
-------------------------------------
+NEDEN HAFTALIK, PİYASA GENELİ
+-----------------------------
+Üç şema denendi, ikisi ölçümle elendi:
 İlk sürüm tüm piyasayı GÜN GÜN çekiyordu: 1740 istek. Ölçülen sonuç kötüydü —
 KAP sürekli istek altında bağlantıyı kesiyor ("Server disconnected without
 sending a response"); bir koşuda 200 günde 33, diğerinde 547 günde 149 gün
@@ -22,10 +23,15 @@ kaybedildi. İlk teşhis "yalnız 2018-05-21 bozuk" idi ve YANLIŞTI: o tarihler
 tek tek denenince çalışıyor, uzun koşuda çalışmıyor. Yani bu bir hız
 sınırlaması, bozuk veri değil.
 
-Hisse başına sorgu hem daha az istek hem daha doğal bir kullanım:
-    ~500 hisse x 1 istek  =  ~500 istek   (1740 yerine)
-ve bir hissenin 8 yılı tavanın altında kalıyor (ASELS ~910 kayıt < 2000).
-Ayrıca zaten yalnız donmuş evrendeki hisseler lazım, tüm piyasa değil.
+Sonra hisse başına denendi (500 istek). O da elendi: HİSSE BAŞINA SORGU
+YALNIZ ~1 YILLIK ARALIKTA ÇALIŞIYOR. Ölçüldü — ASELS için 1 yıl HTTP 200/168
+kayıt, 2 yıl HTTP 500, 6.7 yıl HTTP 500. Yıl yıl bölmek 500x7=3500 istek
+demekti, yani daha kötü.
+
+Kalan ve kullanılan şema: PİYASA GENELİ, HAFTALIK parça. Piyasa geneli sorgu
+uzun aralıkta 500 vermiyor, yalnız 2000'de kesiyor. Ölçülen hafta hacimleri
+tavanın altında (yoğun Mart 2024 haftası 1555, Haziran 2019 835), tavana
+değen hafta gün gün bölünür. ~348 hafta x 2.5 sn ~ 15 dakika.
 
 İKİ SINIR, ikisi de ölçüldü
 ---------------------------
@@ -74,18 +80,18 @@ OID_ONBELLEK = "kap_oid.json"    # şirket->oid, bir kez çekilir
 # işi çalıştırma.
 
 
-def _yuk(bas, son, oid):
+def _yuk(bas, son):
     return {"fromDate": bas, "toDate": son, "memberTypes": ["IGS"],
-            "mkkMemberOidList": [oid], "disclosureClass": "", "subjects": [],
+            "mkkMemberOidList": [], "disclosureClass": "", "subjects": [],
             "mainSector": "", "sector": "", "subSector": "", "market": "",
             "index": "", "year": "", "term": "", "ruleType": ""}
 
 
-def _istek(c, bas, son, oid, deneme=3):
+def _istek(c, bas, son, deneme=3):
     """Tek sorgu; hatada istemci yenilenir (kopan bağlantı havuzda kalıyor)."""
     for i in range(deneme):
         try:
-            r = c.post(UC, json=_yuk(bas, son, oid), timeout=30)
+            r = c.post(UC, json=_yuk(bas, son), timeout=30)
             r.raise_for_status()
             j = r.json()
             return (j if isinstance(j, list) else []), c
@@ -101,89 +107,82 @@ def _istek(c, bas, son, oid, deneme=3):
     return None, c
 
 
+def _haftalar(bas: str, son: str):
+    """(pazartesi, cuma) ciftleri — KAP hafta ici calisir."""
+    from datetime import datetime, timedelta
+    b = datetime.strptime(bas, "%Y-%m-%d").date()
+    s = datetime.strptime(son, "%Y-%m-%d").date()
+    b -= timedelta(days=b.weekday())           # o haftanin pazartesisi
+    while b <= s:
+        c = b + timedelta(days=4)              # cuma
+        yield max(b, datetime.strptime(bas, "%Y-%m-%d").date()).isoformat(),               min(c, s).isoformat()
+        b += timedelta(days=7)
+
+
 def cek(bas: str, son: str, yenile: bool = False) -> None:
-    from borsapy._providers.kap import get_kap_provider
+    from datetime import datetime, timedelta
 
     os.makedirs(VERI_DIZIN, exist_ok=True)
-    with open(EVREN, encoding="utf-8") as f:
-        hisseler = json.load(f)["tickers"]
-    print(f"Evren: {len(hisseler)} hisse | {bas} .. {son}", flush=True)
+    haftalar = list(_haftalar(bas, son))
+    print(f"{len(haftalar)} hafta | {bas} .. {son} | ~{len(haftalar)*BEKLE/60:.0f} dk",
+          flush=True)
 
-    kap = get_kap_provider()
-    oid_harita = {}
-    if os.path.exists(OID_ONBELLEK):
-        with open(OID_ONBELLEK, encoding="utf-8") as f:
-            oid_harita = json.load(f)
-        print(f"OID önbelleği: {len(oid_harita)} hisse", flush=True)
     c = httpx.Client(timeout=60, headers=BASLIKLAR, follow_redirects=True)
     t0 = time.time()
-    yeni = atlanan = toplam = 0
-    basarisiz, oidsiz = [], []
+    yeni_s = atlanan = toplam = 0
+    basarisiz, bolunmus = [], []
 
     try:
-        for i, tk in enumerate(hisseler, 1):
-            yol = os.path.join(VERI_DIZIN, f"{tk}.json")
+        for i, (h1, h2) in enumerate(haftalar, 1):
+            yol = os.path.join(VERI_DIZIN, f"h{h1}.json")
             if os.path.exists(yol) and not yenile:
                 with open(yol, encoding="utf-8") as f:
                     toplam += len(json.load(f))
                 atlanan += 1
                 continue
-            oid = oid_harita.get(tk)
-            if not oid:
-                try:
-                    oid = kap.get_member_oid(tk)
-                except Exception as exc:
-                    print(f"  {tk}: oid alınamadı ({type(exc).__name__}) — KAP "
-                          f"engelliyor olabilir, bir süre bekle", flush=True)
-                    oid = None
-                if oid:
-                    oid_harita[tk] = oid
-                    with open(OID_ONBELLEK, "w", encoding="utf-8") as f:
-                        json.dump(oid_harita, f, ensure_ascii=False, indent=1)
-                    time.sleep(BEKLE)
-            if not oid:
-                oidsiz.append(tk)
-                continue
 
-            d, c = _istek(c, bas, son, oid)
+            d, c = _istek(c, h1, h2)
             if d is None:
-                basarisiz.append(tk)
+                basarisiz.append(h1)
                 continue
 
-            # Tavana değdiyse yıl yıl böl — yoksa aralığın BAŞI sessizce kaybolur
+            # Tavana degdiyse gun gune bol — yoksa haftanin BASI sessizce kaybolur
             if len(d) >= TAVAN:
-                print(f"  {tk}: {TAVAN} tavanı — yıl yıl bölünüyor", flush=True)
+                bolunmus.append(h1)
+                print(f"  {h1}: {TAVAN} tavanı — gün gün bölünüyor", flush=True)
                 birlesik, gorulen = [], set()
-                for yil in range(int(bas[:4]), int(son[:4]) + 1):
-                    y1 = max(f"{yil}-01-01", bas)
-                    y2 = min(f"{yil}-12-31", son)
-                    dy, c = _istek(c, y1, y2, oid)
-                    for k in (dy or []):
+                g = datetime.strptime(h1, "%Y-%m-%d").date()
+                bit = datetime.strptime(h2, "%Y-%m-%d").date()
+                while g <= bit:
+                    dg, c = _istek(c, g.isoformat(), g.isoformat())
+                    for k in (dg or []):
                         ix = k.get("disclosureIndex")
                         if ix not in gorulen:
                             gorulen.add(ix)
                             birlesik.append(k)
+                    g += timedelta(days=1)
                     time.sleep(BEKLE)
                 d = birlesik
 
             with open(yol, "w", encoding="utf-8") as f:
                 json.dump(d, f, ensure_ascii=False)
-            yeni += 1
+            yeni_s += 1
             toplam += len(d)
-            if i % 25 == 0:
-                print(f"  {i}/{len(hisseler)} hisse | {toplam} bildirim "
+            if i % 20 == 0:
+                print(f"  {i}/{len(haftalar)} hafta | {toplam} bildirim "
                       f"| {time.time()-t0:.0f}s", flush=True)
             time.sleep(BEKLE)
     finally:
         c.close()
 
-    print(f"\nBitti: {yeni} indirildi, {atlanan} zaten vardı | {toplam} bildirim "
+    print("")
+    print(f"Bitti: {yeni_s} indirildi, {atlanan} zaten vardı | {toplam} bildirim "
           f"| {time.time()-t0:.0f}s")
-    if oidsiz:
-        print(f"KAP'ta bulunamadı ({len(oidsiz)}): {oidsiz[:10]}")
+    if bolunmus:
+        print(f"Tavana değip bölünen {len(bolunmus)} hafta: {bolunmus[:6]}")
     if basarisiz:
-        print(f"BAŞARISIZ ({len(basarisiz)}) — tekrar çalıştırınca denenir: "
-              f"{basarisiz[:10]}")
+        print(f"BAŞARISIZ {len(basarisiz)} hafta — tekrar çalıştırınca denenir: "
+              f"{basarisiz[:6]}")
 
 
 def _tum_kayitlar():

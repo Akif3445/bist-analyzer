@@ -1,5 +1,5 @@
 {
- "surum": 2,
+ "surum": 3,
  "tarih": "2026-09-26",
  "kapsam": "v1: 40 hisse/780 bildirim/61 tür. v2: 115.842 arşiv bildirimi taranarak 52 tür daha eklendi.",
  "amac": "KAP bildirim TURLERININ kapali sozlugu. Ornekleri degil turleri etiketliyoruz: yeni gelen bir bildirim turunden taninir, yeniden etiketlemeye gerek kalmaz.",
@@ -15,700 +15,1451 @@
    "sinif": "rutin",
    "yon": 0,
    "hisse": 36,
-   "not": "Borsa mekanizmasi, sirket haberi degil."
+   "not": "Borsa mekanizmasi, sirket haberi degil.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Özel Durum Açıklaması (Genel)": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 35,
-   "not": "EN ONEMLI TUR. 780 bildirimin 114'u. Basligi jenerik ama ICERIGI gercek haber - sozlesme, satin alma, ceza. Icerik okunmadan hicbir sey soylenemez."
+   "not": "EN ONEMLI TUR. 780 bildirimin 114'u. Basligi jenerik ama ICERIGI gercek haber - sozlesme, satin alma, ceza. Icerik okunmadan hicbir sey soylenemez.",
+   "olcum": {
+    "n": 25988,
+    "med7": -0.3,
+    "med30": -0.21,
+    "poz30": 49,
+    "t30": -2.7,
+    "anlamli": true,
+    "karar": "anlamli (sinif yonlu degil - dikkatle oku)"
+   }
   },
   "Katılım Finansı İlkeleri Bilgi Formu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 26,
-   "not": "Katilim endeksi uygunluk formu."
+   "not": "Katilim endeksi uygunluk formu.",
+   "olcum": {
+    "n": 1962,
+    "med7": -0.68,
+    "med30": -0.71,
+    "poz30": 48,
+    "t30": -1.0,
+    "anlamli": false
+   }
   },
   "Sorumluluk Beyanı (Konsolide)": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 25,
-   "not": "Finansal rapor eki, imza beyani."
+   "not": "Finansal rapor eki, imza beyani.",
+   "olcum": {
+    "n": 6070,
+    "med7": -0.31,
+    "med30": -0.28,
+    "poz30": 49,
+    "t30": -0.8,
+    "anlamli": false
+   }
   },
   "SPK İşlem Yasağı Nedeniyle Pay Duyurusu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 24,
-   "not": "Yasak SAHISLARA veriliyor, sirkete degil."
+   "not": "Yasak SAHISLARA veriliyor, sirkete degil.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Faaliyet Raporu (Konsolide)": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 24,
-   "not": "Yillik rapor teslimi; icerik zaten bilancoda."
+   "not": "Yillik rapor teslimi; icerik zaten bilancoda.",
+   "olcum": {
+    "n": 5993,
+    "med7": -0.32,
+    "med30": -0.33,
+    "poz30": 49,
+    "t30": -0.4,
+    "anlamli": false
+   }
   },
   "Finansal Rapor": {
    "sinif": "sayisal",
    "yon": null,
    "hisse": 24,
-   "not": "Bilanco. Yon metinden degil rakamdan: kar/ciro buyumesi, beklenti sapmasi. borsapy income_stmt ile hesaplanir."
+   "not": "Bilanco. Yon metinden degil rakamdan: kar/ciro buyumesi, beklenti sapmasi. borsapy income_stmt ile hesaplanir.",
+   "olcum": {
+    "n": 9592,
+    "med7": -0.44,
+    "med30": -0.22,
+    "poz30": 49,
+    "t30": -0.8,
+    "anlamli": false
+   }
   },
   "Şirket Genel Bilgi Formu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 23,
-   "not": "Adres/yonetim gibi kunye guncellemesi."
+   "not": "Adres/yonetim gibi kunye guncellemesi.",
+   "olcum": {
+    "n": 10975,
+    "med7": -0.04,
+    "med30": -0.18,
+    "poz30": 49,
+    "t30": -1.2,
+    "anlamli": false
+   }
   },
   "Borsada İşlem Gören Tipe Dönüşüm Duyurusu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 18,
-   "not": "Nama/hamiline donusum, teknik."
+   "not": "Nama/hamiline donusum, teknik.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Pay Dışında Sermaye Piyasası Aracı İşlemlerine İlişkin Bildirim (Faiz İçeren)": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 14,
-   "not": "Tahvil/bono rutini. Eski sistemde bu basliklar 'olumlu' sayiliyordu."
+   "not": "Tahvil/bono rutini. Eski sistemde bu basliklar 'olumlu' sayiliyordu.",
+   "olcum": {
+    "n": 15346,
+    "med7": -0.0,
+    "med30": -1.43,
+    "poz30": 45,
+    "t30": -3.1,
+    "anlamli": true,
+    "karar": "anlamli (sinif yonlu degil - dikkatle oku)"
+   }
   },
   "Pay Dışında Sermaye Piyasası Aracı İşlemlerine İlişkin Bildirim (Faizsiz)": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 1,
-   "not": "Yukaridakinin faizsiz varyanti; ayni rutin."
+   "not": "Yukaridakinin faizsiz varyanti; ayni rutin.",
+   "olcum": {
+    "n": 105,
+    "med7": -0.18,
+    "med30": -1.78,
+    "poz30": 39,
+    "t30": -1.1,
+    "anlamli": false
+   }
   },
   "Kredi Derecelendirmesi": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 14,
-   "not": "Not ARTISI mi INDIRIMI mi, ancak metinden. Ikisi zit yonlu."
+   "not": "Not ARTISI mi INDIRIMI mi, ancak metinden. Ikisi zit yonlu.",
+   "olcum": {
+    "n": 1353,
+    "med7": 0.34,
+    "med30": 0.2,
+    "poz30": 51,
+    "t30": 1.1,
+    "anlamli": false
+   }
   },
   "TSRS Uyumlu Sürdürülebilirlik Raporu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 12,
-   "not": "Zorunlu surdurulebilirlik raporu."
+   "not": "Zorunlu surdurulebilirlik raporu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "BIST Pay Endeksleri": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 12,
-   "not": "Endekse GIRIS pozitif, CIKIS negatif (pasif fon akisi). Yon metinde."
+   "not": "Endekse GIRIS pozitif, CIKIS negatif (pasif fon akisi). Yon metinde.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Borçlanma Araçları, Yatırım Fonları ve Varant İtfa/Kupon/Getiri/ Nakdi Uzlaşı Ödeme İşlemleri": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 9,
-   "not": "Ucuncu taraf urun odemesi."
+   "not": "Ucuncu taraf urun odemesi.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Finansal Takvim": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 9,
-   "not": "Bilanco tarihi duyurusu."
+   "not": "Bilanco tarihi duyurusu.",
+   "olcum": {
+    "n": 555,
+    "med7": 0.24,
+    "med30": 1.94,
+    "poz30": 56,
+    "t30": 4.3,
+    "anlamli": true,
+    "karar": "anlamli (sinif yonlu degil - dikkatle oku)"
+   }
   },
   "Temerrüt İşlemi": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 8,
-   "not": "TAKASBANK bildirimi: bir piyasa katilimcisi takasi kapatamamis. Sirketle ilgisi YOK. Ilk duzeltme turunda olumsuzlarin neredeyse tamamini bu uretti."
+   "not": "TAKASBANK bildirimi: bir piyasa katilimcisi takasi kapatamamis. Sirketle ilgisi YOK. Ilk duzeltme turunda olumsuzlarin neredeyse tamamini bu uretti.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Pay Alım Satım Bildirimi": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 8,
-   "not": "Iceriden/ortak islemi. ALIM pozitif, SATIM negatif - yon metinde."
+   "not": "Iceriden/ortak islemi. ALIM pozitif, SATIM negatif - yon metinde.",
+   "olcum": {
+    "n": 2293,
+    "med7": 0.64,
+    "med30": 0.66,
+    "poz30": 53,
+    "t30": 1.3,
+    "anlamli": false
+   }
   },
   "Geleceğe Dönük Değerlendirmeler": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 8,
-   "not": "Sirket BEKLENTISI (guidance). Yatirimci icin en degerli turlerden; yon metinde."
+   "not": "Sirket BEKLENTISI (guidance). Yatirimci icin en degerli turlerden; yon metinde.",
+   "olcum": {
+    "n": 530,
+    "med7": 0.11,
+    "med30": 0.35,
+    "poz30": 52,
+    "t30": 0.8,
+    "anlamli": false
+   }
   },
   "Finansal Duran Varlık Edinimi": {
    "sinif": "yonlu",
-   "yon": 1,
+   "yon": 0,
    "hisse": 7,
-   "guven": "dusuk",
-   "not": "Satin alma. Buyume isareti ama nakit cikisi - yon zayif, dogrulanmali."
+   "guven": "olculdu: yok",
+   "not": "Satin alma. Buyume isareti ama nakit cikisi - yon zayif, dogrulanmali.",
+   "olcum": {
+    "n": 1087,
+    "med7": -0.36,
+    "med30": 0.29,
+    "poz30": 50,
+    "t30": -0.3,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Kamuyu Aydınlatma Platformu Duyurusu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 6,
-   "not": "Platformun kendi duyurusu."
+   "not": "Platformun kendi duyurusu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Kurumsal Yönetim İlkelerine Uyum Derecelendirmesi": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 6,
-   "not": "Yonetisim notu, fiyat etkisi beklenmez."
+   "not": "Yonetisim notu, fiyat etkisi beklenmez.",
+   "olcum": {
+    "n": 680,
+    "med7": 0.22,
+    "med30": 0.02,
+    "poz30": 51,
+    "t30": 0.4,
+    "anlamli": false
+   }
   },
   "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Yönetim Kurulu-2": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 5,
-   "not": "Form guncellemesi."
+   "not": "Form guncellemesi.",
+   "olcum": {
+    "n": 1018,
+    "med7": 0.04,
+    "med30": -0.01,
+    "poz30": 50,
+    "t30": 0.9,
+    "anlamli": false
+   }
   },
   "Payların Geri Alınmasına İlişkin Bildirim": {
    "sinif": "yonlu",
    "yon": 1,
    "hisse": 4,
-   "guven": "orta",
-   "not": "GERI ALIM. Sirket kendi hissesini aliyor - hem talep hem 'ucuz' sinyali."
+   "guven": "olculdu: dogrulandi",
+   "not": "GERI ALIM. Sirket kendi hissesini aliyor - hem talep hem 'ucuz' sinyali.",
+   "olcum": {
+    "n": 5158,
+    "med7": 0.71,
+    "med30": 2.63,
+    "poz30": 58,
+    "t30": 4.6,
+    "anlamli": true,
+    "karar": "TUTTU"
+   }
   },
   "İhraç Tavanına İlişkin Bildirim": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 4,
-   "not": "Borclanma tavani izni; kullanilmasi ayri bildirim."
+   "not": "Borclanma tavani izni; kullanilmasi ayri bildirim.",
+   "olcum": {
+    "n": 1955,
+    "med7": 0.15,
+    "med30": 0.73,
+    "poz30": 53,
+    "t30": 2.3,
+    "anlamli": false
+   }
   },
   "Borçlanma Araçlarının / Kira Sertifikalarının İşlem Görmeye Başlaması": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 4,
-   "not": "Tahvil kotasyonu."
+   "not": "Tahvil kotasyonu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "BISTECH Pay Piyasası Alım Satım Sistemi Duyurusu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 4,
-   "not": "Borsa altyapi duyurusu."
+   "not": "Borsa altyapi duyurusu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Endekslerde Kullanılan Fiili Dolaşımdaki Pay Oranı Değişiklikleri": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 4,
-   "not": "Fiili dolasim ARTISI endeks agirligini artirir (pozitif), azalis tersi."
+   "not": "Fiili dolasim ARTISI endeks agirligini artirir (pozitif), azalis tersi.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "İstanbul Takas ve Saklama Bankası A.Ş. Duyurusu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 3,
-   "not": "Takasbank operasyon duyurusu."
+   "not": "Takasbank operasyon duyurusu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Sermaye Artırımı - Azaltımı İşlemlerine İlişkin Bildirim": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 3,
-   "not": "BEDELLI artirim sulandirici (negatif), BEDELSIZ notrdur, AZALTIM ayri. Yon metinde - tur tek basina yetmez."
+   "not": "BEDELLI artirim sulandirici (negatif), BEDELSIZ notrdur, AZALTIM ayri. Yon metinde - tur tek basina yetmez.",
+   "olcum": {
+    "n": 3480,
+    "med7": -0.99,
+    "med30": -2.01,
+    "poz30": 46,
+    "t30": -3.1,
+    "anlamli": true,
+    "karar": "anlamli (sinif yonlu degil - dikkatle oku)"
+   }
   },
   "Genel Kurul İşlemlerine İlişkin Bildirim": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 3,
-   "not": "Genel kurul cagri/sonuc."
+   "not": "Genel kurul cagri/sonuc.",
+   "olcum": {
+    "n": 8912,
+    "med7": -0.07,
+    "med30": 0.12,
+    "poz30": 51,
+    "t30": 0.3,
+    "anlamli": false
+   }
   },
   "Sürdürülebilirlik Raporu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 3,
-   "not": "Rutin rapor."
+   "not": "Rutin rapor.",
+   "olcum": {
+    "n": 518,
+    "med7": -0.98,
+    "med30": -1.38,
+    "poz30": 47,
+    "t30": 0.1,
+    "anlamli": false
+   }
   },
   "Pay Mali Hak Kullanım İşlemi - Nakit Ödeme": {
    "sinif": "yonlu",
    "yon": 0,
    "hisse": 3,
    "guven": "orta",
-   "not": "Temettu odemesi. DIKKAT: odeme gunu fiyat temettu kadar DUSER (temettu duzeltmesi). Notr isaretlendi - eski sistem bunu 'olumlu' sayip hata yapiyordu."
+   "not": "Temettu odemesi. DIKKAT: odeme gunu fiyat temettu kadar DUSER (temettu duzeltmesi). Notr isaretlendi - eski sistem bunu 'olumlu' sayip hata yapiyordu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Hak Kullanımı": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 3,
-   "not": "Temettu/bedelsiz/ruchan - hangisi oldugu metinde."
+   "not": "Temettu/bedelsiz/ruchan - hangisi oldugu metinde.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "İhraç Belgesi": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 3,
-   "not": "Borclanma araci belgesi."
+   "not": "Borclanma araci belgesi.",
+   "olcum": {
+    "n": 757,
+    "med7": -0.07,
+    "med30": 0.99,
+    "poz30": 53,
+    "t30": 1.8,
+    "anlamli": false
+   }
   },
   "Kayıtlı Sermaye Tavanı İşlemlerine İlişkin Bildirim": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 2,
-   "not": "Tavan izni; tek basina islem degil."
+   "not": "Tavan izni; tek basina islem degil.",
+   "olcum": {
+    "n": 2184,
+    "med7": -0.01,
+    "med30": 0.67,
+    "poz30": 52,
+    "t30": 0.9,
+    "anlamli": false
+   }
   },
   "Toptan Alış Satış İşlemi Bildirimi": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 2,
-   "not": "Blok islem. Ana ortak SATIYORSA arz baskisi, kurumsal ALICI giriyorsa tersi. Yon metinde."
+   "not": "Blok islem. Ana ortak SATIYORSA arz baskisi, kurumsal ALICI giriyorsa tersi. Yon metinde.",
+   "olcum": {
+    "n": 75,
+    "med7": 2.75,
+    "med30": 2.85,
+    "poz30": 59,
+    "t30": 1.4,
+    "anlamli": false
+   }
   },
   "Esas Sözleşme Tadili": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 2,
-   "not": "Ana sozlesme degisikligi."
+   "not": "Ana sozlesme degisikligi.",
+   "olcum": {
+    "n": 1651,
+    "med7": -0.48,
+    "med30": 0.2,
+    "poz30": 50,
+    "t30": 0.5,
+    "anlamli": false
+   }
   },
   "Yeni İş İlişkisi": {
    "sinif": "yonlu",
-   "yon": 1,
+   "yon": 0,
    "hisse": 2,
-   "guven": "orta",
-   "not": "YENI IS/MUSTERI. Buyuklugu metinde ama yonu turden belli."
+   "guven": "olculdu: yok",
+   "not": "YENI IS/MUSTERI. Buyuklugu metinde ama yonu turden belli.",
+   "olcum": {
+    "n": 2098,
+    "med7": -0.15,
+    "med30": -1.23,
+    "poz30": 47,
+    "t30": -1.2,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Haber ve Söylentilere İlişkin Açıklama": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 2,
-   "not": "Genelde soylenti YALANLAMASI. Yon soylentinin yonune bagli - metin sart."
+   "not": "Genelde soylenti YALANLAMASI. Yon soylentinin yonune bagli - metin sart.",
+   "olcum": {
+    "n": 345,
+    "med7": -0.12,
+    "med30": -0.03,
+    "poz30": 50,
+    "t30": -0.2,
+    "anlamli": false
+   }
   },
   "Kar Payı Dağıtım İşlemlerine İlişkin Bildirim": {
    "sinif": "yonlu",
-   "yon": 1,
+   "yon": 0,
    "hisse": 2,
-   "guven": "dusuk",
-   "not": "Temettu KARARI (odemeden farkli). Nakit uretimi sinyali; yon zayif, dogrulanmali."
+   "guven": "olculdu: yok",
+   "not": "Temettu KARARI (odemeden farkli). Nakit uretimi sinyali; yon zayif, dogrulanmali.",
+   "olcum": {
+    "n": 5100,
+    "med7": 0.0,
+    "med30": 0.37,
+    "poz30": 51,
+    "t30": 0.4,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Toptan Alış Satış İşlemi": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 2,
-   "not": "Blok islem, yukaridakiyle ayni."
+   "not": "Blok islem, yukaridakiyle ayni.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Faaliyetlerin Kısmen veya Tamamen Durdurulması ya da İmkansız Hale Gelmesi": {
    "sinif": "yonlu",
-   "yon": -1,
+   "yon": 0,
    "hisse": 2,
-   "guven": "yuksek",
-   "not": "URETIM DURDU. KAP'taki en net olumsuz turlerden."
+   "guven": "olculdu: yok",
+   "not": "URETIM DURDU. KAP'taki en net olumsuz turlerden.",
+   "olcum": {
+    "n": 360,
+    "med7": -0.01,
+    "med30": 0.01,
+    "poz30": 50,
+    "t30": 0.0,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Esas Sözleşme": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 2,
-   "not": "Metin teslimi."
+   "not": "Metin teslimi.",
+   "olcum": {
+    "n": 1247,
+    "med7": -0.46,
+    "med30": -0.75,
+    "poz30": 48,
+    "t30": -1.0,
+    "anlamli": false
+   }
   },
   "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Yönetim Kurulu-1": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 2,
-   "not": "Form guncellemesi."
+   "not": "Form guncellemesi.",
+   "olcum": {
+    "n": 377,
+    "med7": -0.26,
+    "med30": 0.74,
+    "poz30": 53,
+    "t30": 0.7,
+    "anlamli": false
+   }
   },
   "Sermaye Artırımından Elde Edilecek - Edilen Fonun Kullanımına İlişkin Rapor": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 2,
-   "not": "Artirim sonrasi rutin rapor."
+   "not": "Artirim sonrasi rutin rapor.",
+   "olcum": {
+    "n": 1164,
+    "med7": -0.55,
+    "med30": -1.22,
+    "poz30": 47,
+    "t30": -1.2,
+    "anlamli": false
+   }
   },
   "Herhangi Bir Otoriteye Mali Tablo Verilmesi": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 2,
-   "not": "Kuruma tablo teslimi."
+   "not": "Kuruma tablo teslimi.",
+   "olcum": {
+    "n": 2459,
+    "med7": 0.0,
+    "med30": -0.13,
+    "poz30": 49,
+    "t30": -0.2,
+    "anlamli": false
+   }
   },
   "Yatırım Kuruluşu Varant - Sertifika - Senetlerine İlişkin Bildirim": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 1,
-   "not": "UCUNCU TARAF araci kurum urunu ihrac ediyor, sirketin isi degil. Eski sistemde 'olumlu' sayiliyordu - GARAN'in 65.3 skorunun kaynagi buydu."
+   "not": "UCUNCU TARAF araci kurum urunu ihrac ediyor, sirketin isi degil. Eski sistemde 'olumlu' sayiliyordu - GARAN'in 65.3 skorunun kaynagi buydu.",
+   "olcum": {
+    "n": 2107,
+    "med7": 1.14,
+    "med30": 3.39,
+    "poz30": 61,
+    "t30": 8.4,
+    "anlamli": true,
+    "karar": "anlamli (sinif yonlu degil - dikkatle oku)"
+   }
   },
   "Birleşme İşlemlerine İlişkin Bildirim": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 1,
-   "not": "Birlesme. Devralan mi devrolan mi, sartlari ne - metin sart."
+   "not": "Birlesme. Devralan mi devrolan mi, sartlari ne - metin sart.",
+   "olcum": {
+    "n": 575,
+    "med7": -0.03,
+    "med30": -0.55,
+    "poz30": 49,
+    "t30": -0.1,
+    "anlamli": false
+   }
   },
   "Bağımsız Denetim Kuruluşunun Belirlenmesi": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 1,
-   "not": "Denetci atamasi."
+   "not": "Denetci atamasi.",
+   "olcum": {
+    "n": 4535,
+    "med7": -0.09,
+    "med30": 0.21,
+    "poz30": 51,
+    "t30": 1.4,
+    "anlamli": false
+   }
   },
   "İzahname (İhraççı Bilgi Dokümanı-SPK Onayına Sunulan)": {
    "sinif": "yonlu",
-   "yon": -1,
+   "yon": 0,
    "hisse": 1,
-   "guven": "dusuk",
-   "not": "Sermaye/borc ihraci hazirligi - sulandirma ihtimali. Zayif, dogrulanmali."
+   "guven": "olculdu: yok",
+   "not": "Sermaye/borc ihraci hazirligi - sulandirma ihtimali. Zayif, dogrulanmali.",
+   "olcum": {
+    "n": 53,
+    "med7": -0.43,
+    "med30": 3.8,
+    "poz30": 62,
+    "t30": 1.3,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "İzahname (Sermaye Piyasası Aracı Notu-SPK Onayına Sunulan)": {
    "sinif": "yonlu",
-   "yon": -1,
+   "yon": 0,
    "hisse": 1,
-   "guven": "dusuk",
-   "not": "Ayni."
+   "guven": "olculdu: yok",
+   "not": "Ayni.",
+   "olcum": {
+    "n": 70,
+    "med7": -0.4,
+    "med30": 1.51,
+    "poz30": 54,
+    "t30": 0.8,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "İzahname (Özet-SPK Onayına Sunulan)": {
    "sinif": "yonlu",
-   "yon": -1,
+   "yon": 0,
    "hisse": 1,
-   "guven": "dusuk",
-   "not": "Ayni."
+   "guven": "olculdu: yok",
+   "not": "Ayni.",
+   "olcum": {
+    "n": 62,
+    "med7": -0.51,
+    "med30": 2.43,
+    "poz30": 60,
+    "t30": 0.9,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Ortaklık Aleyhine Dava Açılması veya Davaya İlişkin Gelişmeler": {
    "sinif": "yonlu",
-   "yon": -1,
+   "yon": 0,
    "hisse": 1,
-   "guven": "yuksek",
-   "not": "SIRKET ALEYHINE DAVA. Eski sistem bunu OLUMLU sayiyordu ('Ortaklik' kelimesi olumlu listesindeydi)."
+   "guven": "olculdu: yok",
+   "not": "SIRKET ALEYHINE DAVA. Eski sistem bunu OLUMLU sayiyordu ('Ortaklik' kelimesi olumlu listesindeydi).",
+   "olcum": {
+    "n": 494,
+    "med7": -0.48,
+    "med30": -0.41,
+    "poz30": 48,
+    "t30": -0.5,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Finansal Duran Varlık Satışı": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 1,
-   "not": "Varlik satisi: nakit girisi mi, zorunlu elden cikarma mi - metin sart."
+   "not": "Varlik satisi: nakit girisi mi, zorunlu elden cikarma mi - metin sart.",
+   "olcum": {
+    "n": 379,
+    "med7": -0.9,
+    "med30": -1.53,
+    "poz30": 46,
+    "t30": -1.4,
+    "anlamli": false
+   }
   },
   "Kurumsal Yönetim Uyum Raporu (Güncelleme)": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 1,
-   "not": "Rutin rapor."
+   "not": "Rutin rapor.",
+   "olcum": {
+    "n": 55,
+    "med7": 0.5,
+    "med30": 4.38,
+    "poz30": 62,
+    "t30": 1.4,
+    "anlamli": false
+   }
   },
   "Likidite Sağlayıcılık Kapsamındaki İşlemler": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 1,
-   "not": "Piyasa yapicilik islemi."
+   "not": "Piyasa yapicilik islemi.",
+   "olcum": {
+    "n": 371,
+    "med7": 0.49,
+    "med30": 0.44,
+    "poz30": 52,
+    "t30": 0.9,
+    "anlamli": false
+   }
   },
   "Yatırımcı Raporu": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 1,
-   "not": "Yatirimci sunumu."
+   "not": "Yatirimci sunumu.",
+   "olcum": {
+    "n": 121,
+    "med7": -0.0,
+    "med30": -1.13,
+    "poz30": 47,
+    "t30": -0.4,
+    "anlamli": false
+   }
   },
   "Bilgilendirme Politikası": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 1,
-   "not": "Politika metni."
+   "not": "Politika metni.",
+   "olcum": {
+    "n": 182,
+    "med7": 0.3,
+    "med30": -1.19,
+    "poz30": 47,
+    "t30": -0.6,
+    "anlamli": false
+   }
   },
   "VİOP İşlem İptali Duyuruları": {
    "sinif": "rutin",
    "yon": 0,
    "hisse": 1,
-   "not": "Turev piyasa islem iptali."
+   "not": "Turev piyasa islem iptali.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Finansal Rapor Ek Süre Taleplerine İlişkin SPK Değerlendirmesi": {
    "sinif": "yonlu",
    "yon": -1,
    "hisse": 1,
    "guven": "orta",
-   "not": "Bilancoyu GEC verme talebi. Literaturde gec raporlama olumsuz sinyaldir."
+   "not": "Bilancoyu GEC verme talebi. Literaturde gec raporlama olumsuz sinyaldir.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Genel Açıklama": {
    "sinif": "icerik",
    "yon": null,
    "hisse": 1,
-   "not": "Jenerik sarmalayici, icerik sart."
+   "not": "Jenerik sarmalayici, icerik sart.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Piyasa Yapıcılığı Kapsamında Gerçekleştirilen İşlemler Bildirimi": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 7666,
-   "not": "Piyasa yapıcının kendi işlem raporu. Olay çalışmasında +%4.42 t=+10.2 çıktı ama bu SEÇİLİM: piyasa yapıcılık belirli hisselerde yapılır. Şirket haberi değil, sinyal olarak kullanılamaz."
+   "not": "Piyasa yapıcının kendi işlem raporu. Olay çalışmasında +%4.42 t=+10.2 çıktı ama bu SEÇİLİM: piyasa yapıcılık belirli hisselerde yapılır. Şirket haberi değil, sinyal olarak kullanılamaz.",
+   "olcum": {
+    "n": 4205,
+    "med7": 0.46,
+    "med30": 2.51,
+    "poz30": 61,
+    "t30": 2.9,
+    "anlamli": true,
+    "karar": "anlamli (sinif yonlu degil - dikkatle oku)"
+   }
   },
   "Sorumluluk Beyanı (Konsolide Olmayan)": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 2548,
-   "not": "Rapor eki."
+   "not": "Rapor eki.",
+   "olcum": {
+    "n": 2847,
+    "med7": -0.71,
+    "med30": -0.25,
+    "poz30": 49,
+    "t30": -0.7,
+    "anlamli": false
+   }
   },
   "Faaliyet Raporu (Konsolide Olmayan)": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 2026,
-   "not": "Yıllık rapor."
+   "not": "Yıllık rapor.",
+   "olcum": {
+    "n": 2634,
+    "med7": -0.9,
+    "med30": -0.42,
+    "poz30": 49,
+    "t30": -0.8,
+    "anlamli": false
+   }
   },
   "Borçlanma Araçlarının İşlem Görmeye Başlaması": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 1868,
-   "not": "Tahvil kotasyonu."
+   "not": "Tahvil kotasyonu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Değerleme Raporu": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 1685,
-   "not": "GYO gayrimenkul değerleme raporu; rutin yükümlülük, yön taşımaz."
+   "not": "GYO gayrimenkul değerleme raporu; rutin yükümlülük, yön taşımaz.",
+   "olcum": {
+    "n": 4137,
+    "med7": -0.7,
+    "med30": 0.28,
+    "poz30": 52,
+    "t30": -0.1,
+    "anlamli": false
+   }
   },
   "Haftalık Rapor": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 996,
-   "not": "Yatırım ortaklığı haftalık portföy raporu."
+   "not": "Yatırım ortaklığı haftalık portföy raporu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Olağan Dışı Fiyat ve Miktar Hareketleri": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 968,
-   "not": "TERS NEDENSELLİK: bu bildirim hisse çok oynadığı İÇİN çıkar. Olay çalışmasında -%4.92 vermesi sinyal değil, ortalamaya dönüş. Asla sinyal olarak kullanılamaz."
+   "not": "TERS NEDENSELLİK: bu bildirim hisse çok oynadığı İÇİN çıkar. Olay çalışmasında -%4.92 vermesi sinyal değil, ortalamaya dönüş. Asla sinyal olarak kullanılamaz.",
+   "olcum": {
+    "n": 1430,
+    "med7": -1.09,
+    "med30": -3.03,
+    "poz30": 44,
+    "t30": -2.5,
+    "anlamli": true,
+    "karar": "anlamli (sinif yonlu degil - dikkatle oku)"
+   }
   },
   "Yönetim Kurulu Komiteleri": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 752,
-   "not": "Komite listesi."
+   "not": "Komite listesi.",
+   "olcum": {
+    "n": 1917,
+    "med7": 0.07,
+    "med30": -0.06,
+    "poz30": 50,
+    "t30": -0.8,
+    "anlamli": false
+   }
   },
   "İzahname (SPK Tarafından Onaylanan)": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 694,
-   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez.",
+   "olcum": {
+    "n": 1551,
+    "med7": 1.13,
+    "med30": 1.73,
+    "poz30": 56,
+    "t30": 1.1,
+    "anlamli": false
+   }
   },
   "Test Bildirimi": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 639,
-   "not": "Düpedüz test kaydı. 639 adet."
+   "not": "Düpedüz test kaydı. 639 adet.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Tertip İhraç Belgesi": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 560,
-   "not": "Kira sertifikası tertip belgesi."
+   "not": "Kira sertifikası tertip belgesi.",
+   "olcum": {
+    "n": 237,
+    "med7": 0.46,
+    "med30": -2.01,
+    "poz30": 44,
+    "t30": -1.6,
+    "anlamli": false
+   }
   },
   "Takasbank Para Piyasası Günlük Bülten": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 528,
-   "not": "Takasbank günlük bülteni/duyurusu."
+   "not": "Takasbank günlük bülteni/duyurusu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "İşlem İptali": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 519,
-   "not": "Borsa işlem iptali, operasyonel."
+   "not": "Borsa işlem iptali, operasyonel.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Takasbank Ödünç Pay Piyasası Günlük Bülten": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 490,
-   "not": "Takasbank günlük bülteni/duyurusu."
+   "not": "Takasbank günlük bülteni/duyurusu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Fiyat Tespit Raporuna İlişkin Analist Raporu (Halka Arza Aracılık Eden Kuruluş Dışında Farklı bir Kuruluş Tarafından Hazırlanan)": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 464,
-   "not": "Halka arz fiyat tespiti."
+   "not": "Halka arz fiyat tespiti.",
+   "olcum": {
+    "n": 412,
+    "med7": 1.68,
+    "med30": 1.67,
+    "poz30": 57,
+    "t30": 2.0,
+    "anlamli": false
+   }
   },
   "Merkezi Kayıt Kuruluşu A.Ş. Duyurusu": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 460,
-   "not": "MKK duyurusu."
+   "not": "MKK duyurusu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Genel Kurul Bildirimi": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 413,
-   "not": "Genel kurul çağrısı."
+   "not": "Genel kurul çağrısı.",
+   "olcum": {
+    "durum": "az ornek",
+    "n": 115
+   }
   },
   "İlişkili Taraf İşlemleri": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 298,
-   "not": "Yönetişim açısından riskli olabilir; koşulları metinde."
+   "not": "Yönetişim açısından riskli olabilir; koşulları metinde.",
+   "olcum": {
+    "n": 906,
+    "med7": 0.02,
+    "med30": -0.37,
+    "poz30": 48,
+    "t30": -0.0,
+    "anlamli": false
+   }
   },
   "Pay Alım Teklifi Yoluyla Pay Toplanmasına İlişkin Bildirim": {
    "sinif": "yonlu",
-   "yon": 1,
+   "yon": 0,
    "hacim": 273,
    "not": "Çağrı/tender: genellikle piyasa üstü fiyattan pay toplama.",
-   "guven": "orta"
+   "guven": "olculdu: yok",
+   "olcum": {
+    "n": 182,
+    "med7": -0.55,
+    "med30": 0.91,
+    "poz30": 55,
+    "t30": 0.6,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Fonlara İlişkin Duyuru": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 252,
-   "not": "Fon duyurusu, hisse ile ilgisiz."
+   "not": "Fon duyurusu, hisse ile ilgisiz.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Borsa İstanbul A.Ş. Duyurusu": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 250,
-   "not": "Borsa operasyon duyurusu."
+   "not": "Borsa operasyon duyurusu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "İzahname-Sermaye Piyasası Aracı Notu (SPK Tarafından Onaylanan)": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 240,
-   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez.",
+   "olcum": {
+    "n": 320,
+    "med7": 0.08,
+    "med30": 0.0,
+    "poz30": 49,
+    "t30": 0.2,
+    "anlamli": false
+   }
   },
   "İhale Süreci / Sonucu": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 226,
-   "not": "İhaleyi KAZANDI mı kaybetti mi, tutarı ne - metin şart."
+   "not": "İhaleyi KAZANDI mı kaybetti mi, tutarı ne - metin şart.",
+   "olcum": {
+    "n": 924,
+    "med7": -0.45,
+    "med30": -0.48,
+    "poz30": 49,
+    "t30": -0.1,
+    "anlamli": false
+   }
   },
   "İzahname-Özet (SPK Tarafından Onaylanan)": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 221,
-   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez.",
+   "olcum": {
+    "n": 307,
+    "med7": 0.11,
+    "med30": 0.0,
+    "poz30": 49,
+    "t30": 0.1,
+    "anlamli": false
+   }
   },
   "Kira Sertifikalarının İşlem Görmeye Başlaması": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 218,
-   "not": "Sukuk kotasyonu."
+   "not": "Sukuk kotasyonu.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "İzahname-İhraççı Bİlgi Dokümanı (SPK Tarafından Onaylanan)": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 176,
-   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez.",
+   "olcum": {
+    "n": 264,
+    "med7": -0.2,
+    "med30": -0.69,
+    "poz30": 45,
+    "t30": 0.0,
+    "anlamli": false
+   }
   },
   "Halka Arz Fiyatının Belirlenmesinde Esas Alınan Varsayımlara İlişkin Değerlendirme Raporu": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 159,
-   "not": "Halka arz."
+   "not": "Halka arz.",
+   "olcum": {
+    "n": 943,
+    "med7": -0.52,
+    "med30": -0.47,
+    "poz30": 48,
+    "t30": -0.2,
+    "anlamli": false
+   }
   },
   "Faaliyet Raporu Sorumluluk Beyanı": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 151,
-   "not": "Rapor eki."
+   "not": "Rapor eki.",
+   "olcum": {
+    "n": 462,
+    "med7": 0.21,
+    "med30": 1.65,
+    "poz30": 56,
+    "t30": 1.6,
+    "anlamli": false
+   }
   },
   "Maddi Duran Varlık Satımı": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 148,
-   "not": "Nakit girişi mi zorunlu elden çıkarma mı - metin şart."
+   "not": "Nakit girişi mi zorunlu elden çıkarma mı - metin şart.",
+   "olcum": {
+    "n": 285,
+    "med7": -0.07,
+    "med30": -1.84,
+    "poz30": 43,
+    "t30": -1.4,
+    "anlamli": false
+   }
   },
   "Maddi Duran Varlık Kiraya Verilmesi veya Ayni Hak Tesisi": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 144,
-   "not": "Kiralama, yön metinde."
+   "not": "Kiralama, yön metinde.",
+   "olcum": {
+    "n": 348,
+    "med7": -0.43,
+    "med30": -2.7,
+    "poz30": 40,
+    "t30": -1.7,
+    "anlamli": false
+   }
   },
   "İzahname (SPK Onayına Sunulan)": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 139,
-   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez.",
+   "olcum": {
+    "n": 367,
+    "med7": -0.63,
+    "med30": -2.93,
+    "poz30": 44,
+    "t30": -0.9,
+    "anlamli": false
+   }
   },
   "SPK Bülteni": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 138,
-   "not": "Kurul bülteni."
+   "not": "Kurul bülteni.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Kurumsal Yönetim Uyum Raporu": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 137,
-   "not": "Yıllık uyum raporu."
+   "not": "Yıllık uyum raporu.",
+   "olcum": {
+    "n": 1865,
+    "med7": -0.61,
+    "med30": -0.58,
+    "poz30": 48,
+    "t30": 0.1,
+    "anlamli": false
+   }
   },
   "Kurumsal Yönetim Bilgi Formu": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 136,
-   "not": "Yıllık form."
+   "not": "Yıllık form.",
+   "olcum": {
+    "n": 1857,
+    "med7": -0.59,
+    "med30": -0.6,
+    "poz30": 48,
+    "t30": 0.0,
+    "anlamli": false
+   }
   },
   "Pay İşlem Sırası Kapatma / Açma": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 129,
-   "not": "Sıra açma/kapama, operasyonel."
+   "not": "Sıra açma/kapama, operasyonel.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Devrolma İşlemlerine İlişkin Bildirim": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 129,
-   "not": "Birleşme/devir, koşullar metinde."
+   "not": "Birleşme/devir, koşullar metinde.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Maddi Duran Varlık Alımı": {
    "sinif": "yonlu",
-   "yon": 1,
+   "yon": 0,
    "hacim": 124,
    "not": "Yatırım işareti ama nakit çıkışı; yön zayıf.",
-   "guven": "dusuk"
+   "guven": "olculdu: yok",
+   "olcum": {
+    "n": 359,
+    "med7": 0.0,
+    "med30": -0.9,
+    "poz30": 49,
+    "t30": 0.3,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Finansal Tablo ve-veya Dipnot Değişikliği": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 124,
-   "not": "Tablo tipi/dipnot düzeltmesi."
+   "not": "Tablo tipi/dipnot düzeltmesi.",
+   "olcum": {
+    "n": 305,
+    "med7": -0.75,
+    "med30": 0.14,
+    "poz30": 50,
+    "t30": -0.0,
+    "anlamli": false
+   }
   },
   "Hak Kullanım Süreç İptal Bildirimi": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 114,
-   "not": "Süreç iptali, operasyonel."
+   "not": "Süreç iptali, operasyonel.",
+   "olcum": {
+    "n": 245,
+    "med7": -0.46,
+    "med30": -1.56,
+    "poz30": 47,
+    "t30": -0.5,
+    "anlamli": false
+   }
   },
   "Tasarruf Sahiplerine Satış Duyurusu": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 108,
-   "not": "Halka arz duyurusu."
+   "not": "Halka arz duyurusu.",
+   "olcum": {
+    "n": 240,
+    "med7": 0.63,
+    "med30": 0.03,
+    "poz30": 50,
+    "t30": 0.3,
+    "anlamli": false
+   }
   },
   "Sürdürülebilirlik Uyum Raporu": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 104,
-   "not": "Yıllık rapor."
+   "not": "Yıllık rapor.",
+   "olcum": {
+    "n": 714,
+    "med7": -0.19,
+    "med30": 0.47,
+    "poz30": 51,
+    "t30": 1.4,
+    "anlamli": false
+   }
   },
   "Ayrılma Hakkı Kullanımına İlişkin Bildirim": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 99,
-   "not": "Önemli işlem sonrası ayrılma hakkı."
+   "not": "Önemli işlem sonrası ayrılma hakkı.",
+   "olcum": {
+    "n": 124,
+    "med7": -0.48,
+    "med30": -0.4,
+    "poz30": 48,
+    "t30": -0.1,
+    "anlamli": false
+   }
   },
   "TTK'nın 376. Maddesi Kapsamında Yapılan İşlemler": {
    "sinif": "yonlu",
-   "yon": -1,
+   "yon": 0,
    "hacim": 96,
    "not": "TTK 376 = sermayenin önemli kısmının KAYBI / teknik iflas eşiği. KAP'taki en net finansal sıkıntı sinyallerinden.",
-   "guven": "yuksek"
+   "guven": "olculdu: yok",
+   "olcum": {
+    "n": 176,
+    "med7": -0.42,
+    "med30": -0.51,
+    "poz30": 49,
+    "t30": 0.0,
+    "anlamli": false,
+    "karar": "ANLAMSIZ - hipotez dogrulanmadi"
+   }
   },
   "Dışarıdan Sağlanan Hizmetler ve Personel İçin Ödenen Komisyon ve Ücretler": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 94,
-   "not": "Komisyon açıklaması."
+   "not": "Komisyon açıklaması.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Aracılık Hizmetleri İçin Ödenen Komisyonlar": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 94,
-   "not": "Komisyon açıklaması."
+   "not": "Komisyon açıklaması.",
+   "olcum": {
+    "durum": "veri yok"
+   }
   },
   "Fiyat Tespit Raporuna İlişkin Analist Raporu (Halka Arza Aracılık Eden Kuruluş Tarafından Hazırlanan)": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 70,
-   "not": "Halka arz fiyat tespiti."
+   "not": "Halka arz fiyat tespiti.",
+   "olcum": {
+    "n": 117,
+    "med7": 0.71,
+    "med30": 1.47,
+    "poz30": 54,
+    "t30": 1.2,
+    "anlamli": false
+   }
   },
   "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Pay Sahipleri": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 55,
-   "not": "Yıllık form."
+   "not": "Yıllık form.",
+   "olcum": {
+    "n": 174,
+    "med7": -0.09,
+    "med30": 0.41,
+    "poz30": 51,
+    "t30": 0.3,
+    "anlamli": false
+   }
   },
   "İzahname veya İzahnameyi Oluşturan Belgelerde Değişiklik - Ekleme": {
    "sinif": "icerik",
    "yon": null,
    "hacim": 51,
-   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez."
+   "not": "Halka arz/ihraç izahnamesi. Sermaye artırımıysa sulandırıcı, borçlanma ise ayrı - tek başına tür yetmez.",
+   "olcum": {
+    "n": 92,
+    "med7": 0.78,
+    "med30": 0.0,
+    "poz30": 49,
+    "t30": 0.0,
+    "anlamli": false
+   }
   },
   "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Yönetim Kurulu-3": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 44,
-   "not": "Yıllık form."
+   "not": "Yıllık form.",
+   "olcum": {
+    "n": 120,
+    "med7": 0.24,
+    "med30": -0.18,
+    "poz30": 50,
+    "t30": 0.0,
+    "anlamli": false
+   }
   },
   "Pay Alım Teklifi Bilgi Formu": {
    "sinif": "yonlu",
    "yon": 1,
    "hacim": 36,
    "not": "Çağrı/tender: genellikle piyasa üstü fiyattan pay toplama.",
-   "guven": "orta"
+   "guven": "orta",
+   "olcum": {
+    "durum": "az ornek",
+    "n": 42
+   }
   },
   "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Menfaat Sahipleri": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 6,
-   "not": "Yıllık form."
+   "not": "Yıllık form.",
+   "olcum": {
+    "durum": "az ornek",
+    "n": 31
+   }
   },
   "Kurumsal Yönetim Bilgi Formu (Güncelleme) - Kamuyu Aydınlatma ve Şeffaflık": {
    "sinif": "rutin",
    "yon": 0,
    "hacim": 4,
-   "not": "Yıllık form."
+   "not": "Yıllık form.",
+   "olcum": {
+    "durum": "az ornek",
+    "n": 24
+   }
   }
- }
+ },
+ "olcum_notu": "v3: 411.656 KAP bildirimi (2018-01..2024-08) uzerinde olay calismasi yapildi, her turun 'olcum' alani eklendi. 30g MEDYAN piyasaya goreli getiri, gun-kumelenmis t. Anlamlilik esigi |t|>2.5 ve n>=50. SONUC: 11 yonlu hipotezin 1'i tuttu (pay geri alimi). Digerleri anlamsiz cikti ve yon degerleri 0'a cekildi - okuyup akil yurutmek getiri ongormedi."
 }
