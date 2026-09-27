@@ -1812,6 +1812,22 @@ monthly-rebalancing manager with no fixed stop. Production ran a
 daily-buying manager with a ~10% fixed stop, and on the one replica we have,
 that manager is markedly worse.
 
+**The ~10% fixed stop was tested separately and it STAYS.** The rule was
+pre-registered before looking: remove it only if it lowers return in at least
+5 of 7 calendar years and does not improve drawdown. The stop was scaled so
+that its median distance at the backtest's picks matches live's 10.3%
+(k = 1.55 on backtest ATR).
+
+| | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 |
+|---|---|---|---|---|---|---|---|
+| return, no stop | 6.9 | 12.6 | 69.1 | 55.4 | 207.1 | 101.0 | 64.3 |
+| return, with stop | 7.0 | 21.9 | 70.8 | 43.4 | 93.3 | 131.8 | 69.8 |
+
+The stop lowers return in only **2 of 7** years and softens the drawdown in
+4. The full-window gap (NAV 32.75 vs 24.88) is almost entirely 2022, a single
+melt-up year. So the stop is kept: it behaves like the insurance it was meant
+to be, not like a persistent cost.
+
 **APPLIED 2026-09-27 (user-approved): exits daily, buying monthly.**
 `PortfolioDoctor.daily_manage` step 4 no longer redeploys cash or swaps every
 day. On the first run of each month (tracked in the new
