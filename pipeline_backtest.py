@@ -415,6 +415,11 @@ def _pick_at(date, feats, ret_panel, max_pos=None, kur=None):
     # sektör olur ve sector_cap=2 portföyü 6 yerine 2 pozisyona indirir —
     # sessizce, hata vermeden, bambaşka bir stratejiyi ölçerek.
     _sek_map = k.get("sektor")
+    # Sıralama anahtarı dışarıdan verilebilir (momentum kontrolü için). Verilirse
+    # sistemin skoru HİÇ kullanılmaz — score_min eşiği de dahil — yani kalan her
+    # şey (likidite, SMA200, sektör, korelasyon, ATR ağırlık) aynı makine, yalnız
+    # "hangi hisse daha iyi" sorusunun cevabı değişir.
+    _sira = k.get("sira")
     cands = []
     for t, f in feats.items():
         cl = f["close"]
@@ -426,6 +431,12 @@ def _pick_at(date, feats, ret_panel, max_pos=None, kur=None):
             continue
         price, score = float(cl.iloc[ix]), float(f["score"].iloc[ix])
         sma, tlv, atr = float(f["sma200"].iloc[ix] or 0), float(f["tlvol"].iloc[ix] or 0), float(f["atr_pct"].iloc[ix])
+        if _sira is not None:
+            rank = _sira(cl, ix)
+            if tlv < _min_vol or price <= 0 or not sma or price < sma or rank is None:
+                continue
+            cands.append((t, rank, atr))
+            continue
         if tlv < _min_vol or price <= 0 or not sma or price < sma or score < _skor_min:
             continue
         mom3 = (price / float(cl.iloc[max(0, ix-63)]) - 1) * 100
@@ -1234,30 +1245,16 @@ def _transfer_evren(piyasa, cfg):
     return tickers, sektor
 
 
-def _transfer(piyasa="US", years=8):
-    """TRANSFER TESTİ — mekânda örneklem-dışı doğrulama.
+def _transfer_panel(piyasa, years):
+    """Transfer piyasasının donmuş paneli (yoksa indir+dondur), kasa budamalı.
 
-    Zamanda örneklem-dışı test (walk-forward) yıllar ister; mekânda olan
-    istemez. Aynı kurulum mantığı tamamen farklı bir piyasada da çalışıyorsa,
-    bu "yöntem genelleniyor" demektir ve beklemeden öğrenilir.
-
-    KRİTİK KURAL: davranışsal parametrelere DOKUNULMAZ. skor_cikis,
-    takas_farki, trailing_pct, max_pozisyon, MAX_POS, sector_cap, corr_limit
-    — hepsi BIST'te seçilmiş değerlerle kalır. Ayarlarsam iyi bir sonuç
-    hiçbir şey kanıtlamaz; testin bütün değeri parametrelerin BAŞKA bir
-    piyasada seçilmiş olmasından geliyor. Yalnızca YAPISAL/BİRİM çevirileri
-    yapılır ve hepsi TRANSFER_PIYASA tablosunda görünür durur.
+    _transfer'dan çıkarıldı: momentum kontrolü de aynı panelleri okuyor ve
+    panel yükleme mantığının iki kopyası, bu dosyanın defalarca kaydettiği
+    sürüklenme hatası sınıfıdır.
     """
     import hashlib
     import pickle
     cfg = TRANSFER_PIYASA[piyasa]
-    t0 = time.time()
-    print(f"=== {cfg['ad'].upper()} TRANSFER TESTİ | {years} yıl | "
-          f"{datetime.now():%Y-%m-%d %H:%M} ===")
-    print("Davranışsal parametreler BIST'ten AYNEN alındı — hiçbiri bu piyasa "
-          "için ayarlanmadı.")
-    print()
-
     pn_dosya = f"backtest_panel_{piyasa.lower()}_{years}y.pkl"
     sektor = {}
     if _os.path.exists(pn_dosya):
@@ -1281,6 +1278,32 @@ def _transfer(piyasa="US", years=8):
     # ama panelin kendisini de budamak ikinci güvence katmanı (BIST tarafındaki
     # _panel_hazirla ile aynı gerekçe).
     closes, vols = _kasa_panel(closes, vols)
+    return closes, vols, sektor
+
+
+def _transfer(piyasa="US", years=8):
+    """TRANSFER TESTİ — mekânda örneklem-dışı doğrulama.
+
+    Zamanda örneklem-dışı test (walk-forward) yıllar ister; mekânda olan
+    istemez. Aynı kurulum mantığı tamamen farklı bir piyasada da çalışıyorsa,
+    bu "yöntem genelleniyor" demektir ve beklemeden öğrenilir.
+
+    KRİTİK KURAL: davranışsal parametrelere DOKUNULMAZ. skor_cikis,
+    takas_farki, trailing_pct, max_pozisyon, MAX_POS, sector_cap, corr_limit
+    — hepsi BIST'te seçilmiş değerlerle kalır. Ayarlarsam iyi bir sonuç
+    hiçbir şey kanıtlamaz; testin bütün değeri parametrelerin BAŞKA bir
+    piyasada seçilmiş olmasından geliyor. Yalnızca YAPISAL/BİRİM çevirileri
+    yapılır ve hepsi TRANSFER_PIYASA tablosunda görünür durur.
+    """
+    cfg = TRANSFER_PIYASA[piyasa]
+    t0 = time.time()
+    print(f"=== {cfg['ad'].upper()} TRANSFER TESTİ | {years} yıl | "
+          f"{datetime.now():%Y-%m-%d %H:%M} ===")
+    print("Davranışsal parametreler BIST'ten AYNEN alındı — hiçbiri bu piyasa "
+          "için ayarlanmadı.")
+    print()
+
+    closes, vols, sektor = _transfer_panel(piyasa, years)
 
     feats = _precompute(closes, vols)
     ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
@@ -1862,6 +1885,198 @@ def karsilastir(years=5):
     print(f"\npipeline_yonetim.csv yazıldı | toplam süre {time.time()-t0:.0f}s")
 
 
+# MOMENTUM KONTROLÜ (2026-09-27) — "sistem bir momentum aracı mı?"
+#
+# Dört piyasa-dönemin hepsi "orada o zaman momentum ödedi mi?" sorusuyla aynı
+# hizada: US 2018-24 kazanıyor, UK ve BIST 2018-24 kaybediyor, BIST 2024-26
+# (kasa) kazanıyordu. Endeks ve rastgele-6 kontrolleri bunu ayıramaz; ders
+# kitabı momentum portföyü ayırır.
+#
+# ÖN KAYITLI HİPOTEZ (kod koşmadan önce yazıldı, CLAUDE.md'de de):
+#   H: sistem bir momentum faktör aracıdır. Öyleyse her üç piyasada
+#     (1) sistem ile MOM-6'nın aylık getiri korelasyonu >= 0.6,
+#     (2) MOM-6'nın rastgele-6 persentil SIRALAMASI sisteminkiyle aynı,
+#     (3) sistemin MOM-6'ya göre alfası anlamsız (|t| < 2).
+#   Çürütme: herhangi bir piyasada anlamlı POZİTİF alfa, ya da düşük korelasyon.
+#
+# Kontroller STRATEJİ DEĞİLDİR: hangisi daha iyi çıkarsa çıksın benimsenmez;
+# benimsemek bir deneme daha demektir ve DSR'yi düşürür.
+#
+# İki kontrol, rolleri önceden belli:
+#   MOM-6 (BİRİNCİL)  ders kitabı 12-1 momentum (Jegadeesh-Titman): son 12
+#                     ayın getirisi, son 1 ay hariç. Yalnız likidite filtresi,
+#                     en iyi 6, eşit ağırlık. Ayarlanmış hiçbir şey yok.
+#   MOM-kurulum       sistemin kendi makinesi (likidite, SMA200, sektör,
+#                     korelasyon, ATR ağırlık) ama sıralama 12-1 momentum.
+#                     Sistemle farkı YALNIZ skor fonksiyonudur — "skorumuz ders
+#                     kitabı momentumdan fazlasını biliyor mu?" sorusunun cevabı.
+def _mom_12_1(cl, ix):
+    """12-1 ay momentumu (252 → 21 işlem günü önce). Yetersiz veride None."""
+    if ix < 252:
+        return None
+    p0, p1 = float(cl.iloc[ix - 252]), float(cl.iloc[ix - 21])
+    if not (p0 > 0 and p1 > 0) or not np.isfinite(p0) or not np.isfinite(p1):
+        return None
+    return p1 / p0 - 1
+
+
+def _mom_ders_kitabi(date, feats, min_vol, n=None):
+    """MOM-6: likidite filtresi + 12-1 momentum sırası + eşit ağırlık. Başka hiçbir şey."""
+    n = n or MAX_POS
+    aday = []
+    for t, f in feats.items():
+        cl = f["close"]
+        ix = cl.index.searchsorted(date, side="right") - 1
+        if ix < 260 or (date - cl.index[ix]).days > 7:
+            continue
+        if float(f["tlvol"].iloc[ix] or 0) < min_vol:
+            continue
+        m = _mom_12_1(cl, ix)
+        if m is not None:
+            aday.append((t, m))
+    aday.sort(key=lambda x: -x[1])
+    sec = [t for t, _ in aday[:n]]
+    return {t: 1.0 / len(sec) for t in sec} if sec else {}
+
+
+def _aylik(nav, reb):
+    """NAV'ı rebalans günlerinde örnekle → ay-ay getiri (çakışmasız)."""
+    noktalar = [d for d in reb if d in nav.index] + [nav.index[-1]]
+    s = nav.loc[sorted(set(noktalar))]
+    return s.pct_change().dropna()
+
+
+def _alfa(y, x):
+    """OLS y = a + b·x → (a, t_a, b). Aylık, çakışmasız gözlem."""
+    y, x = np.asarray(y, float), np.asarray(x, float)
+    X = np.column_stack([np.ones_like(x), x])
+    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    e = y - X @ beta
+    dof = max(len(y) - 2, 1)
+    s2 = (e @ e) / dof
+    cov = s2 * np.linalg.inv(X.T @ X)
+    return beta[0], beta[0] / np.sqrt(cov[0, 0]), beta[1]
+
+
+def momentum(years=8):
+    global COST_RT
+    t0 = time.time()
+    print(f"=== MOMENTUM KONTROLÜ | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    print("Ön kayıtlı hipotez: sistem bir momentum aracıdır → korelasyon >= 0.6,")
+    print("persentil sıralaması aynı, MOM-6'ya göre alfa |t| < 2 (üç piyasada da).")
+    print()
+
+    ozet = []
+    for piyasa in ("BIST", "US", "UK"):
+        print(f"--- {piyasa} " + "-" * 70)
+        if piyasa == "BIST":
+            closes, vols = _panel_hazirla(years)
+            endeks_sym, maliyet, min_vol, kur = "XU100.IS", COST_RT, MIN_TL_VOL, {}
+        else:
+            cfg = TRANSFER_PIYASA[piyasa]
+            closes, vols, sektor = _transfer_panel(piyasa, years)
+            endeks_sym, maliyet, min_vol = cfg["endeks"], cfg["maliyet"], cfg["hacim_esigi"]
+            kur = {"min_tl_vol": min_vol}
+            if sektor:
+                kur["sektor"] = sektor   # _transfer ile birebir aynı kural
+
+        feats = _precompute(closes, vols)
+        ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+        _endeks, dates = _endeks_penceresi(endeks_sym, years)
+        dates = list(dates)
+        reb = pd.date_range(dates[0], dates[-1], freq="MS")
+        reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+
+        w_sis, w_mom, w_mk = {}, {}, {}
+        for d in reb:
+            a = _pick_at(d, feats, ret_panel, kur=kur)
+            b = _mom_ders_kitabi(d, feats, min_vol)
+            c = _pick_at(d, feats, ret_panel, kur={**kur, "sira": _mom_12_1})
+            if a: w_sis[d] = a
+            if b: w_mom[d] = b
+            if c: w_mk[d] = c
+
+        _eski = COST_RT
+        COST_RT = maliyet
+        try:
+            nav_s = _walk(w_sis, closes, dates)
+            nav_m = _walk(w_mom, closes, dates)
+            nav_k = _walk(w_mk, closes, dates)
+            rng_navs = []
+            all_t = sorted(feats)
+            for seed in range(RANDOM_SEEDS):   # _transfer/run ile birebir aynı çekiliş
+                rng = np.random.default_rng(seed)
+                wr = {}
+                for d in reb:
+                    elig = [t for t in all_t if feats[t]["close"].index.searchsorted(d) > 260]
+                    if len(elig) >= MAX_POS:
+                        wr[d] = {t: 1.0 / MAX_POS for t in rng.choice(elig, MAX_POS, replace=False)}
+                rng_navs.append(_walk(wr, closes, dates))
+        finally:
+            COST_RT = _eski
+        rf = np.array([n.iloc[-1] for n in rng_navs])
+        nav_r = pd.concat(rng_navs, axis=1).mean(axis=1)
+
+        def _satir(nav, ad):
+            yrs = (nav.index[-1] - nav.index[0]).days / 365.25
+            cagr = ((nav.iloc[-1] / nav.iloc[0]) ** (1 / yrs) - 1) * 100
+            dd = ((nav / nav.cummax()) - 1).min() * 100
+            yzd = (rf < nav.iloc[-1]).mean() * 100
+            print(f"  {ad:<22} son NAV {nav.iloc[-1]:>7.2f} | CAGR %{cagr:>6.1f} | "
+                  f"MaxDD %{dd:>6.1f} | rastgele içinde %{yzd:>3.0f} persentil")
+            return yzd
+        p_s = _satir(nav_s, "SİSTEM (yönetimsiz)")
+        p_m = _satir(nav_m, "MOM-6 (ders kitabı)")
+        p_k = _satir(nav_k, "MOM-kurulum")
+        print(f"  {'Rastgele-6 (50 tohum)':<22} medyan {np.median(rf):>7.2f} | "
+              f"%5-%95 [{np.percentile(rf, 5):.2f}, {np.percentile(rf, 95):.2f}]")
+
+        m_s, m_m, m_k, m_r = (_aylik(n, reb) for n in (nav_s, nav_m, nav_k, nav_r))
+        ix = m_s.index.intersection(m_m.index).intersection(m_r.index).intersection(m_k.index)
+        m_s, m_m, m_k, m_r = m_s[ix], m_m[ix], m_k[ix], m_r[ix]
+        kor = float(np.corrcoef(m_s, m_m)[0, 1])
+        kor_k = float(np.corrcoef(m_s, m_k)[0, 1])
+        # Rastgele-6 ortalaması evrenin eşit ağırlıklı "piyasası" yerine geçer;
+        # iki taraftan da düşülünce kalan, momentuma maruziyetin ötesindeki seçim.
+        a, ta, b = _alfa(m_s - m_r, m_m - m_r)
+        a_k, ta_k, b_k = _alfa(m_s - m_k, m_m - m_r)   # yalnız skor fonksiyonunun katkısı
+        ortak = np.mean([len(set(w_sis[d]) & set(w_mom.get(d, {}))) / len(w_sis[d])
+                         for d in w_sis])
+        print(f"  aylık korelasyon: sistem~MOM-6 {kor:+.2f} | sistem~MOM-kurulum {kor_k:+.2f} "
+              f"| {len(ix)} ay")
+        print(f"  sistem-rastgele = a + b·(MOM-6-rastgele): a %{a*100:+.2f}/ay "
+              f"(t={ta:+.2f}), b={b:.2f}")
+        print(f"  sistem-MOM-kurulum farkı, MOM-6'ya göre: a %{a_k*100:+.2f}/ay (t={ta_k:+.2f})")
+        print(f"  ortak hisse: sistemin seçtiklerinin ortalama %{ortak*100:.0f}'i MOM-6'da da var")
+        print()
+        ozet.append((piyasa, p_s, p_m, p_k, kor, a, ta, b, a_k, ta_k, ortak))
+
+    print("=" * 96)
+    print(f"{'Piyasa':<6} {'sis %':>6} {'MOM6 %':>7} {'MOMk %':>7} {'kor':>6} "
+          f"{'alfa/ay':>8} {'t':>6} {'beta':>5} {'skor alfa':>10} {'t':>6} {'ortak':>6}")
+    for p, ps, pm, pk, k, a, ta, b, ak, tak, o in ozet:
+        print(f"{p:<6} {ps:>6.0f} {pm:>7.0f} {pk:>7.0f} {k:>+6.2f} {a*100:>+7.2f}% "
+              f"{ta:>+6.2f} {b:>5.2f} {ak*100:>+9.2f}% {tak:>+6.2f} {o*100:>5.0f}%")
+    print("=" * 96)
+    k1 = all(r[4] >= 0.6 for r in ozet)
+    sira_s = [r[0] for r in sorted(ozet, key=lambda r: -r[1])]
+    sira_m = [r[0] for r in sorted(ozet, key=lambda r: -r[2])]
+    k2 = sira_s == sira_m
+    k3 = all(abs(r[6]) < 2 for r in ozet)
+    pozitif = [r[0] for r in ozet if r[6] >= 2]
+    print(f"(1) korelasyon >= 0.6 her piyasada : {'EVET' if k1 else 'HAYIR'}")
+    print(f"(2) persentil sırası aynı          : {'EVET' if k2 else 'HAYIR'} "
+          f"(sistem {' > '.join(sira_s)} | MOM-6 {' > '.join(sira_m)})")
+    print(f"(3) alfa |t| < 2 her piyasada      : {'EVET' if k3 else 'HAYIR'}")
+    if pozitif:
+        print(f"HİPOTEZ ÇÜRÜDÜ: anlamlı pozitif alfa -> {', '.join(pozitif)}")
+    elif k1 and k2 and k3:
+        print("HİPOTEZ TUTTU: sistem, ölçülebildiği kadarıyla bir momentum aracı.")
+    else:
+        print("KARIŞIK: hipotezin bir kısmı tuttu — tabloya bak, tek cümleye indirme.")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
 def kasa_durum():
     """Kasanın durumu: nerede kesiliyor, ne kilitli, daha önce açıldı mı."""
     meta = _kasa_meta()
@@ -2064,5 +2279,7 @@ if __name__ == "__main__":
                 sys.argv[3] if len(sys.argv) > 3 else "")
     elif _cmd == "pozisyon":
         pozisyon(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
+    elif _cmd == "momentum":
+        momentum(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     else:
         print(__doc__)

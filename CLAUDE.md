@@ -32,6 +32,7 @@ python pipeline_backtest.py sanstest 8  # system vs random-6, period by period
 python pipeline_backtest.py dsr 8       # deflated Sharpe — multiple-testing correction
 python pipeline_backtest.py us 8        # US transfer test — out-of-sample in space
 python pipeline_backtest.py uk 8        # UK transfer test — the method did NOT transfer
+python pipeline_backtest.py momentum 8  # system vs textbook 12-1 momentum, BIST/US/UK
 python pipeline_backtest.py transfer UK 8   # generic form; markets in TRANSFER_PIYASA
 python pipeline_backtest.py kasa        # data vault status — what is locked
 python pipeline_backtest.py kasa-ac 8 EVET  # OPEN the vault — once, in October
@@ -1463,7 +1464,9 @@ that market over that window rather than any market-independent selection skill:
 
 - US 2018–2024: momentum paid exceptionally (mega-cap tech). System wins big.
 - UK 2018–2024: a value- and dividend-weighted market where momentum was weak.
-  System loses.
+  System loses. **(Refuted 2026-09-27 by the momentum benchmark: textbook 12-1
+  momentum was at the 100th percentile of UK random draws, +14.8% CAGR. Momentum
+  paid in the UK, and the system still lost.)**
 - BIST 2018–2024: system loses to random.
 - BIST 2024–2026 (reserved, known from pre-vault runs): a momentum melt-up.
   System wins big.
@@ -1580,9 +1583,11 @@ never executed in production — now runs with word-boundary matching.
 3.1 Selection fails in 2 of 3 markets on the development window — BIST 10th
     percentile, UK 22nd, US 94th.
 3.2 DSR 0.03–0.14 on the development window: no statistically defensible edge.
-3.3 **The momentum benchmark has still not been run.** Every result across four
-    market-periods lines up with "did momentum pay here, then?", and a
-    long-only momentum portfolio is the control that would settle it.
+3.3 ~~Momentum benchmark not run~~ — **DONE 2026-09-27, result MIXED and
+    unflattering**: textbook 12-1 momentum beats the system in the US (NAV 12.19
+    vs 4.55) and the UK (2.29 vs 0.68), and its alpha against momentum is zero
+    to negative everywhere. "UK failed because momentum was weak" is refuted:
+    momentum sat at the 100th percentile there. See "3.3 momentum benchmark".
 3.4 Benchmark dividend bias: index comparisons flatter us by ~1.9 pts/yr in the
     US, more in the UK and BIST.
 3.5 The backtest tests the technical core only; top-6 overlap with the live
@@ -1651,9 +1656,89 @@ alongside `kaynaklar`.
 
 Also found: see 1.5 below (relative-strength bonus is dead in production).
 
-**After 2.3, in order:** 3.3 the momentum benchmark (one day, settles the
-biggest open question), then 1.4 turnover (measured problem, free gain), then
-1.1 the price-echo double count.
+### 3.3 momentum benchmark — `pipeline_backtest.py momentum [yil]` (2026-09-27)
+
+**Pre-registered before the first run** (the same text sits in the code above
+`_mom_12_1`). Hypothesis H: *the system is a momentum-factor vehicle.* If so,
+in each of BIST, US and UK over the vault window:
+(1) the monthly-return correlation between the system and MOM-6 is ≥ 0.6;
+(2) MOM-6's percentile ranking against random-6 orders the markets the same
+way the system's does; (3) the system's alpha against MOM-6 is insignificant
+(|t| < 2). **Falsified by** a significant positive alpha in any market, or low
+correlation.
+
+Two controls, roles fixed in advance. **MOM-6 (primary):** textbook 12-1
+momentum (Jegadeesh–Titman: 12-month return skipping the last month), liquidity
+filter only, top 6, equal weight — nothing tuned. **MOM-kurulum (diagnostic):**
+the system's own machinery (liquidity, SMA200, sector cap, correlation filter,
+ATR weights) with only the ranking swapped for 12-1 momentum, via the new
+`kur={"sira": ...}` hook in `_pick_at` — its gap to the system is purely the
+score function. Neither control is a strategy candidate; adopting the better
+one would be another trial and cost DSR.
+
+**Result** (vault window 2018-08-31 → 2024-08-30, 72 monthly rebalances per
+market, same panels and fingerprints as the transfer tests; `us 8` and `run 8`
+re-run first after refactoring the panel loader, byte-identical: NAV 4.55 /
+47 of 50, NAV 13.20 / 10th percentile):
+
+| | System | MOM-6 | MOM-kurulum | Random median |
+|---|---|---|---|---|
+| **BIST** final NAV / CAGR | 13.20 / 53.8% | 2.16 / 13.7% | 7.35 / 39.5% | 27.46 |
+| percentile vs random-6 | 10th | **0th** | 0th | |
+| **US** final NAV / CAGR | 4.55 / 28.7% | **12.19 / 51.7%** | 9.22 / 44.8% | 2.38 |
+| percentile vs random-6 | 94th | 100th | 100th | |
+| **UK** final NAV / CAGR | 0.68 / −6.3% | **2.29 / +14.8%** | 1.36 / 5.3% | 0.89 |
+| percentile vs random-6 | 22nd | **100th** | 94th | |
+
+| | corr. system~MOM-6 | alpha vs MOM-6 /month | t | holdings shared with MOM-6 |
+|---|---|---|---|---|
+| BIST | +0.49 | −0.22% | −0.14 | 17% |
+| US | +0.67 | +0.36% | +0.47 | 14% |
+| UK | +0.62 | −0.96% | −1.57 | 14% |
+
+**Scored against the pre-registration: MIXED.** (1) fails, BIST correlation is
+0.49. (2) passes, but only nominally: MOM-6 is tied at the 100th percentile in
+the US and the UK, so the "same ordering" comes from a tie-break and should
+not be quoted as support. (3) passes, with no significant alpha anywhere. The
+falsification condition (significant *positive* alpha) is not met.
+
+**The finding that matters was not in the pre-registration, and it runs against
+us.** The explanation written after the UK test ("UK is a value market where
+momentum was weak, so the system lost") is **refuted**. Textbook 12-1 momentum
+finished at the **top** of the UK random distribution (+14.8% CAGR against
+FTSE +2.0%) while the system lost 32%. So the UK failure belongs to the system,
+not to the factor. The US tells the same story from the other side: the
+system's best leg, the 94th percentile that the selection claim rests on, is
+**beaten nearly threefold by a zero-parameter textbook portfolio** (NAV 12.19
+vs 4.55). Only in BIST, where momentum itself failed (0th percentile), did the
+system beat it.
+
+So the system is **not a momentum clone**: it shares about 15% of holdings with
+MOM-6 and its beta to MOM-6's excess return is only 0.15–0.38. But where
+momentum paid, it captured much less of it than the plain factor, and its
+alpha against the factor is zero to negative in every market. MOM-kurulum
+isolates the score function, and it tells the same story: swapping our score
+for 12-1 momentum inside our own machinery **improves** the result in the US
+(9.22 vs 4.55) and the UK (1.36 vs 0.68) and worsens it only in BIST (7.35 vs
+13.20). The score function's value over textbook momentum is not established
+in any market (t = −0.95 / +0.32 / −0.65).
+
+**What this does to the presentation.** "The selection method transfers" was
+already withdrawn after the UK. The narrower fallback, "at least it captures
+momentum", is now also unsupported: a reviewer can replace the scoring model
+with one line of textbook momentum and do better in two of three markets. The
+defensible claims that remain are about the *machinery* (liquidity, sector,
+correlation and drawdown controls, the management layer in BIST), not about the
+score.
+
+**Caveats, stated before anyone asks.** MOM-6 is one concentrated 6-stock
+portfolio per market, so its 100th percentiles carry the same single-draw
+variance as the system's; it is a control, not a strategy, and it is **not**
+adopted (see pre-registration). Monthly OLS t-statistics on 72 observations
+with no autocorrelation correction. The vault period is untouched.
+
+**After 2.3, in order:** ~~3.3 the momentum benchmark~~ (done, above), then 1.4
+turnover (measured problem, free gain), then 1.1 the price-echo double count.
 
 The user has also flagged wanting to move into **fundamental/financial-statement
 analysis** afterwards — `borsapy` exposes `income_stmt`, `balance_sheet`,
