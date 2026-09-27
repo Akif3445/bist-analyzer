@@ -242,6 +242,11 @@ _NEGATION_FLIP_TO_POSITIVE = [re.compile(p, re.IGNORECASE) for p in [
 # (?:\s+\S+){0,2} = isim ile fiil arasına en fazla 2 kelime girebilir
 # ("kâr YÜZDE 30 azaldı", "borç YÜKÜ rekor seviyede" gibi)
 _NEGATION_FLIP_TO_NEGATIVE = [re.compile(p, re.IGNORECASE) for p in [
+    # Hedef fiyat İNDİRİMİ (2026-09-27): "MAVI için hedef fiyatını 68 TL'den
+    # 60 TL'ye düşürdü, tavsiyesini al olarak korudu" OLUMLU okunuyordu
+    # ("al" tavsiyesi yüzünden). Okuma hatası düzeltmesi; yönü ölçülmedi
+    # (analist aksiyonları KAP'ta geçmiyor).
+    r"hedef\s+fiyat\w*.{0,50}?(düşürdü|düşürüldü|indirdi|indirildi|aşağı\s+çek\w*|aşağı\s+yönlü\s+revize)",
     r"k[aâ]r\w*(?:\s+\S+){0,2}\s+(düştü|düşüyor|azaldı|azalıyor|geriledi|eridi|daraldı)",
     r"gelir\w*(?:\s+\S+){0,2}\s+(düştü|düşüyor|azaldı|azalıyor|geriledi|daraldı)",
     r"satış\w*(?:\s+\S+){0,2}\s+(düştü|düşüyor|azaldı|azalıyor|geriledi|daraldı)",
@@ -301,6 +306,10 @@ FIN_POSITIVE_WEIGHTED = [
     # buldu. "pay geri alımı" ölçümle DOĞRULANDIĞI için kalıyor:
     # +%2.63 / t=+4.6 / n=5158 (30 günlük medyan, piyasaya göreli).
     ("pay geri alımı", 2),
+    # "geri alım" GENİŞ biçim (2026-09-27): "Geri Alım Programını Başlattı",
+    # "Hisse Geri Alımı" gibi yazımları "pay geri alımı" yakalamıyordu. KAP
+    # özetlerinde ölçüldü: n=3086, 30g %+3.00, t=+6.0, iki yarıda aynı işaret.
+    ("geri alım", 2),
     ("devreye aldı", 2), ("üretime geçti", 2),
     ("anlaşma", 2), ("sözleşme", 2), ("ortaklık", 2),
     ("birleşme", 2), ("satın alma", 2),
@@ -909,19 +918,33 @@ class NewsAnalysisResult:
 # Türkçe eklemeli bir dil, o yüzden salt \b...\b de yetmez ("kârı", "zararı"
 # kaçardı). Çözüm: kök + KAPALI bir ek listesi. "kar"+"a"="kara" olur ama
 # ardından "r" geldiği için "karar" yine eşleşmez.
+# Ek listesi 2026-09-27'de GENİŞLETİLDİ. Kaynaştırma "n"si ve iyelik+hâl
+# ekleri yoktu: "gözaltı" listede olduğu hâlde "gözaltına alındı",
+# "gözaltında" eşleşmiyor ve Tera haberlerinden altısı nötr kalıyordu.
 _TR_EKLER = (
-    r"(?:ı|i|u|ü|a|e|ya|ye|da|de|ta|te|dan|den|tan|ten|la|le|yla|yle|"
+    r"(?:ı|i|u|ü|a|e|ya|ye|yı|yi|yu|yü|da|de|ta|te|dan|den|tan|ten|la|le|yla|yle|"
     r"ın|in|un|ün|sı|si|su|sü|nı|ni|nu|nü|lar|ler|ları|leri|"
+    r"na|ne|nda|nde|ndan|nden|nın|nin|nun|nün|"
+    r"ına|ine|una|üne|ını|ini|unu|ünü|"
     r"ında|inde|ından|inden|lık|lik|luk|lük|cı|ci|cu|cü)?"
 )
+
+# Ünsüz yumuşaması: "temerrüt" → "temerrüde", "kayıp" → "kaybı". Kök ünlüyle
+# başlayan ek alınca son p/ç/t/k → b/c/d/ğ olur. Yalnız 6+ harfli köklere
+# uygulanır — kısa köklerde yumuşamış biçim başka bir kelimeye çarpabilir.
+_YUMUSAMA = {"p": "b", "ç": "c", "t": "d", "k": "ğ"}
 
 
 def _kelime_kalibi(kelime: str) -> "re.Pattern":
     """Tek kelime -> kök+ek kalıbı, çok kelimeli ifade -> sınırlı öbek."""
     if " " in kelime or "-" in kelime:
         return re.compile(r"\b" + re.escape(kelime) + r"\w*", re.IGNORECASE)
-    return re.compile(r"\b" + re.escape(kelime) + _TR_EKLER + r"\b",
-                      re.IGNORECASE)
+    kok = re.escape(kelime)
+    son = kelime[-1:].lower()
+    if len(kelime) >= 6 and son in _YUMUSAMA:
+        kok = ("(?:" + kok + "|" + re.escape(kelime[:-1] + _YUMUSAMA[son])
+               + r"(?=[aeıioöuü]))")
+    return re.compile(r"\b" + kok + _TR_EKLER + r"\b", re.IGNORECASE)
 
 
 # ÖLÇÜLMÜŞ ÖBEKLER (2026-09-27) — haber_olcum.json, tools/haber_olcum.py üretir.
@@ -1109,6 +1132,23 @@ _FIYAT_YANKISI = [re.compile(p, re.IGNORECASE) for p in [
     r"\b(gram|çeyrek|ons)\s+altın",
     r"\b(dolar|euro|avro)\s*/\s*TL\b",
 ]]
+
+
+_OLAY_KOKU = (r"(sermaye\s+art\w*|bedelli|bedelsiz|temettü\w*|kar\s+pay\w*|kâr\s+pay\w*|"
+              r"birleşme\w*|halka\s+arz\w*|geri\s+alım\w*|pay\s+alım\s+teklif\w*|"
+              r"satın\s+alma\w*|devral\w*|ihrac\w*)")
+_IPTAL_FIIL = (r"(vazgeç\w*|iptal\w*|geri\s+çek\w*|yapılmayacak|gerçekleşmeyecek|"
+               r"ertele\w*|durduruldu|sonlandır\w*)")
+_IPTAL_KALIP = [re.compile(p, re.IGNORECASE) for p in [
+    _OLAY_KOKU + r".{0,80}?" + _IPTAL_FIIL,
+    _IPTAL_FIIL + r".{0,40}?" + _OLAY_KOKU,
+    r"(sermaye\s+art\w*)\s+yok\b",
+]]
+
+
+def _iptal_edilen_olay(baslik: str) -> bool:
+    """Başlık bir kurumsal olayın iptalini/ertelenmesini mi anlatıyor?"""
+    return any(p.search(baslik or "") for p in _IPTAL_KALIP)
 
 
 def _fiyat_yankisi(baslik: str) -> bool:
@@ -1342,6 +1382,15 @@ def _classify(text: str) -> str:
     #   Bedelsiz sermaye artırımı -%3.86 / t=-5.0 / n=1160
     # Ölçümü anlamsız çıkan türler 0 döner ve akış normal katmanlara devam
     # eder — sözlük yalnız BİLDİĞİ yerde konuşur.
+    #
+    # Ondan da ÖNCE: İPTAL EDİLEN OLAY → nötr (2026-09-27). "RYSAS bedelli ve
+    # bedelsiz kararından vazgeçti" içinde "bedelsiz" geçtiği için OLUMSUZ
+    # çıkıyordu; oysa haber olayın OLMAYACAĞINI söylüyor — iptal edilen bir
+    # bedelsiz, bedelsiz değildir. İptalin kendi yönü ölçülmedi, dolayısıyla
+    # doğru cevap tersine çevirmek değil nötr kalmak.
+    if _iptal_edilen_olay(text):
+        return "notr"
+
     _ky = _kap_yon(text)
     if _ky > 0:
         return "olumlu"

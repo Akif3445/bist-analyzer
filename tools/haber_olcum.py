@@ -245,10 +245,20 @@ def calistir():
     print("\n" + "=" * 92)
     print("3) KARARLAR UYGULANDIKTAN SONRA — aynı test (örneklem-içi)")
     print("=" * 92)
-    for e in ("olumlu", "olumsuz", "notr"):
-        s = _istatistik(df[df["etiket2"] == e])
-        print(f"  {e:<8} n={s['n']:>7}  7g medyan %{s['med7']:+.2f}  30g medyan %{s['med30']:+.2f}  "
-              f"poz %{s['poz']:.0f}  t={s['t']:+.1f}  (yarılar %{s['yari1']:+.2f} / %{s['yari2']:+.2f})")
+    # "olumlu" satırı TÜM olumlu etiketleri sayar; skora giren yalnız yönü
+    # kanıtlı olanlardır (news_engine._olumlu_kanitli) — o ayrıca gösterilir.
+    kanitli = {m: ne._olumlu_kanitli(m) for m in metinler}
+    df["kanitli"] = df["ozet"].map(kanitli)
+    gruplar = [("olumlu", df["etiket2"] == "olumlu"),
+               ("olumlu, SKORA GİREN (kanıtlı)", (df["etiket2"] == "olumlu") & df["kanitli"]),
+               ("olumsuz", df["etiket2"] == "olumsuz"),
+               ("notr", df["etiket2"] == "notr")]
+    for e, maske in gruplar:
+        s = _istatistik(df[maske])
+        dogru = s["poz"] if e.startswith("olumlu") else (100 - s["poz"] if e == "olumsuz" else None)
+        ek = f"  yönü tutan %{dogru:.1f}" if dogru is not None else ""
+        print(f"  {e:<30} n={s['n']:>7}  30g medyan %{s['med30']:+.2f}  t={s['t']:+.1f}  "
+              f"(yarılar %{s['yari1']:+.2f} / %{s['yari2']:+.2f}){ek}")
     print(f"\n{CIKTI} yazıldı | toplam {time.time()-t0:.0f}s")
 
 

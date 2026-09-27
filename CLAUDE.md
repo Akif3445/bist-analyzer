@@ -1833,6 +1833,50 @@ the YKBNK lawsuit and the KTLEV resignation no longer move the score,
 because their phrase families measured as noise. The layer is now narrower
 and every direction it expresses is measured.
 
+#### Second pass (same day): recall measured, grammar fixed, re-tested
+
+The user asked for accuracy as a percentage, including what the filter
+*misses*. Two readings were taken on the same 683 live headlines, and the price
+test was re-run.
+
+**Misses found by reading all 294 neutral headlines.** About 52 were news a
+human would call directional. After the changes below, 14 of the 36
+unjustified misses are caught. Changes:
+- **Turkish grammar bugs.** `_TR_EKLER` lacked the buffer-n and
+  possessive+case suffixes (-na/-nda/-nın/-ına/-ını…), so "gözaltı" in the
+  list did not match "gözaltına alındı" (6 Tera headlines). Final-consonant
+  softening was not handled either, so "temerrüt" did not match "temerrüde".
+  `_kelime_kalibi` now adds the softened root, for roots of 6+ letters only.
+- **Broad buyback phrase `("geri alım", 2)`**: measured n=3,086, 30d +3.00%,
+  t=+6.0, both halves positive. It catches "Geri Alım Programını Başlattı",
+  "Hisse Geri Alımı", and so on.
+- **Cancelled events → neutral** (`_iptal_edilen_olay`, which runs before the
+  KAP-type layer). "RYSAS bedelli ve bedelsiz kararından vazgeçti" had been
+  negative.
+- **Target cuts read as negative.** They had been read as positive through
+  the "al" rating.
+- **Measured and deliberately NOT added:** "pay satışı" (n=418, t −0.1),
+  "fesih" (n=173, t −0.7) and insider "hisse alımı" (n=675, t −0.3) are
+  noise. "Tedbir kararı" is n=63, +0.40%, too thin to act on and leaning
+  null. So Koç's Tüpraş sale, contract terminations and SPK trading
+  restrictions stay neutral **by evidence**, not by oversight.
+
+**Re-test.** Price, KAP summaries 2018–2024, applied and in-sample. Live
+headlines, read by hand.
+
+| | before today | after |
+|---|---|---|
+| score-moving positives: stock beat market (30d) | 49.2%, median −0.2% | **59.8%**, median **+3.08%** (t +8.2; halves +1.68 / +3.19) |
+| negatives: stock lagged market | 54.5%, median −1.6% | 54.5%, median −1.83% (t −2.9) |
+| live score-moving headlines judged right | 35/54 (65%) | **35/38 (92%)**, 0 plainly wrong, 3 debatable |
+| directional news left neutral, and not justified by a measurement | ~36 of 294 | **5 of 280 (~2%)** |
+
+The positive gain is almost all buybacks, so it is in-sample in the sense that
+the phrase was chosen on this data. It also matches the independent
+type-level buyback result (+2.63%, t 4.6). Of the neutral headlines a human
+would still call directional (~38 of 280, 14%), most are unevidenced positives
+(contracts, orders, earnings beats) or families measured as noise.
+
 ### 1.4 turnover — `pipeline_backtest.py devir [yil]` (2026-09-27): the live manager is not the tested manager
 
 **Live, measured first** (Turso `pm_trades`, managed BIST portfolios). The
