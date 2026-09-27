@@ -1581,7 +1581,24 @@ never executed in production — now runs with word-boundary matching.
     `skor_gunlugu.py` → Turso `skor_gunlugu`, daily, whole BIST universe. The
     per-component IC becomes computable after a few months of rows.
 2.4 Analyst premium (20% of the score) and valuation (10%) have never been
-    IC-tested at all.
+    IC-tested at all. **First read of the premium, 2026-09-27**, from
+    `tv_target_history` (11 weekly snapshots, ~40 stocks, rank IC of
+    target/close−1 against the forward return relative to the cross-section
+    median):
+
+    | horizon | weeks | mean IC | t |
+    |---|---|---|---|
+    | 5 trading days | 10 | −0.002 | −0.03 |
+    | 10 trading days | 9 | +0.002 | +0.02 |
+    | 21 trading days | 7 | −0.058 | −0.71 |
+
+    Weekly IC flips sign. The highest-premium tercile did −0.05% over 21 days
+    and the lowest +2.42%. **No evidence the 20% weight earns anything.**
+    But 7–10 overlapping weeks of one regime cannot show it does not either.
+    Per the rule stated before running, the weight is unchanged; re-read at
+    ~26 weeks, and `skor_gunlugu.prim` now accumulates daily alongside it.
+    Note these are reserve-period (2026) prices, fine for a live component
+    read but not for tuning backtest parameters.
 2.5 Credit ratings: 3,503 events, bodies fetchable, but 75% undetermined by
     keyword — needs the rating symbol parsed and compared to the company's
     previous rating.
