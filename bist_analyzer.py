@@ -204,7 +204,9 @@ WEIGHTS = {
 # Sinyal kayıtlarına yazılan skor sistemi versiyonu — Sinyal Takip'te v1/v2
 # isabet karşılaştırması için. v1: kontrarian teknik + 35/35/20/10 ağırlıklar
 # (2026-07-13 öncesi). v2: momentum teknik + 45/25/20/10 (kalibrasyon sonrası).
-SCORING_VERSION = "v3"   # v3: haber 25->10 + habersizken teknige devir (2026-09-26)
+# v3: haber 25->10 + habersizken teknige devir (2026-09-26)
+# v4: fiyat yankısı başlıkları haber skorundan çıkarıldı (2026-09-27, news_engine._FIYAT_YANKISI)
+SCORING_VERSION = "v4"
 
 # BISTScore JSON serialization
 

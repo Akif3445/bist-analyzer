@@ -1543,10 +1543,17 @@ never executed in production — now runs with word-boundary matching.
 ### The open problem list
 
 **Steering the system wrong**
-1.1 **Price echo is counted twice.** "THY 300 TL'nin altına geriledi" classifies
-    negative, but that is the price move the technical score already sees —
-    `_is_technical_price_move` does not catch this phrasing. It creates
-    correlation between two components that are supposed to be independent.
+1.1 ~~Price echo is counted twice~~ — **FIXED 2026-09-27, `SCORING_VERSION`
+    v4.** `_is_technical_price_move` only skipped layer 1, so the keyword
+    layers still saw "düştü/geriledi" and scored the headline. New
+    `news_engine._FIYAT_YANKISI` patterns (own-stock moves, index/market moves,
+    commodity and FX prices) now exclude such headlines from scoring entirely
+    via `_bilgisiz_baslik`, the same path used for form titles. Every pattern
+    requires a price subject, so "net kârı yüzde 20 geriledi" stays in. Result
+    on 80 live stocks: 14 of 333 scored headlines removed and all 14 are real
+    echoes. 9 of them had been directional, including "BIST 100 haftayı
+    ekside kapattı" classified **positive**. A 24-headline hand test gave 0
+    errors.
 1.2 Live cohorts now carry **four config breaks**; the selection-vs-random clock
     keeps restarting. Managed-vs-passive is unaffected.
 1.3 **35 portfolios hold 49 unique stocks** — a set that looks diversified is

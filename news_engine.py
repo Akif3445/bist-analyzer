@@ -964,6 +964,50 @@ _BILGISIZ_KALIP = [re.compile(p, re.IGNORECASE) for p in [
     r"^[A-ZÇĞİÖŞÜ0-9]{3,6}\s*-\s*[A-ZÇĞİÖŞÜ\s\.]{3,40}$",
 ]]
 
+# FİYAT YANKISI (2026-09-27, açık madde 1.1) — fiyat hareketini ANLATAN başlık
+# haber değildir; teknik skor o hareketi zaten fiyattan görüyor. Haber
+# bileşenine de girerse aynı düşüş iki kez cezalanır ve "birbirinden bağımsız"
+# denen iki bileşen aynı şeyi tekrarlar.
+#
+# _is_technical_price_move bunu ÇÖZMÜYORDU: yalnız Katman 1'i atlatıyor,
+# kelime katmanları "düştü/geriledi"yi görüp başlığı yine olumsuz sayıyordu.
+# 80 hisselik canlı akışta 63 yönlü başlığın ~10'u böyleydi:
+#   "KTLEV'de sert düşüş sürüyor"                          -> olumsuz
+#   "Borsa ve altın bu hafta değer kaybetti; BIST 100 yüzde 2,90 geriledi" -> olumsuz
+#   "Borsa ve altın geriledi ... BIST 100 haftayı ekside kapattı" -> OLUMLU
+#   "Altında düşüş sürecek mi?"                            -> olumsuz
+#
+# Kalıplar bilerek FİYAT ÖZNESİ ister (hisse, borsa, endeks, TL seviyesi,
+# emtia fiyatı): "net kârı yüzde 20 geriledi" gerçek haberdir ve yakalanmamalı.
+_FIYAT_YANKISI = [re.compile(p, re.IGNORECASE) for p in [
+    # hissenin kendi fiyatı
+    r"neden\s+(düşüyor|düştü|yükseliyor|yükseldi|değer\s+kaybediyor|çakıldı|geriliyor)",
+    r"sert\s+(düşüş|yükseliş|kayıp|satış|değer\s+kaybı|yükselişe|düşüşe)",
+    r"(düşüş|yükseliş|kayıp|kayb[ıi]|ralli|satış\s+baskısı)\w*\s+(sürüyor|devam|derinleş\w*|hızlan\w*)",
+    r"\d+([.,]\d+)?\s*(TL|lira|dolar)\s*'?(seviye\w*|bandı\w*)",
+    r"TL'?(n[iı]n|y[ae]|ye)?\s+(altına|üstüne|üzerine|aşağısına)\s+(ger|in|düş|çık|yüksel|sark)",
+    r"\b(tavan|taban)\s+(oldu|yaptı|serisi|fiyattan|kilitlendi)",
+    r"(hisse\w*|pay\w*)\s.{0,25}(yüzde|%)\s*[\d.,]+\s*(değer\s+)?(kazandı|kaybetti|yükseldi|geriledi|düştü|primlendi|eridi)",
+    r"(hisse\w*|pay\w*)\s.{0,25}(zirve|dip)\w*\s+(gördü|yeniledi|tazeledi|test\s+etti)",
+    r"(destek|direnç)\s+(seviye\w*|nokta\w*|kırıl\w*)",
+    # piyasa / endeks
+    r"\bBIST\s*-?\s*(\d+|tüm|banka|sınai)\b.{0,40}(yüksel|geril|düş|değer\s+ka|kapattı|tamamladı|rekor|ekside|artıda)",
+    r"\bborsa\s+(günü|güne|haftayı|haftaya|ayı|yılı)\b",
+    r"\bborsa\w*\s.{0,20}(geriledi|yükseldi|düştü|değer\s+kaybetti|değer\s+kazandı)",
+    r"piyasalar\w*\s.{0,40}(değer\s+kaybetti|geriledi|sert\s+düş|satış\s+baskısı)",
+    # emtia / döviz fiyatı — hisse haberi değil, piyasa verisi
+    r"\baltın\s*(fiyat\w*|\S*\s*(düşüş|yükseliş|rekor|ne\s+kadar))",
+    r"\baltında\s+(düşüş|yükseliş|sert|rekor)",
+    r"\b(altın|gümüş|petrol|brent)\w*\s.{0,30}değer\s+(kaybetti|kazandı)",
+    r"\b(gram|çeyrek|ons)\s+altın",
+    r"\b(dolar|euro|avro)\s*/\s*TL\b",
+]]
+
+
+def _fiyat_yankisi(baslik: str) -> bool:
+    """Başlık bir fiyat hareketini mi anlatıyor? True ise skora HİÇ girmez."""
+    return any(p.search(baslik or "") for p in _FIYAT_YANKISI)
+
 
 # KAP SÖZLÜĞÜ (2026-09-27) — kap_sozluk.json'a bağlanır.
 #
@@ -1047,7 +1091,7 @@ def _bilgisiz_baslik(baslik: str) -> bool:
     for k in _BILGISIZ_KALIP:
         if k.search(b):
             return True
-    return False
+    return _fiyat_yankisi(b)
 
 
 BERT_CONFIDENCE_THRESHOLD = 0.70  # BERT bu güvenin altındaysa finans sözlüğü devreye girer
