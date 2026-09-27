@@ -295,7 +295,11 @@ FIN_POSITIVE_WEIGHTED = [
     ("temettü", 2), ("kar payı", 2), ("kâr payı", 2),
     ("gelir artışı", 2), ("ciro artışı", 2), ("satış artışı", 2),
     ("ihracat artışı", 2), ("kapasite artışı", 2),
-    ("sermaye artırımı", 2), ("bedelsiz", 2), ("pay geri alımı", 2),
+    # "sermaye artırımı" ve "bedelsiz" BURADAN ÇIKARILDI (2026-09-27) ve
+    # aşağıda FIN_NEGATIVE_WEIGHTED'e taşındı — ölçüm ikisini de negatif
+    # buldu. "pay geri alımı" ölçümle DOĞRULANDIĞI için kalıyor:
+    # +%2.63 / t=+4.6 / n=5158 (30 günlük medyan, piyasaya göreli).
+    ("pay geri alımı", 2),
     ("devreye aldı", 2), ("üretime geçti", 2),
     ("anlaşma", 2), ("sözleşme", 2), ("ortaklık", 2),
     ("birleşme", 2), ("satın alma", 2),
@@ -390,6 +394,24 @@ FIN_POSITIVE_WEIGHTED = [
 ]
 
 FIN_NEGATIVE_WEIGHTED = [
+    # ÖLÇÜLMÜŞ GİRDİLER (2026-09-27) — 411.656 KAP bildirimi üzerinde olay
+    # çalışması, 30 günlük MEDYAN piyasaya göreli getiri, gün-kümelenmiş t.
+    # Ayrıntı: CLAUDE.md "KAP event study" ve kap_sozluk.json.
+    #
+    # BEDELSİZ sermaye artırımı: -%3.86 | t=-5.0 | n=1160
+    #   Teori bunun NÖTR olmasını söyler (muhasebesel işlem) ve motor onu
+    #   GÜÇLÜ OLUMLU sayıyordu. Ölçüm ikisini de yalanlıyor: duyuruya doğru
+    #   yükseliş, duyurudan sonra ilk hafta içinde sızma. BIST'te bedelsiz
+    #   kovalamak yaygın bir perakende alışkanlığı ve tipik hisse geri
+    #   kalıyor (olayların yalnız %41'i pozitif bitiyor).
+    #   DİKKAT: ortalama pozitif, MEDYAN negatif — azınlık hisse fırlıyor.
+    #   Uzun-yönlü bir sistemde kullanılabilir hâli "al" değil, "1-2 hafta
+    #   ALMA" yönündedir.
+    ("bedelsiz", 2), ("bedelsiz sermaye artırımı", 3),
+    # Sermaye artırımı (tür geneli): -%2.01 | t=-3.1 | n=3480
+    #   Bedelli tek başına gürültü (-%1.04, t=-0.2); tür seviyesindeki
+    #   negatifliği bedelsiz taşıyor.
+    ("sermaye artırımı", 1), ("sermaye artirimi", 1),
     # 3x — kesin olumsuz
     ("iflas", 3), ("konkordato", 3), ("temerrüt", 3), ("temerrut", 3),
     ("beklentinin altında", 3), ("hayal kırıklığı", 3),
@@ -654,8 +676,10 @@ POSITIVE_WORDS = [
     "genisleme", "genişleme", "kapasite",
     "ihale kazandi", "kazandi", "kazandı", "asti", "aştı",
     "yukari", "yukarı", "ralli", "degerlenme", "değerlenme",
-    "buyuyor", "büyüyor", "artti", "arttı", "bedelsiz",
-    "sermaye artirimi", "sermaye artırımı", "kar payi", "kâr payı",
+    "buyuyor", "büyüyor", "artti", "arttı",
+    # "bedelsiz" ve "sermaye artirimi" KALDIRILDI (2026-09-27) — ölçüm
+    # ikisini de negatif buldu, aşağıdaki nota bakınız.
+    "kar payi", "kâr payı",
     "al sinyali", "destek buldu", "yukselebilir", "yükselebilir",
     "hedef fiyat yukari", "rating artirimi", "not artirimi",
     "sözleşme imzalandı", "ihale kazanıldı", "yeni sipariş",
@@ -672,6 +696,10 @@ POSITIVE_WORDS = [
 ]
 
 NEGATIVE_WORDS = [
+    # ÖLÇÜLMÜŞ (2026-09-27): bedelsiz sermaye artırımı -%3.86 / t=-5.0 /
+    # n=1160. Motor bunu GÜÇLÜ OLUMLU sayıyordu. Ayrıntı FIN_NEGATIVE_WEIGHTED
+    # başındaki notta.
+    "bedelsiz",
     "zarar", "dusus", "düşüş", "kayip", "kayıp", "azalis", "azalış",
     "gerileme", "zayif", "zayıf", "olumsuz", "negatif", "kotu", "kötü",
     "kriz", "dava", "ceza", "sorusturma", "soruşturma", "iflas",
@@ -917,11 +945,85 @@ _BILGISIZ_KALIP = [re.compile(p, re.IGNORECASE) for p in [
 ]]
 
 
+# KAP SÖZLÜĞÜ (2026-09-27) — kap_sozluk.json'a bağlanır.
+#
+# Sözlük 411.656 KAP bildirimi üzerinde olay çalışmasıyla ölçüldü (bkz.
+# CLAUDE.md "KAP event study"). Elle yazdığım _BILGISIZ_KALIP regex
+# listesinden hem geniş (114 tür, arşivin %98'i) hem de her girdisi ölçümlü.
+#
+# KAP kalemlerinde SÖZLÜK YETKİLİDİR, kelime listesi değil. Sebebi bu haftanın
+# canlı akışında görüldü: "Esas Sözleşme Tadili" — ana sözleşmenin bir
+# maddesinin değişmesi, düpedüz evrak — içinde "sözleşme" geçtiği için OLUMLU
+# sayılıyordu, altı ayrı hissede. Aynı şekilde "Sürdürülebilirlik Raporu"
+# "sürdürülebilir" yüzünden olumlu çıkıyordu. Bunlar kelime listesinden
+# silinerek çözülemez: gerçek bir sözleşme haberi olumludur. Çözüm, KAP
+# kaleminin TÜRÜNÜ tanımak.
+_KAP_SOZLUK = None
+
+
+def _kap_sozluk() -> dict:
+    """kap_sozluk.json (betiğe göreli yol — çalışma dizininden bağımsız)."""
+    global _KAP_SOZLUK
+    if _KAP_SOZLUK is None:
+        import json
+        import os
+        yol = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "kap_sozluk.json")
+        try:
+            with open(yol, encoding="utf-8") as f:
+                _KAP_SOZLUK = json.load(f).get("turler", {})
+        except Exception as exc:
+            logger.warning("kap_sozluk.json okunamadı (%s) — KAP kalemleri "
+                           "kelime listesine düşecek", exc)
+            _KAP_SOZLUK = {}
+    return _KAP_SOZLUK
+
+
+def _kap_turu(baslik: str):
+    """Başlık bir KAP bildirim TÜRÜ mü? Öyleyse sözlük kaydını döndür.
+
+    KAP başlıkları kapalı bir sözlüktür ve olduğu gibi gelir ("Payların Geri
+    Alınmasına İlişkin Bildirim"). Bazı kaynaklar önüne "KAP *** ŞİRKET ***
+    KOD ***" ekliyor, o yüzden son parça da denenir.
+    """
+    b = (baslik or "").strip()
+    if not b:
+        return None
+    soz = _kap_sozluk()
+    if b in soz:
+        return soz[b]
+    if "***" in b:
+        son = b.split("***")[-1].strip()
+        if son in soz:
+            return soz[son]
+    return None
+
+
+def _kap_yon(baslik: str, ozet: str = "") -> int:
+    """KAP kaleminin ÖLÇÜLMÜŞ yönü: +1 / -1 / 0 (yön yok).
+
+    Yalnız ölçümü anlamlı çıkan türler yön verir. Ayrıca özet metnindeki
+    'bedelsiz' ayrımı: tür seviyesinde "Sermaye Artırımı" ölçümü -%2.01, ama
+    kırılımı bedelli -%1.04 (gürültü) / BEDELSİZ -%3.86 t=-5.0. Yön bedelsizde.
+    """
+    if "bedelsiz" in (ozet or "").lower() or "bedelsiz" in (baslik or "").lower():
+        return -1
+    v = _kap_turu(baslik)
+    if not v or v.get("sinif") != "yonlu":
+        return 0
+    o = v.get("olcum") or {}
+    return int(v.get("yon") or 0) if o.get("anlamli") else 0
+
+
 def _bilgisiz_baslik(baslik: str) -> bool:
     """Başlık yön bilgisi taşımıyor mu? True ise skorlamaya HİÇ girmez."""
     b = (baslik or "").strip()
     if len(b) < 12:                      # "Koç Holding", "ASELS - ASELSAN"
         return True
+    # Önce ÖLÇÜLMÜŞ sözlük: KAP türü "rutin" ise skora hiç girmez.
+    v = _kap_turu(b)
+    if v is not None:
+        return v.get("sinif") == "rutin"
     for k in _BILGISIZ_KALIP:
         if k.search(b):
             return True
@@ -1047,6 +1149,8 @@ def _classify(text: str) -> str:
     """
     Hibrit Sentiment Sınıflandırma:
     0. Boş/None metin kontrolü
+    0a. ÖLÇÜLMÜŞ KAP YÖNÜ: başlık bilinen bir KAP türüyse ve yönü ölçüldüyse
+        doğrudan döner — ölçüm kelime sayımını yener (bkz. _kap_yon)
     0c. DİL KAPISI: metin İngilizce ise Türkçe BERT atlanır (bkz. _classify_english)
     1. TEKNİK FİYAT HAREKETİ → Katman 1 atlanır (yanlış override önlenir)
     2. BERT çalışıyorsa ve güven >= %70 → BERT kararı geçerli
@@ -1057,6 +1161,21 @@ def _classify(text: str) -> str:
     # Boş metin kontrolü
     if not text or not text.strip():
         return "notr"
+
+    # KATMAN 0a: ÖLÇÜLMÜŞ KAP YÖNÜ — her şeyden önce gelir (2026-09-27).
+    #
+    # Başlık bilinen bir KAP bildirim türüyse ve o türün yönü 411.656 olayda
+    # ÖLÇÜLDÜYSE, kelime sayımına hiç gerek yok: ölçüm kelimeyi yener.
+    # Şu an iki tür yön veriyor:
+    #   Payların Geri Alınması   +%2.63 / t=+4.6 / n=5158
+    #   Bedelsiz sermaye artırımı -%3.86 / t=-5.0 / n=1160
+    # Ölçümü anlamsız çıkan türler 0 döner ve akış normal katmanlara devam
+    # eder — sözlük yalnız BİLDİĞİ yerde konuşur.
+    _ky = _kap_yon(text)
+    if _ky > 0:
+        return "olumlu"
+    if _ky < 0:
+        return "olumsuz"
 
     # KATMAN 0c: DİL KAPISI — Katman 2 Türkçe modeldir, İngilizce metin girmez
     if _is_english(text):
@@ -1835,6 +1954,28 @@ def analyze_news(
     _oncesi = len(clean_items)
     clean_items = [i for i in clean_items if not _bilgisiz_baslik(i.title)]
     result.bilgisiz_count = _oncesi - len(clean_items)
+
+    # AYNI KAP TÜRÜNÜN TEKRARI TEK OLAY SAYILIR (2026-09-27).
+    # Bir geri alım programı, alım yapılan her gün ayrı bildirim üretir;
+    # ölçülen etki sürecin kendisine aittir, bildirim sayısına değil.
+    # Ölçüldü: MAVI'nin haftalık akışında aynı tür beş kez geçiyordu ve skoru
+    # 82'ye taşıyordu. En yenisi tutulur, gerisi düşer.
+    _gorulen, _tekil = set(), []
+    for i in clean_items:
+        v = _kap_turu(i.title)
+        if v is None:
+            _tekil.append(i)
+            continue
+        anahtar = (i.title.split("***")[-1].strip() if "***" in i.title
+                   else i.title.strip())
+        if anahtar in _gorulen:
+            continue
+        _gorulen.add(anahtar)
+        _tekil.append(i)
+    if len(_tekil) != len(clean_items):
+        logger.info("%d tekrar eden KAP türü tek olaya indirildi",
+                    len(clean_items) - len(_tekil))
+        clean_items = _tekil
     if result.bilgisiz_count:
         logger.info(f"{result.bilgisiz_count} bilgisiz kalem skor dışı bırakıldı")
 

@@ -512,6 +512,74 @@ normalising symbols across JCR / Kobirate / Fitch scales. Worth doing, but it is
 the expensive option and it was correctly deferred until the free tests were
 exhausted.
 
+#### The measured KAP signals are now wired into the live score (2026-09-27)
+
+Until now the dictionary and the event study lived in `tools/` and
+`kap_sozluk.json` and touched nothing. Checking that turned up something worse
+than "not connected": the live keyword lists had one of the measured signals
+**backwards**.
+
+| Live engine before | Measured | |
+|---|---|---|
+| `("pay geri alımı", 2)` strong positive | +2.63%, t=+4.6 | ✅ correct by luck |
+| **`("bedelsiz", 2)` strong positive** | **−3.86%, t=−5.0** | ❌ **backwards** |
+| `("sermaye artırımı", 2)` strong positive | −2.01%, t=−3.1 | ❌ backwards |
+
+So the scoring layer was awarding points for the single most negative event in
+the whole study. (A correction to an earlier note in this file: `OFFICIAL_TERMS`
+is a *confidence* bonus map, not a direction map — only `FIN_POSITIVE_WEIGHTED`
+and `POSITIVE_WORDS` set sentiment.)
+
+**Three changes, all in `news_engine.py`:**
+
+1. **Signs.** `bedelsiz` and `sermaye artırımı` moved from
+   `FIN_POSITIVE_WEIGHTED` to `FIN_NEGATIVE_WEIGHTED`, and `bedelsiz` added to
+   the plain `NEGATIVE_WORDS` so both classifier paths agree. `pay geri alımı`
+   stays positive — it is the one the measurement confirms. Every entry carries
+   its n / median / t in a comment.
+2. **The dictionary is now authoritative for KAP items.** `_kap_sozluk()`,
+   `_kap_turu()` and `_kap_yon()` load `kap_sozluk.json` (114 types, 98% of the
+   archive) and `_bilgisiz_baslik` consults it before the hand-written regex
+   list. A measured direction is returned from the very top of `_classify`,
+   ahead of the language gate and every keyword layer — measurement beats word
+   counting, and where the dictionary has no measured direction it returns 0 and
+   the normal layers run.
+3. **Repeats of the same KAP type collapse to one event.** Found in the
+   end-to-end test, and it mattered: MAVI scored **82.0** off *five* daily
+   notices of one buyback programme. A company files a notice every day it buys;
+   the measured effect belongs to the programme, not to the notice count, and
+   the event study's overlapping windows were already flagged as an upper bound.
+   Collapsing to the newest per type took MAVI to 64.2 and TTKOM 71.7 → 56.7.
+
+**Why the dictionary rather than editing word lists.** This week's live flow
+showed the alternative failing: "Esas Sözleşme Tadili" — amending one clause of
+the articles of association, pure paperwork — scored **positive in six separate
+stocks** because "sözleşme" is in `POSITIVE_WORDS`. Same for "Sürdürülebilirlik
+Raporu" via "sürdürülebilir". Deleting those words is not the fix, because a
+real contract *is* good news; the fix is recognising the KAP **type**. Both now
+filter out as routine before any keyword sees them.
+
+**Verified on this week's live market flow** (2026-09-22 → 26, 1,372
+disclosures): 799 routine and filtered (58%), 143 producing a measured signal,
+396 still in the "read the body" bucket, 9 unknown. 28 items where the old path
+said positive and the dictionary disagrees — including KLRHO and MHRGY bonus
+issues, now correctly negative. End to end on live stocks: EKGYO 67.8, TTKOM
+56.7, MAVI 64.2, each driven by a buyback notice plus genuine free-text news,
+with the free-text path (ASELSAN's €1.23bn contract) still working.
+
+**This is the fourth live-cohort break** (after `takas_farki` 2026-08-03,
+`skor_cikis` 2026-08-29 and the weight change 2026-09-26). Taken deliberately:
+the previous three were parameter choices, this one is a **measured sign error**
+in production, and leaving the system awarding points for bonus issues until
+October is worse than restarting the selection-vs-random clock again. The
+managed-vs-passive comparison is unaffected, as always.
+
+**Limits, stated plainly.** Only two types carry a measured direction, so the
+layer speaks for a small slice of the flow and returns neutral for the rest —
+including the biggest category, which the dictionary marks "read the content"
+rather than guessing. That is the honest state: a narrow, verified signal
+instead of a broad, invented one.
+
 ### Persistence
 
 **`_PMDB` never silently falls back to local SQLite when Turso is configured (2026-08-03).** It used to: any network error dropped through to `sqlite3.connect(DB_PATH)`, which on Streamlit Cloud is `/tmp` and dies with the container. Some portfolio writes reached Turso and some went to a disk that was about to be erased — split-brain, with a NAV series that silently forks and no way to tell afterwards which row was right. Now: 3 attempts with exponential backoff (the session is discarded between attempts so a half-broken TLS connection isn't reused), then `TursoUnavailable` is raised. SQL errors still raise immediately — retrying an invalid statement is pointless. Note `is_cloud()` means "Turso is configured", not "running on Streamlit Cloud": with Turso set up locally, **offline local development now errors instead of falling back**. That is intended — a local fallback would fork the data just the same. `_safe_render` catches it and shows the error rather than a blank page.
