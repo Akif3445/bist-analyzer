@@ -1754,6 +1754,68 @@ variance as the system's; it is a control, not a strategy, and it is **not**
 adopted (see pre-registration). Monthly OLS t-statistics on 72 observations
 with no autocorrelation correction. The vault period is untouched.
 
+### News classifier tested against prices — `tools/haber_olcum.py` (2026-09-27, scoring v5)
+
+The user asked for the classifier to be tested now rather than after months of
+logging: take the text, run it through the filter, and check whether
+positive/negative was right. "Right" means what the price did afterwards: a
+phrase that brought gains is positive, one that brought losses is negative.
+The only dated Turkish text we can match to prices is the **KAP summary**
+field: 110,213 events (a repeat of the same stock and summary within 30 days
+counts once), 60,520 unique summaries, 2018-01 → 2024-07. The vault panel is
+used and the method is identical to `kap_olay.py`: 30-day return against the
+cross-sectional median, day-clustered t, and a split-half check. Caveat: this
+is **company language, not news headlines**.
+
+**1. The labels as a whole: negative works, positive does not.**
+
+| label | n | 30d median vs market | t | halves |
+|---|---|---|---|---|
+| olumsuz | 5,735 | **−1.61%** | **−3.7** | −1.67 / −1.57 |
+| olumlu | 16,362 | −0.23% | −0.5 | −0.13 / −0.30 |
+| nötr | 88,116 | −0.01% | −0.9 | |
+
+**2. Phrase by phrase** (738 phrases: weighted bank, word lists, strong
+regexes and context patterns). The rule was fixed before running: n ≥ 100,
+|t| ≥ 3, and both halves with the same sign.
+- **695 are not measurable.** They occur too rarely in KAP language, which is
+  the genre gap, and they are left untouched.
+- **3 confirmed**, all "bedelsiz" (−3.9% to −4.1%).
+- **0 reversed.**
+- **37 noise, now silenced:** sözleşme, kar/kâr, kar payı, anlaşma, dava,
+  istifa, birleşme, halka arz, artış, santral, sipariş, yatırım teşvik
+  (−3.5%, t −2.8: the "obviously good" incentive again), and others.
+- **3 kept** despite sitting just under the bar ("pay geri alımı" t +2.3,
+  "sermaye artırımı" t −2.7). Their direction was measured more strongly at
+  the disclosure-type level (`kap_olay`), so they are exempt, with the reason
+  stored in the file.
+
+**3. Applied** (`news_engine._etkin`, reading `haber_olcum.json`; the code
+lists stay as written so the hypotheses remain readable):
+- noise phrases cast no vote;
+- reversed phrases would switch lists (there are none);
+- an **"olumlu" label only raises the score when its direction is evidenced**
+  (the KAP buyback type, or a confirmed/kept positive phrase). Otherwise it
+  counts as neutral and is tallied in `olumlu_kanitsiz`. After silencing, the
+  positive set is still flat (−0.73%, t −0.6), while negatives stay negative
+  (−1.87%, t −2.9, in-sample).
+
+Also fixed while hand-checking live headlines: KAP titles
+`KAP *** COMPANY *** CODE *** subject` are now classified on the **subject
+only**. "…İHRACAT A.Ş." and "…TASARRUF Finansman" were scoring positive from
+the company name.
+
+**Hand check on live headlines** (80 stocks, 54 directional labels, before
+v5): 35 right (65%), 9 plainly wrong, 10 debatable. The wrong ones were
+company names, "Sözleşme Feshi" read as positive, and a target *cut* read as
+positive.
+
+**Live effect** (16 stocks): buybacks still lift EKGYO, MAVI, TTKOM, BALSU and
+ENERY, and EFOR's capital increase still pulls it down. ASELSAN's contract,
+the YKBNK lawsuit and the KTLEV resignation no longer move the score,
+because their phrase families measured as noise. The layer is now narrower
+and every direction it expresses is measured.
+
 ### 1.4 turnover — `pipeline_backtest.py devir [yil]` (2026-09-27): the live manager is not the tested manager
 
 **Live, measured first** (Turso `pm_trades`, managed BIST portfolios). The

@@ -267,10 +267,11 @@ _NEGATION_FLIP_TO_NEGATIVE = [re.compile(p, re.IGNORECASE) for p in [
 
 def _check_negation_context(text: str) -> str | None:
     """Negasyon/bağlam kontrolü. Çift yönlü kelimeleri doğru değerlendirir."""
-    for pat in _NEGATION_FLIP_TO_POSITIVE:
+    _poz, _neg = _etkin()["baglam"]
+    for pat in _poz:
         if pat.search(text):
             return "olumlu"
-    for pat in _NEGATION_FLIP_TO_NEGATIVE:
+    for pat in _neg:
         if pat.search(text):
             return "olumsuz"
     return None
@@ -513,10 +514,11 @@ FIN_NEGATIVE = [w for w, _ in FIN_NEGATIVE_WEIGHTED]
 
 def _check_strong_patterns(text: str):
     """Returns 'olumlu' | 'olumsuz' | None."""
-    for pat in _STRONG_POS_PATTERNS:
+    _poz, _neg = _etkin()["guclu"]
+    for pat in _poz:
         if pat.search(text):
             return "olumlu"
-    for pat in _STRONG_NEG_PATTERNS:
+    for pat in _neg:
         if pat.search(text):
             return "olumsuz"
     return None
@@ -528,18 +530,10 @@ def _check_strong_patterns(text: str):
 # tehlikeliydi: "gain" kelimesi "aGAINst" içinde, "kar" yine "KARar" içinde,
 # "mw" neredeyse her yerde eşleşiyordu. _kelime_kalibi Türkçe eklere izin
 # verir ("kârı" eşleşir) ama kök sınırını korur ("karar" eşleşmez).
-# TEMBEL kurulur: _kelime_kalibi bu dosyada DAHA AŞAĞIDA tanımlı, modül
-# yüklenirken burada çağırmak NameError veriyor.
-_FIN_POS_KALIP = None
-_FIN_NEG_KALIP = None
-
-
+# TEMBEL kurulur (_etkin): _kelime_kalibi bu dosyada DAHA AŞAĞIDA tanımlı,
+# modül yüklenirken burada çağırmak NameError veriyor.
 def _fin_kaliplari():
-    global _FIN_POS_KALIP, _FIN_NEG_KALIP
-    if _FIN_POS_KALIP is None:
-        _FIN_POS_KALIP = [(_kelime_kalibi(w), a) for w, a in FIN_POSITIVE_WEIGHTED]
-        _FIN_NEG_KALIP = [(_kelime_kalibi(w), a) for w, a in FIN_NEGATIVE_WEIGHTED]
-    return _FIN_POS_KALIP, _FIN_NEG_KALIP
+    return _etkin()["fin"]
 
 
 def _classify_financial_keywords(text: str) -> str:
@@ -886,6 +880,7 @@ class NewsAnalysisResult:
     total_news: int       = 0
     filtered_count: int   = 0    # spekülasyon nedeniyle filtrelenen
     bilgisiz_count: int   = 0    # evrak başlığı / TA spamı — skora girmeyen
+    olumlu_kanitsiz: int  = 0    # "olumlu" etiketli ama yönü ölçülmemiş — skoru yükseltmez
     headlines: list       = field(default_factory=list)
     news_items: list      = field(default_factory=list)
     kap_disclosures: list = field(default_factory=list)
@@ -929,14 +924,112 @@ def _kelime_kalibi(kelime: str) -> "re.Pattern":
                       re.IGNORECASE)
 
 
-_POS_KALIP = [_kelime_kalibi(w) for w in POSITIVE_WORDS]
-_NEG_KALIP = [_kelime_kalibi(w) for w in NEGATIVE_WORDS]
+# ÖLÇÜLMÜŞ ÖBEKLER (2026-09-27) — haber_olcum.json, tools/haber_olcum.py üretir.
+#
+# Sınıflandırıcının HER öbeği (ağırlıklı banka, düz kelime listeleri, güçlü
+# regex ve bağlam kalıpları) KAP özetleri üzerinde fiyata karşı ölçüldü:
+# öbeğin geçtiği bildirimden sonraki 30 günde hisse piyasadan iyi mi kötü mü
+# gitti? Karar dosyada, burada yalnız UYGULANIR:
+#   GURULTU    ölçüldü, yön yok       → öbek susturulur (oy vermez)
+#   TERS       ölçüldü, yön tersine    → öbek karşı listeye geçer
+#   DOGRULANDI / OLCULEMEDI            → dokunulmaz
+# Listeler kodda OLDUĞU GİBİ durur (neyin varsayıldığı okunabilsin); etkin
+# kopya buradan kurulur. Dosya yoksa ya da OLCUM_KAPALI ise eski davranış.
+import json as _json
+import os as _os
+
+OLCUM_DOSYA = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                            "haber_olcum.json")
+OLCUM_KAPALI = False
+_ETKIN = None
+
+
+def _olcum_sifirla():
+    """Etkin listeleri yeniden kur (ölçüm dosyası/bayrak değişince)."""
+    global _ETKIN
+    _ETKIN = None
+
+
+def _olcum_kararlari() -> dict:
+    if OLCUM_KAPALI:
+        return {}
+    try:
+        with open(OLCUM_DOSYA, encoding="utf-8") as f:
+            d = _json.load(f)
+    except Exception:
+        return {}
+    return {(o["liste"], o["anahtar"]): o["karar"] for o in d.get("obekler", [])}
+
+
+def _etkin() -> dict:
+    global _ETKIN
+    if _ETKIN is None:
+        kr = _olcum_kararlari()
+
+        def ayir(poz_ad, poz, neg_ad, neg, anahtar):
+            p = ([x for x in poz if kr.get((poz_ad, anahtar(x))) not in ("GURULTU", "TERS")]
+                 + [x for x in neg if kr.get((neg_ad, anahtar(x))) == "TERS"])
+            n = ([x for x in neg if kr.get((neg_ad, anahtar(x))) not in ("GURULTU", "TERS")]
+                 + [x for x in poz if kr.get((poz_ad, anahtar(x))) == "TERS"])
+            return p, n
+
+        fp, fn = ayir("FIN_POZ", FIN_POSITIVE_WEIGHTED, "FIN_NEG", FIN_NEGATIVE_WEIGHTED,
+                      lambda x: x[0])
+        kp, kn = ayir("KELIME_POZ", POSITIVE_WORDS, "KELIME_NEG", NEGATIVE_WORDS,
+                      lambda x: x)
+        _ETKIN = {
+            "fin": ([(_kelime_kalibi(w), a) for w, a in fp],
+                    [(_kelime_kalibi(w), a) for w, a in fn]),
+            "kelime": ([_kelime_kalibi(w) for w in kp], [_kelime_kalibi(w) for w in kn]),
+            "guclu": ayir("GUCLU_POZ", _STRONG_POS_PATTERNS, "GUCLU_NEG",
+                          _STRONG_NEG_PATTERNS, lambda x: x.pattern),
+            "baglam": ayir("BAGLAM_POZ", _NEGATION_FLIP_TO_POSITIVE, "BAGLAM_NEG",
+                           _NEGATION_FLIP_TO_NEGATIVE, lambda x: x.pattern),
+            # Yönü ÖLÇÜMLE olumlu çıkmış öbekler — skoru yükseltmeye yetkili tek olumlular
+            "kanitli_poz": _kanitli_pozitifler(),
+        }
+    return _ETKIN
+
+
+def _kanitli_pozitifler() -> list:
+    """haber_olcum.json'da ölçümle OLUMLU yönü kanıtlanmış öbeklerin kalıpları."""
+    try:
+        with open(OLCUM_DOSYA, encoding="utf-8") as f:
+            obekler = _json.load(f).get("obekler", [])
+    except Exception:
+        return []
+    out = []
+    for o in obekler:
+        yon = o["yon"] * (-1 if o["karar"] == "TERS" else 1)
+        if yon > 0 and o["karar"] in ("DOGRULANDI", "KORUNDU", "TERS"):
+            if o["liste"].startswith(("FIN", "KELIME")):
+                out.append(_kelime_kalibi(o["anahtar"]))
+            else:
+                out.append(re.compile(o["anahtar"], re.IGNORECASE))
+    return out
+
+
+def _olumlu_kanitli(baslik: str) -> bool:
+    """Bu olumlu başlığın yönü ölçümle destekleniyor mu?
+
+    Ölçüm kapalıysa (OLCUM_KAPALI) ya da dosya yoksa eski davranış: her
+    olumlu sayılır — kapıyı yalnız ölçüm kapatır.
+    """
+    if OLCUM_KAPALI or not _os.path.exists(OLCUM_DOSYA):
+        return True
+    b = baslik or ""
+    if _kap_yon(b) > 0:
+        return True
+    if "***" in b:
+        b = b.split("***")[-1]
+    return any(k.search(b) for k in _etkin()["kanitli_poz"])
 
 
 def _classify_keywords(text: str) -> str:
     """Genel anahtar kelime tabanlı fallback sentiment (kelime sınırlı)."""
-    pos = sum(1 for k in _POS_KALIP if k.search(text))
-    neg = sum(1 for k in _NEG_KALIP if k.search(text))
+    _poz, _neg = _etkin()["kelime"]
+    pos = sum(1 for k in _poz if k.search(text))
+    neg = sum(1 for k in _neg if k.search(text))
     if pos > neg:  return "olumlu"
     if neg > pos:  return "olumsuz"
     return "notr"
@@ -1254,6 +1347,16 @@ def _classify(text: str) -> str:
         return "olumlu"
     if _ky < 0:
         return "olumsuz"
+
+    # KAP başlığı "KAP *** ŞİRKET ADI *** KODLAR *** bildirim konusu" biçiminde
+    # gelir; kelime katmanları yalnız KONUYU okumalı. Ölçüldü (2026-09-27):
+    # "DMR Unlu Mamuller ... İHRACAT A.Ş. *** Özel Durum Açıklaması" ve
+    # "Katılımevim TASARRUF Finansman *** Özel Durum Açıklaması" şirket
+    # adındaki kelime yüzünden OLUMLU çıkıyordu.
+    if "***" in text:
+        text = text.split("***")[-1].strip()
+        if not text:
+            return "notr"
 
     # KATMAN 0c: DİL KAPISI — Katman 2 Türkçe modeldir, İngilizce metin girmez
     if _is_english(text):
@@ -2111,7 +2214,18 @@ def analyze_news(
                     recency = 0.7
         w *= recency
 
-        if item.sentiment == "olumlu":
+        # OLUMLU ETİKET YALNIZ KANITLIYSA SKORU YÜKSELTİR (2026-09-27).
+        # tools/haber_olcum.py, 110 bin KAP olayında: sınıflandırıcının
+        # "olumsuz" dediği metinlerden sonra hisse 30 günde piyasanın %1.6
+        # gerisinde kalıyor (t=-3.7, iki yarıda aynı); "olumlu" dediklerinden
+        # sonra HİÇBİR ŞEY olmuyor (%-0.2, t=-0.5 — etkisiz öbekler
+        # susturulduktan sonra da %-0.7, t=-0.6). Kanıtsız olumlu etiket skoru
+        # yukarı itmez, nötr sayılır. İstisna: yönü ölçülmüş olumlu (KAP
+        # geri alım türü, doğrulanmış/korunmuş olumlu öbekler).
+        if item.sentiment == "olumlu" and not _olumlu_kanitli(item.title):
+            result.olumlu_kanitsiz += 1
+            result.neutral_count += 1
+        elif item.sentiment == "olumlu":
             weighted_pos += w
             result.positive_count += 1
         elif item.sentiment == "olumsuz":

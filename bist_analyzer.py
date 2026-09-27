@@ -206,7 +206,9 @@ WEIGHTS = {
 # (2026-07-13 öncesi). v2: momentum teknik + 45/25/20/10 (kalibrasyon sonrası).
 # v3: haber 25->10 + habersizken teknige devir (2026-09-26)
 # v4: fiyat yankısı başlıkları haber skorundan çıkarıldı (2026-09-27, news_engine._FIYAT_YANKISI)
-SCORING_VERSION = "v4"
+# v5: haber öbekleri fiyata karşı ölçüldü; etkisizler susturuldu, kanıtsız olumlu
+#     skoru yükseltmez (2026-09-27, tools/haber_olcum.py → haber_olcum.json)
+SCORING_VERSION = "v5"
 
 # BISTScore JSON serialization
 
