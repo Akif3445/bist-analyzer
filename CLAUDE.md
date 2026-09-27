@@ -15,6 +15,8 @@ streamlit run bist_analyzer.py          # run the app (also: Streamlid.bat)
 python test_backtest.py                 # ad-hoc manual backtest sanity check (not pytest, just run it)
 python test_rss.py                      # check which RSS news sources are currently reachable
 python tools/pmdb_admin.py enag-list    # PM DB maintenance: enag-list | enag-delete YYYY-MM | portfolios
+python skor_gunlugu.py yaz              # daily component log (robot runs it; ~13 min, writes Turso)
+python skor_gunlugu.py ozet             # what the component log holds, per day
 
 python pipeline_backtest.py dondur 5    # (re)download the price panel for a window
 python pipeline_backtest.py dondur-evren # re-fetch the UNIVERSE — new epoch, rare, invalidates old results
@@ -1547,15 +1549,25 @@ never executed in production — now runs with word-boundary matching.
     close to one bet, and the single-portfolio backtest cannot see it.
 1.4 **Holding period 10 days against a measured 30–90 day edge**; cost burden
     went 1.4% → 4.2%.
+1.5 **The relative-strength bonus never fires in production** (found
+    2026-09-27). `compute_bist_score` adds +5/+10 to the technical score when a
+    stock beats XU100 over 14 days, but `yf.download` now returns MultiIndex
+    columns, so `xu_df["Close"]` is a DataFrame, `float(...)` raises under
+    pandas 3, and the `except` swallows it — `relative_strength` is 0.0 for
+    every stock (30/30 in the test log). **Not fixed on purpose:** fixing it
+    changes live scores (a fifth cohort break), and the bonus was never in the
+    backtest or the calibration, so "fixing" it would add an untested term and
+    widen bias 3.5. The honest options are delete it or test it first; the
+    user decides.
 
 **Unmeasured — we do not know whether they work**
 2.1 206 words + 429 phrases + 76 regex patterns have **never** been validated
     against returns, and cannot be historically (Google serves no news archive).
 2.2 Only **2 of 114** KAP types carry a measured direction; 29% of the weekly
     flow gets an explicit "don't know".
-2.3 **Component scores are not durably logged** — `analysis_history` holds 32
-    rows and lives in `/tmp` on Streamlit Cloud, so it dies with the container.
-    **This is the blocker for 2.1 and 2.4 and the agreed next task.**
+2.3 ~~Component scores are not durably logged~~ — **DONE 2026-09-27**,
+    `skor_gunlugu.py` → Turso `skor_gunlugu`, daily, whole BIST universe. The
+    per-component IC becomes computable after a few months of rows.
 2.4 Analyst premium (20% of the score) and valuation (10%) have never been
     IC-tested at all.
 2.5 Credit ratings: 3,503 events, bodies fetchable, but 75% undetermined by
@@ -1584,36 +1596,60 @@ never executed in production — now runs with word-boundary matching.
 4.5 Zaman Makinesi still simulates the old portfolio logic.
 4.6 Actions disables cron after 60 days of repository inactivity.
 
-### NEXT TASK — 2.3, durable component logging
+### 2.3 DONE (2026-09-27) — `skor_gunlugu.py`, durable component logging
 
-Agreed with the user 2026-09-27: start here in the new session.
+**The handoff's premise was wrong in one place, and it shaped the fix.** It said
+"the robot scans ~500 stocks daily and records none of the component
+breakdown". The robot does not compute the composite at all:
+`PortfolioScanner.scan_all` produces the **technical** score only, and it runs
+weekly (when a shadow cohort is missing), not daily. `compute_bist_score` — the
+only place sentiment, premium and valuation exist — was called solely by the
+Hisse Analizi page. So there was nothing to "also write to Turso"; the
+composite had to be computed.
 
-**Why this one first.** We cannot measure roughly 40% of the live score
-(sentiment 10%, analyst premium 20%, valuation 10%) because the numbers are
-never kept. Historical validation is impossible for the news layer, so forward
-logging is the *only* route — and every month we delay is a month added before
-there is an answer. Everything in section 2 unblocks from here.
+**What it does.** A separate Actions step after the robot (`python
+skor_gunlugu.py yaz`) runs `compute_bist_score` — the live function itself, not
+a copy — over the whole BIST scan universe (~480 names) and writes one row per
+stock per day to Turso table `skor_gunlugu`, PK `(tarih, market, ticker)`.
+Each row carries the four component scores, `SCORING_VERSION`, the **effective
+weights actually applied that day** (`BISTScore._agirliklar`, exported from
+`compute_bist_score` — deriving them later from flags would silently break the
+moment `WEIGHTS` changes), the inputs behind them (news count / pos / neg /
+content-free, analyst target and analyst count, F/K, PD/DD), the price with its
+bar date (holidays and stale data are distinguishable), and `kaynaklar`, the
+news sources that returned items. `python skor_gunlugu.py ozet` prints coverage
+per day.
 
-**What exists already.** `analysis_history` in `bist_cache.db` already has the
-right columns — `teknik_score`, `sentiment_score`, `prim_score`, `deger_score`
-— so the schema is not the problem. Two things are:
-- `DB_PATH` resolves to `/tmp` on Streamlit Cloud, so rows die with the container
-  (32 rows survive locally, nothing survives in the cloud).
-- Only UI sessions write to it. The robot scans ~500 stocks daily and records
-  none of the component breakdown.
+Forward returns are **not** joined from `accuracy_validation` as the handoff
+proposed — that table is local SQLite too and dies with the container. The
+analysis step (a few months from now) computes forward returns from price
+history against `tarih`; the logged `fiyat` is a sanity check.
 
-**Shape of the fix.** Write component scores to **Turso** (the durable store,
-`_PMDB`, the same layer the `pm_*` tables use), not to local SQLite, and have
-the **robot** write them on every scan rather than relying on UI visits. Then
-the existing Signal Tracker machinery does the rest: `accuracy_validation`
-already carries forward returns at 1/3/7/14/30 days, so joining logged
-components to those returns gives a per-component IC in a few months.
+**Measured cost.** 8 threads, ~1.6 s per stock → ~13 min per day. 16 threads
+gave ~1.2 s but news sources started returning empty, i.e. throttling. The step
+has its own 28-minute limit and the job limit went 25 → 55, so management never
+shares a budget with it; `if: !cancelled()` so a red robot step does not also
+lose the day's log. Actions minutes: ~+300/month, total ~520 of 2000.
 
-**Care needed:** `_PMDB` raises `TursoUnavailable` rather than falling back
-(deliberate, see Persistence) — a logging failure must not abort the robot's
-management pass, so wrap it. And log the **component** scores plus
-`SCORING_VERSION`, otherwise v2/v3/v4 rows get mixed and the comparison is
-worthless.
+**Scope is BIST only, deliberately.** Analyst targets are auto-fetched for BIST
+only (US premium would always be missing), the news engine is Turkish-sourced,
+and the US universe (~1400) would triple the runtime.
+
+**Exit code tells the truth**, per the 2026-07-31 incident: red if fewer than
+80% of the universe was scored or if >90% of rows have `haber_n=0` (news
+sources throttling the CI IP would otherwise produce a confident, empty
+sentiment log). A day with **no KAP data at all** prints a loud warning but
+stays green — KAP via borsapy is a known-flaky external source, like ENAG.
+
+**Why the KAP column exists — observed while building this.** borsapy's KAP
+route failed for every ticker for several minutes ("Server disconnected",
+0.2 s), while KAP's own `byCriteria` API answered normally; minutes later it was
+back. During the outage TUPRS's sentiment read 57.1, afterwards 51.6. The two
+measured KAP signals (buyback, bonus issue) have **no input** during such a
+window and nothing else would show it, so sentiment rows are only interpretable
+alongside `kaynaklar`.
+
+Also found: see 1.5 below (relative-strength bonus is dead in production).
 
 **After 2.3, in order:** 3.3 the momentum benchmark (one day, settles the
 biggest open question), then 1.4 turnover (measured problem, free gain), then

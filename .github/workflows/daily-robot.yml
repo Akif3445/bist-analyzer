@@ -19,7 +19,9 @@ permissions:
 jobs:
   robot:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 25 → 55: skor günlüğü (~480 hisse × tam bileşik skor, ~13 dk) eklendi.
+    # Robotun kendisi yine kendi adım sınırıyla korunuyor.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 
@@ -44,4 +46,19 @@ jobs:
           # workflow_dispatch'te schedule boştur → değer '' → elle koşuda
           # her iki piyasa işlenir (kasıtlı: elle tetikleme tam tur demektir).
           ROBOT_ONLY_MARKET: ${{ github.event.schedule == '30 21 * * 1-5' && 'US' || (github.event.schedule == '40 15 * * 1-5' && 'BIST' || '') }}
+        timeout-minutes: 25
         run: python daily_robot.py
+
+      # Bileşen günlüğü AYRI adım: yönetim turuyla aynı süre sınırını
+      # paylaşmasın, ve günlükteki bir sorun yönetimi asla geciktirmesin.
+      # `!cancelled()`: robot adımı kırmızı bitse de (ör. tek bir piyasanın
+      # denetim hatası) günlük yine yazılsın — o günün kaydı kaybolmasın.
+      # US turunda (ROBOT_ONLY_MARKET=US) betik kendini atlar.
+      - name: Skor bileşen günlüğü
+        if: ${{ !cancelled() }}
+        timeout-minutes: 28
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          ROBOT_ONLY_MARKET: ${{ github.event.schedule == '30 21 * * 1-5' && 'US' || (github.event.schedule == '40 15 * * 1-5' && 'BIST' || '') }}
+        run: python skor_gunlugu.py yaz

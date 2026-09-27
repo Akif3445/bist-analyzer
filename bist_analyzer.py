@@ -1911,6 +1911,10 @@ def compute_bist_score(
         w_deger   = 0
 
     total_w = w_teknik + w_sentiment + w_prim + w_deger  # 100 veya değişken
+    # Etkin ağırlıklar skor günlüğüne yazılır (skor_gunlugu.py). Bayraklardan
+    # sonradan türetmek WEIGHTS değiştiği an yanlış olurdu; sürümler arası
+    # karşılaştırma için o gün GERÇEKTE uygulanan ağırlık saklanmalı.
+    result._agirliklar = (w_teknik, w_sentiment, w_prim, w_deger)
 
     result.total_score = round(
         (
