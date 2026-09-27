@@ -33,6 +33,12 @@ python pipeline_backtest.py uk 8        # UK transfer test — the method did NO
 python pipeline_backtest.py transfer UK 8   # generic form; markets in TRANSFER_PIYASA
 python pipeline_backtest.py kasa        # data vault status — what is locked
 python pipeline_backtest.py kasa-ac 8 EVET  # OPEN the vault — once, in October
+
+python tools/kap_gecmis.py cek 2018-01-01 2024-08-31  # pull KAP history (weekly chunks, ~35 min)
+python tools/kap_gecmis.py ozet         # what is in kap_veri/
+python tools/kap_olay.py --min-ornek 50 # event study: which disclosure type moves the price
+python tools/kap_ayrim.py sermaye       # split a type by summary text and measure each group
+python tools/kap_metin.py cek "Kredi Derecelendirmesi" 800   # fetch disclosure bodies
 ```
 
 `tools/pmdb_admin.py` exists so DB maintenance doesn't require handing Claude Code a blanket "run any Python" permission — the local `.claude/settings.local.json` allows only `python tools/pmdb_admin.py:*`, so the possible operations are bounded by this script's subcommands. Add new maintenance actions as subcommands here rather than widening the permission rule.
@@ -1498,6 +1504,126 @@ same reason as the `min_tl_vol` mismatch — a total-return benchmark is not
 available on our data source for BIST or the UK, so switching only the US would
 make the three markets mutually incomparable while invalidating every published
 table. State it in the presentation; a reviewer will ask.
+
+## WHERE WE ARE AND WHAT IS NEXT (handoff, 2026-09-27)
+
+Read this first in a new session. It supersedes the ordering in "Agreed next
+steps" below, which is now partly done.
+
+### What exists after the KAP work
+
+| Asset | What it is |
+|---|---|
+| `kap_veri/` (gitignored) | **411,656 KAP disclosures**, 2018-01 → 2024-08, 1,031 stocks, 192 types, 90% with a summary. Rebuild with `tools/kap_gecmis.py`, ~35 min |
+| `kap_sozluk.json` (tracked) | **114 disclosure types**, 98% of the archive, each with class (rutin / yonlu / icerik / sayisal) and an `olcum` block carrying n, median, pos%, t |
+| `tools/kap_olay.py` | Event study — abnormal return by type, day-clustered t, vault-aware |
+| `tools/kap_ayrim.py` | Splits one type into subgroups by summary text and measures each |
+| `tools/kap_metin.py` | Fetches disclosure bodies (`oda_ExplanationTextBlock`), verified working |
+
+### What is actually wired into the live score
+
+Two measured signals, both live in `news_engine.py` as of 2026-09-27:
+
+| Signal | n | 30d median | t |
+|---|---|---|---|
+| Payların Geri Alınması (buyback) | 5,158 | **+2.63%** | +4.6 |
+| Bedelsiz sermaye artırımı (bonus issue) | 1,160 | **−3.86%** | −5.0 |
+
+The dictionary is authoritative for KAP items (`_kap_turu` / `_kap_yon`, consulted
+at the top of `_classify` and inside `_bilgisiz_baslik`), repeated notices of the
+same type collapse to one event, and the 429-phrase weighted bank — which had
+never executed in production — now runs with word-boundary matching.
+
+### The open problem list
+
+**Steering the system wrong**
+1.1 **Price echo is counted twice.** "THY 300 TL'nin altına geriledi" classifies
+    negative, but that is the price move the technical score already sees —
+    `_is_technical_price_move` does not catch this phrasing. It creates
+    correlation between two components that are supposed to be independent.
+1.2 Live cohorts now carry **four config breaks**; the selection-vs-random clock
+    keeps restarting. Managed-vs-passive is unaffected.
+1.3 **35 portfolios hold 49 unique stocks** — a set that looks diversified is
+    close to one bet, and the single-portfolio backtest cannot see it.
+1.4 **Holding period 10 days against a measured 30–90 day edge**; cost burden
+    went 1.4% → 4.2%.
+
+**Unmeasured — we do not know whether they work**
+2.1 206 words + 429 phrases + 76 regex patterns have **never** been validated
+    against returns, and cannot be historically (Google serves no news archive).
+2.2 Only **2 of 114** KAP types carry a measured direction; 29% of the weekly
+    flow gets an explicit "don't know".
+2.3 **Component scores are not durably logged** — `analysis_history` holds 32
+    rows and lives in `/tmp` on Streamlit Cloud, so it dies with the container.
+    **This is the blocker for 2.1 and 2.4 and the agreed next task.**
+2.4 Analyst premium (20% of the score) and valuation (10%) have never been
+    IC-tested at all.
+2.5 Credit ratings: 3,503 events, bodies fetchable, but 75% undetermined by
+    keyword — needs the rating symbol parsed and compared to the company's
+    previous rating.
+2.6 The weighted bank's ±1 threshold means a single weight-1 term can never
+    decide; it always returns neutral.
+
+**Evidence**
+3.1 Selection fails in 2 of 3 markets on the development window — BIST 10th
+    percentile, UK 22nd, US 94th.
+3.2 DSR 0.03–0.14 on the development window: no statistically defensible edge.
+3.3 **The momentum benchmark has still not been run.** Every result across four
+    market-periods lines up with "did momentum pay here, then?", and a
+    long-only momentum portfolio is the control that would settle it.
+3.4 Benchmark dividend bias: index comparisons flatter us by ~1.9 pts/yr in the
+    US, more in the UK and BIST.
+3.5 The backtest tests the technical core only; top-6 overlap with the live
+    composite is 3 of 6.
+3.6 The live liquidity filter is 20× more permissive than the backtest's.
+
+**Accepted limits**
+4.1 Capacity is a few million TL. 4.2 Survivorship bounded at ~2 pts real CAGR.
+4.3 No Turkish financial sentiment model or labelled dataset exists.
+4.4 KAP rate-limits; pull politely and never run two collectors at once.
+4.5 Zaman Makinesi still simulates the old portfolio logic.
+4.6 Actions disables cron after 60 days of repository inactivity.
+
+### NEXT TASK — 2.3, durable component logging
+
+Agreed with the user 2026-09-27: start here in the new session.
+
+**Why this one first.** We cannot measure roughly 40% of the live score
+(sentiment 10%, analyst premium 20%, valuation 10%) because the numbers are
+never kept. Historical validation is impossible for the news layer, so forward
+logging is the *only* route — and every month we delay is a month added before
+there is an answer. Everything in section 2 unblocks from here.
+
+**What exists already.** `analysis_history` in `bist_cache.db` already has the
+right columns — `teknik_score`, `sentiment_score`, `prim_score`, `deger_score`
+— so the schema is not the problem. Two things are:
+- `DB_PATH` resolves to `/tmp` on Streamlit Cloud, so rows die with the container
+  (32 rows survive locally, nothing survives in the cloud).
+- Only UI sessions write to it. The robot scans ~500 stocks daily and records
+  none of the component breakdown.
+
+**Shape of the fix.** Write component scores to **Turso** (the durable store,
+`_PMDB`, the same layer the `pm_*` tables use), not to local SQLite, and have
+the **robot** write them on every scan rather than relying on UI visits. Then
+the existing Signal Tracker machinery does the rest: `accuracy_validation`
+already carries forward returns at 1/3/7/14/30 days, so joining logged
+components to those returns gives a per-component IC in a few months.
+
+**Care needed:** `_PMDB` raises `TursoUnavailable` rather than falling back
+(deliberate, see Persistence) — a logging failure must not abort the robot's
+management pass, so wrap it. And log the **component** scores plus
+`SCORING_VERSION`, otherwise v2/v3/v4 rows get mixed and the comparison is
+worthless.
+
+**After 2.3, in order:** 3.3 the momentum benchmark (one day, settles the
+biggest open question), then 1.4 turnover (measured problem, free gain), then
+1.1 the price-echo double count.
+
+The user has also flagged wanting to move into **fundamental/financial-statement
+analysis** afterwards — `borsapy` exposes `income_stmt`, `balance_sheet`,
+`cashflow` and their quarterly variants, so earnings growth is computable
+numerically with no NLP at all. That is the first genuinely new data source
+since the project started; everything else has been a re-slice of price.
 
 ### Agreed next steps (2026-08-31, carried into a new session)
 
