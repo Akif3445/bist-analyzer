@@ -1563,16 +1563,14 @@ never executed in production — now runs with word-boundary matching.
     also holds ~12 days. The real gap is that live buys **daily** and runs a
     ~10% fixed stop, and neither was in the backtest. The daily-buying replica
     costs ~14 pts real/yr. See "1.4 turnover". Awaiting a design decision.
-1.5 **The relative-strength bonus never fires in production** (found
-    2026-09-27). `compute_bist_score` adds +5/+10 to the technical score when a
-    stock beats XU100 over 14 days, but `yf.download` now returns MultiIndex
-    columns, so `xu_df["Close"]` is a DataFrame, `float(...)` raises under
-    pandas 3, and the `except` swallows it — `relative_strength` is 0.0 for
-    every stock (30/30 in the test log). **Not fixed on purpose:** fixing it
-    changes live scores (a fifth cohort break), and the bonus was never in the
-    backtest or the calibration, so "fixing" it would add an untested term and
-    widen bias 3.5. The honest options are delete it or test it first; the
-    user decides.
+1.5 ~~The relative-strength bonus never fires in production~~ — **RESOLVED
+    2026-09-27.** The +5/+10 technical bonus had been silently dead (pandas 3
+    plus MultiIndex; the `except` swallowed the error) and was never in any
+    backtest or calibration. The **bonus is deleted**, which leaves live scores
+    unchanged (verified: THYAO/ASELS/MAVI technical 10.0/34.2/10.7, identical
+    before and after). The **calculation is fixed** and `relative_strength` is
+    now logged daily in `skor_gunlugu.rs`, so whether it predicts anything can
+    be measured forward before anyone wires it back in.
 
 **Unmeasured — we do not know whether they work**
 2.1 206 words + 429 phrases + 76 regex patterns have **never** been validated
@@ -1587,8 +1585,16 @@ never executed in production — now runs with word-boundary matching.
 2.5 Credit ratings: 3,503 events, bodies fetchable, but 75% undetermined by
     keyword — needs the rating symbol parsed and compared to the company's
     previous rating.
-2.6 The weighted bank's ±1 threshold means a single weight-1 term can never
-    decide; it always returns neutral.
+2.6 ~~The weighted bank's ±1 threshold is a bug~~ — **measured 2026-09-27: it
+    is a guard, and it stays.** Removing it would flip ~45 of 55 affected live
+    headlines to positive, mostly because of a company name ("Tera Yatırım
+    CEO'su görevden ayrıldı"). The weight-1 list is made of context-free
+    generic words. The real defect was `("yatırım", 1)` still sitting in
+    `FIN_POSITIVE_WEIGHTED`: it had been removed from `POSITIVE_WORDS` on
+    2026-09-26, but this second copy was missed. It is now removed. Exactly 2
+    labels changed, both correctly to negative: EFOR's capital increase, and a
+    CEO resignation. Before the threshold is ever loosened, the weight-1 list
+    must be cleaned.
 
 **Evidence**
 3.1 Selection fails in 2 of 3 markets on the development window — BIST 10th

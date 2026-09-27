@@ -351,7 +351,13 @@ FIN_POSITIVE_WEIGHTED = [
     ("sıçradı", 1), ("zıpladı", 1), ("toparlandı", 1), ("toparlanma", 1),
     ("güçlü", 1), ("kuvvetli", 1), ("olumlu", 1), ("pozitif", 1),
     ("iyileşme", 1), ("iyileşti", 1), ("genişleme", 1),
-    ("kar", 1), ("kâr", 1), ("kazanç", 1), ("yatırım", 1),
+    # "yatırım" ÇIKARILDI (2026-09-27): her aracı kurumun ve pek çok holdingin
+    # ADINDA geçiyor ("Tera Yatırım", "Yapı Kredi Yatırım"). 80 hisselik canlı
+    # akışta ağırlıklı bankanın tek-kelime eşleşmelerinin ~%80'i buydu; ±1
+    # eşiği onu tek başına susturuyordu ama ikinci bir zayıf kelimeyle yan
+    # yana gelince başlığı olumluya çeviriyordu. POSITIVE_WORDS'ten aynı
+    # gerekçeyle 2026-09-26'da çıkarılmıştı; bu kopya gözden kaçmıştı.
+    ("kar", 1), ("kâr", 1), ("kazanç", 1),
     ("ihracat", 1), ("kapasite", 1), ("büyüyor", 1),
     ("ralli", 1), ("değerlenme", 1), ("destek buldu", 1),
     ("mw", 1), ("rüzgar", 1), ("güneş enerjisi", 1), ("yenilenebilir", 1),
@@ -548,7 +554,15 @@ def _classify_financial_keywords(text: str) -> str:
     pos = sum(a for k, a in _pk if k.search(text))
     neg = sum(a for k, a in _nk if k.search(text))
 
-    # Eşik farkı: küçük farklar nötr sayılsın (1-2 puanlık fark anlamsız)
+    # Eşik farkı: küçük farklar nötr sayılsın (1-2 puanlık fark anlamsız).
+    #
+    # BİLEREK KORUNUYOR (ölçüldü 2026-09-27). Bu eşik tek başına bulunan
+    # ağırlık-1 kelimenin karar vermesini engelliyor ve bu bir hata gibi
+    # görünüyordu. 80 hisselik canlı akışta eşiği kaldırmak 55 başlığın ~45'ini
+    # "olumlu" yapardı, çoğu da yalnız şirket adındaki bir kelime yüzünden
+    # ("Tera Yatırım CEO'su görevden ayrıldı"). Ağırlık-1 listesi bağlamsız
+    # genel kelimelerden oluşuyor; eşik onların tek başına oy vermesini
+    # önleyen koruma. Kaldırmadan önce o liste temizlenmeli.
     diff = abs(pos - neg)
     if diff <= 1 and pos + neg > 0:
         return "notr"

@@ -1809,27 +1809,34 @@ def compute_bist_score(
     # Technical Analysis — stil hisse segmentine göre (bkz. _tech_style_for)
     technical           = TechnicalEngine.compute(stock.df, style=_tech_style_for(ticker, market))
 
-    # .5: Relative Strength vs benchmark index (cached)
+    # .5: Endekse göre göreli güç (14 gün) — YALNIZ ÖLÇÜLÜR, skora EKLENMEZ.
+    #
+    # Burada eskiden +5/+10 teknik skor bonusu vardı ve üretimde HİÇ
+    # çalışmıyordu (bulundu 2026-09-27): yf.download MultiIndex kolon
+    # döndürüyor, xu_df["Close"] DataFrame oluyor, float(...) pandas 3'te hata
+    # veriyor ve except onu yutuyordu — her hissede değer 0 kalıyordu. Bonus
+    # hiçbir kalibrasyonda ya da backtest'te yoktu; "düzeltip" canlıya sokmak
+    # test edilmemiş bir terim eklemek olurdu. Bu yüzden bonus kaldırıldı
+    # (canlı skor değişmedi — zaten hiç eklenmiyordu), hesap ise düzeltildi:
+    # değer skor_gunlugu'na yazılıyor, ileride IC'si ölçülüp karar verilebilir.
     _bench_idx = _default_index(market)
     try:
         if len(stock.df) >= 14:
             xu_df = _fetch_benchmark_cached(_bench_idx)
-            if xu_df is not None and not xu_df.empty and "Close" in xu_df:
-                xu_close = xu_df["Close"].dropna()
-                st_close = stock.df["Close"].dropna()
-                if len(xu_close) >= 14 and len(st_close) >= 14:
-                    base_st = float(st_close.iloc[-14])
-                    base_xu = float(xu_close.iloc[-14])
-                    if base_st > 0 and base_xu > 0:  # Division by zero koruması
-                        s_ret = (float(st_close.iloc[-1]) - base_st) / base_st
-                        x_ret = (float(xu_close.iloc[-1]) - base_xu) / base_xu
-                        rs_val = (s_ret - x_ret) * 100.0
-                        technical.relative_strength = round(float(rs_val), 1)
-
-                        if rs_val > 5.0:
-                            technical.score = min(100.0, float(technical.score + 10))
-                        elif rs_val > 0.0:
-                            technical.score = min(100.0, float(technical.score + 5))
+            if xu_df is not None and not xu_df.empty:
+                if isinstance(xu_df.columns, pd.MultiIndex):
+                    xu_df = xu_df.copy()
+                    xu_df.columns = xu_df.columns.get_level_values(0)
+                if "Close" in xu_df:
+                    xu_close = xu_df["Close"].dropna()
+                    st_close = stock.df["Close"].dropna()
+                    if len(xu_close) >= 14 and len(st_close) >= 14:
+                        base_st = float(st_close.iloc[-14])
+                        base_xu = float(xu_close.iloc[-14])
+                        if base_st > 0 and base_xu > 0:  # Division by zero koruması
+                            s_ret = (float(st_close.iloc[-1]) - base_st) / base_st
+                            x_ret = (float(xu_close.iloc[-1]) - base_xu) / base_xu
+                            technical.relative_strength = round((s_ret - x_ret) * 100.0, 1)
     except Exception as exc:
         log.warning("Relative strength hesaplama hatası: %s", exc)
 
