@@ -1866,8 +1866,19 @@ Expectation to state plainly: if October opens in Ayı, the managed cohorts
 will sit in cash, exactly as the old daily rule would have. The change shows up
 only once the regime allows buying.
 
-**After 2.3, in order:** ~~3.3 the momentum benchmark~~ (done), ~~1.4 turnover~~
-(measured, awaiting a design decision), then 1.1 the price-echo double count.
+**Status 2026-09-27, end of session.** Done: 2.3 logging, 3.3 momentum
+benchmark, 1.4 (live manager now buys monthly), 1.1 price echo (v4), 1.5 RS
+bonus, and 2.6 threshold (kept; the "yatırım" leftover removed). The fixed
+stop was tested and kept. Credit ratings (2.5) were **dropped by agreement**:
+low odds, a small real sample, high fetch cost.
+
+**Still open:**
+- 2.1 and 2.4 need months of `skor_gunlugu` rows first.
+- 3.4 and 3.6 are disclosures by decision.
+- 4.5 (Zaman Makinesi) is UI work.
+- The next genuinely new data source is **financial statements**
+  (`borsapy` `income_stmt` / `balance_sheet` / `cashflow`), which the user
+  flagged.
 
 The user has also flagged wanting to move into **fundamental/financial-statement
 analysis** afterwards — `borsapy` exposes `income_stmt`, `balance_sheet`,
