@@ -516,6 +516,26 @@ def _check_strong_patterns(text: str):
     return None
 
 
+# Ağırlıklı banka da KELİME SINIRINDA eşleşir (2026-09-27).
+#
+# Düz listede düzeltilen harf-dizisi hatası burada da vardı ve girdiler daha
+# tehlikeliydi: "gain" kelimesi "aGAINst" içinde, "kar" yine "KARar" içinde,
+# "mw" neredeyse her yerde eşleşiyordu. _kelime_kalibi Türkçe eklere izin
+# verir ("kârı" eşleşir) ama kök sınırını korur ("karar" eşleşmez).
+# TEMBEL kurulur: _kelime_kalibi bu dosyada DAHA AŞAĞIDA tanımlı, modül
+# yüklenirken burada çağırmak NameError veriyor.
+_FIN_POS_KALIP = None
+_FIN_NEG_KALIP = None
+
+
+def _fin_kaliplari():
+    global _FIN_POS_KALIP, _FIN_NEG_KALIP
+    if _FIN_POS_KALIP is None:
+        _FIN_POS_KALIP = [(_kelime_kalibi(w), a) for w, a in FIN_POSITIVE_WEIGHTED]
+        _FIN_NEG_KALIP = [(_kelime_kalibi(w), a) for w, a in FIN_NEGATIVE_WEIGHTED]
+    return _FIN_POS_KALIP, _FIN_NEG_KALIP
+
+
 def _classify_financial_keywords(text: str) -> str:
     """Ağırlıklı finans kelime bankası + negasyon/bağlam kontrolü ile sentiment."""
     # Önce negasyon/bağlam kontrolü: "zarar azaldı" → olumlu, "kar düştü" → olumsuz
@@ -524,9 +544,9 @@ def _classify_financial_keywords(text: str) -> str:
         logger.debug(f"Negasyon tespiti: {neg_result!r} | metin={text[:60]!r}")
         return neg_result
 
-    tl = text.lower()
-    pos = sum(w for word, w in FIN_POSITIVE_WEIGHTED if word in tl)
-    neg = sum(w for word, w in FIN_NEGATIVE_WEIGHTED if word in tl)
+    _pk, _nk = _fin_kaliplari()
+    pos = sum(a for k, a in _pk if k.search(text))
+    neg = sum(a for k, a in _nk if k.search(text))
 
     # Eşik farkı: küçük farklar nötr sayılsın (1-2 puanlık fark anlamsız)
     diff = abs(pos - neg)
@@ -1203,6 +1223,21 @@ def _classify(text: str) -> str:
 
     # KATMAN 2: BERT (kurulu ve hazırsa)
     if not _bert._ready:
+        # BERT YOKSA AĞIRLIKLI BANKA DEVREYE GİRER (2026-09-27).
+        #
+        # Eskiden burada doğrudan _classify_keywords çağrılıyordu, yani 429
+        # ifadelik ağırlıklı finans bankası ÜRETİMDE HİÇ ÇALIŞMIYORDU — ona
+        # ancak BERT çalışıp kararsız kalınca ulaşılıyordu ve BERT
+        # requirements.txt'te değil (RAM kısıtı). Duygu makinesinin yarısı
+        # ölü koddu.
+        #
+        # Sıra ÖNEMLİ: ağırlıklı banka ÇOK KELİMELİ ifadelerden oluşur
+        # ("kar marjı arttı", "ihale kazandı") ve tek kelimeden daha
+        # spesifiktir, o yüzden önce o konuşur. Nötr kalırsa düz listeye
+        # düşülür — bilgi kaybı olmaz.
+        _fin = _classify_financial_keywords(text)
+        if _fin != "notr":
+            return _fin
         return _classify_keywords(text)
 
     bert_label, bert_conf = _bert.predict_with_confidence(text)
