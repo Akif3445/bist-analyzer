@@ -636,6 +636,13 @@ def _mgmt_varsayilan() -> dict:
 
 MGMT_VARSAYILAN = _mgmt_varsayilan()
 
+# Gerçek ATR / yalnız-kapanıştan ATR oranı. Panel High/Low taşımadığı için
+# _precompute'taki ATR gün içi aralığı görmez ve küçük çıkar. Ölçüldü
+# (2026-09-27, 40 BIST hissesi, son 120 gün): medyan 2.01, %25-%75 [1.94, 2.12]
+# — dar ve tutarlı. Canlıdaki k×ATR stopunu backtest'e aynı mesafeyle taşımak
+# için gerekir; olmasa stop iki kat sıkı olur ve maliyeti abartılırdı.
+ATR_OLCEK = 2.0
+
 
 def _skor_at(feats, t, date):
     """t hissesinin `date` tarihindeki point-in-time skoru (yoksa None)."""
@@ -651,7 +658,33 @@ def _skor_at(feats, t, date):
 
 def _walk_managed(weights_by_date, closes, dates, feats, par, portfoy_tl=0.0):
     """Aylık hedefler + GÜNLÜK yönetim (trailing stop, skor çıkışı, tavan,
-    düşüş freni, takas eşiği). Nakit gerçek pozisyondur (getirisi 0)."""
+    düşüş freni, takas eşiği). Nakit gerçek pozisyondur (getirisi 0).
+
+    Canlıda olup burada VARSAYILAN OLARAK OLMAYAN iki mekanizma seçenekle
+    açılabilir (1.4 devir ölçümü, 2026-09-27); ikisi de kapalıyken davranış
+    öncekiyle birebir aynıdır:
+      par["atr_stop"]    = k  → alışta giriş − k×ATR sabit stop (canlı:
+                                PortfolioManager.STOP_MULTS). Panel yalnız
+                                kapanış taşıdığı için ATR ATR_OLCEK ile büyütülür.
+      par["gunluk_alim"] = True → boştaki nakit her gün değerlendirilir
+                                (canlı: PortfolioDoctor adım 4); kapalıyken nakit
+                                ay başına kadar bekler.
+    s.attrs["tutma"] (çıkışlarda iş günü cinsinden elde tutma listesi) ve
+    s.attrs["devir"] (tek yön devir toplamı) her koşuda yazılır — NAV'a dokunmaz.
+    """
+    atr_k  = float(par.get("atr_stop", 0) or 0)
+    gunluk = bool(par.get("gunluk_alim", False))
+    giris, stop_px, son_satis = {}, {}, {}
+    tutmalar, devir_top = [], 0.0
+    if gunluk:
+        from bist_analyzer import PortfolioDoctor as _PD
+        _aday_min = float(_PD.KURAL["min_aday_skor"])
+        _bekle = int(_PD.KURAL["bekleme_gun"])
+        _gun_max = int(_PD.KURAL["gunluk_islem"])
+        _ix = pd.DatetimeIndex(dates)
+        _hz = lambda k: pd.DataFrame({t: f[k] for t, f in feats.items()}).reindex(
+            _ix, method="ffill", limit=5)
+        G_S, G_C, G_SMA, G_TV = _hz("score"), _hz("close"), _hz("sma200"), _hz("tlvol")
     trail = par["trailing_pct"] / 100.0
     fren  = par["dusus_freni"] / 100.0
     tavan = par["max_pozisyon"] / 100.0
@@ -698,6 +731,8 @@ def _walk_managed(weights_by_date, closes, dates, feats, par, portfoy_tl=0.0):
             for s in cur.values():
                 s["w"] /= toplam
 
+        w_bas = {t: st["w"] for t, st in cur.items()}   # devir/tutma defteri için
+
         # 2) GÜNLÜK YÖNETİM
         satilan_w = 0.0
         satilanlar = {}      # ticker -> satılan ağırlık (piyasa etkisi için)
@@ -711,6 +746,11 @@ def _walk_managed(weights_by_date, closes, dates, feats, par, portfoy_tl=0.0):
                 continue
             if not (pd.notna(p) and p > 0):
                 continue
+            # a0) sabit ATR stopu (yalnız atr_stop > 0 iken; canlıdaki "Stop kesildi")
+            if atr_k and t in stop_px and float(p) <= stop_px[t]:
+                satilan_w += cur[t]["w"]
+                satilanlar[t] = satilanlar.get(t, 0) + cur[t]["w"]
+                del cur[t]; continue
             # a) takip eden stop
             if cur[t]["peak"] > 0 and float(p) <= cur[t]["peak"] * (1 - trail):
                 satilan_w += cur[t]["w"]
@@ -796,10 +836,60 @@ def _walk_managed(weights_by_date, closes, dates, feats, par, portfoy_tl=0.0):
             cur = yeni_cur
             ri += 1
 
+        # 4) GÜNLÜK NAKİT DEĞERLENDİRME (yalnız gunluk_alim) — PortfolioDoctor
+        # adım 4'ün kopyası: skor >= min_aday_skor, SMA200 üstü, likit, yakın
+        # zamanda satılmamış, sektör tavanı; günde en fazla gunluk_islem alım.
+        if gunluk and v >= nav_peak * (1 - fren):
+            nakit = 1.0 - sum(st["w"] for st in cur.values())
+            if nakit >= 0.08:
+                sk, pr, sm, tv = G_S.iloc[i], G_C.iloc[i], G_SMA.iloc[i], G_TV.iloc[i]
+                uygun = sk[(sk >= _aday_min) & (pr > sm) & (tv >= MIN_TL_VOL)].dropna()
+                sek_n = {}
+                for t in cur:
+                    sek_n[_sector_of(t)] = sek_n.get(_sector_of(t), 0) + 1
+                alinan = 0
+                for t in uygun.sort_values(ascending=False).index:
+                    if alinan >= _gun_max or nakit < 0.08:
+                        break
+                    if t in cur or i - son_satis.get(t, -10**6) < _bekle:
+                        continue
+                    sec = _sector_of(t)
+                    if sek_n.get(sec, 0) >= SECTOR_CAP:
+                        continue
+                    w_y = min(nakit, tavan, 1.0 / MAX_POS)
+                    v *= (1 - COST_RT / 2 * w_y)
+                    islem_maliyeti_toplam += COST_RT / 2 * w_y
+                    cur[t] = {"w": w_y, "peak": float(pr[t])}
+                    nakit -= w_y
+                    sek_n[sec] = sek_n.get(sec, 0) + 1
+                    alinan += 1
+
+        # Defter: giren/çıkan pozisyonlar ve günün tek yön devri
+        for t in set(w_bas) - set(cur):
+            if t in giris:
+                tutmalar.append(i - giris.pop(t))
+            son_satis[t] = i
+            stop_px.pop(t, None)
+        for t in set(cur) - set(w_bas):
+            giris[t] = i
+            if atr_k:
+                try:
+                    _f = feats[t]
+                    _j = _f["close"].index.searchsorted(d1, side="right") - 1
+                    _px = float(_f["close"].iloc[_j])
+                    _atr = float(_f["atr_pct"].iloc[_j]) / 100.0 * ATR_OLCEK
+                    stop_px[t] = _px * (1 - atr_k * _atr)
+                except Exception:
+                    pass
+        devir_top += sum(abs(cur.get(t, {}).get("w", 0) - w_bas.get(t, 0))
+                         for t in set(w_bas) | set(cur)) / 2
+
         nav.append(v)
 
     s = pd.Series(nav, index=dates)
     s.attrs["maliyet"] = islem_maliyeti_toplam
+    s.attrs["tutma"] = tutmalar
+    s.attrs["devir"] = devir_top
     return s
 
 
@@ -1885,6 +1975,59 @@ def karsilastir(years=5):
     print(f"\npipeline_yonetim.csv yazıldı | toplam süre {time.time()-t0:.0f}s")
 
 
+# DEVİR ÖLÇÜMÜ (2026-09-27, açık madde 1.4) — canlıdaki yönetim, test edilen yönetim mi?
+#
+# Canlı ölçüm: yönetilen BIST portföylerinde medyan elde tutma skor_cikis
+# 43→39 sonrasında da ~8 iş günü, haftalık tek yön devir %40-50. En büyük
+# çıkış nedeni sabit ATR stopu (29 Ağu sonrası 516 satışın 180'i). Oysa
+# _walk_managed'de sabit ATR stopu YOK ve alım yalnız ay başında yapılıyor;
+# canlı sistem ise boşalan nakdi her gün yeniden yatırıyor. Yani doğrulanmış
+# sayılar (takas_farki, skor_cikis) canlıda koşan sistemin değil, ondan iki
+# mekanizma eksik bir sistemin sayıları.
+#
+# ÖN KAYITLI HİPOTEZ: bu iki mekanizma devri artırır ve getiriyi düşürür.
+# Dört yapılandırma, hepsi önceden sabit — tarama DEĞİL, canlı sistemin
+# kendisini ölçmek: taban / +ATR stop (3.5, orta-uzun vadenin canlı değeri) /
+# +günlük alım / ikisi birden (canlıya en yakın).
+def devir(years=8):
+    t0 = time.time()
+    print(f"=== DEVİR ÖLÇÜMÜ | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    print("Hipotez: sabit ATR stopu + günlük alım devri artırır, getiriyi düşürür.\n")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
+    reb = pd.date_range(dates[0], dates[-1], freq="MS")
+    reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+    wbd = {d: w for d in reb if (w := _pick_at(d, feats, ret_panel))}
+    xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
+    yil = (dates[-1] - dates[0]).days / 365.25
+
+    yap = [("taban (test edilen)", {}),
+           ("+ ATR stop 3.5", {"atr_stop": 3.5}),
+           ("+ günlük alım", {"gunluk_alim": True}),
+           ("+ ikisi (canlıya yakın)", {"atr_stop": 3.5, "gunluk_alim": True})]
+    satir = []
+    print("=" * 118)
+    for ad, ek in yap:
+        nav = _walk_managed(wbd, closes, dates, feats, {**MGMT_VARSAYILAN, **ek})
+        st = _stats(nav, xu_n, ad)
+        tut = np.array(nav.attrs["tutma"])
+        satir.append((ad, st, nav.attrs["devir"] / yil * 100,
+                      float(np.median(tut)) if len(tut) else float("nan"),
+                      len(tut) / yil, nav.attrs["maliyet"] * 100, nav.iloc[-1]))
+    print("=" * 118)
+    print(f"\n{'Yapılandırma':<26} {'son NAV':>8} {'reel/yıl':>9} {'MaxDD':>7} {'Sharpe':>7} "
+          f"{'devir/yıl':>10} {'tutma(gün)':>11} {'çıkış/yıl':>10} {'maliyet':>8}")
+    for ad, st, dv, tm, cy, ml, fn in satir:
+        print(f"{ad:<26} {fn:>8.2f} {st['reel_yillik']:>+8.1f}% {st['maxdd']:>6.1f}% "
+              f"{st['sharpe']:>7.2f} {dv:>9.0f}% {tm:>11.0f} {cy:>10.0f} {ml:>7.1f}%")
+    print("\nNot: canlıda ayrıca Ayı rejim kapısı, 5 gün min. tutma, kısmi kâr alma ve")
+    print("günlük takas var; bunlar modellenmedi. 'ikisi' satırı canlıya YAKIN, eşit değil.")
+    print(f"Tamamlandı ({time.time()-t0:.0f}s)")
+
+
 # MOMENTUM KONTROLÜ (2026-09-27) — "sistem bir momentum aracı mı?"
 #
 # Dört piyasa-dönemin hepsi "orada o zaman momentum ödedi mi?" sorusuyla aynı
@@ -2279,6 +2422,8 @@ if __name__ == "__main__":
                 sys.argv[3] if len(sys.argv) > 3 else "")
     elif _cmd == "pozisyon":
         pozisyon(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
+    elif _cmd == "devir":
+        devir(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     elif _cmd == "momentum":
         momentum(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     else:

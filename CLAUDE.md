@@ -33,6 +33,7 @@ python pipeline_backtest.py dsr 8       # deflated Sharpe — multiple-testing c
 python pipeline_backtest.py us 8        # US transfer test — out-of-sample in space
 python pipeline_backtest.py uk 8        # UK transfer test — the method did NOT transfer
 python pipeline_backtest.py momentum 8  # system vs textbook 12-1 momentum, BIST/US/UK
+python pipeline_backtest.py devir 8     # tested manager vs live mechanisms (ATR stop, daily buying)
 python pipeline_backtest.py transfer UK 8   # generic form; markets in TRANSFER_PIYASA
 python pipeline_backtest.py kasa        # data vault status — what is locked
 python pipeline_backtest.py kasa-ac 8 EVET  # OPEN the vault — once, in October
@@ -1551,7 +1552,10 @@ never executed in production — now runs with word-boundary matching.
 1.3 **35 portfolios hold 49 unique stocks** — a set that looks diversified is
     close to one bet, and the single-portfolio backtest cannot see it.
 1.4 **Holding period 10 days against a measured 30–90 day edge**; cost burden
-    went 1.4% → 4.2%.
+    went 1.4% → 4.2%. **Measured 2026-09-27, reframed:** the tested system
+    also holds ~12 days. The real gap is that live buys **daily** and runs a
+    ~10% fixed stop, and neither was in the backtest. The daily-buying replica
+    costs ~14 pts real/yr. See "1.4 turnover". Awaiting a design decision.
 1.5 **The relative-strength bonus never fires in production** (found
     2026-09-27). `compute_bist_score` adds +5/+10 to the technical score when a
     stock beats XU100 over 14 days, but `yf.download` now returns MultiIndex
@@ -1737,8 +1741,69 @@ variance as the system's; it is a control, not a strategy, and it is **not**
 adopted (see pre-registration). Monthly OLS t-statistics on 72 observations
 with no autocorrelation correction. The vault period is untouched.
 
-**After 2.3, in order:** ~~3.3 the momentum benchmark~~ (done, above), then 1.4
-turnover (measured problem, free gain), then 1.1 the price-echo double count.
+### 1.4 turnover — `pipeline_backtest.py devir [yil]` (2026-09-27): the live manager is not the tested manager
+
+**Live, measured first** (Turso `pm_trades`, managed BIST portfolios). The
+`skor_cikis` 43→39 change did **not** fix turnover. Median holding went from 6
+to 8 business days, and one-way turnover still runs at 40–50% of the portfolio
+per week. The largest exit reason is now the fixed ATR stop: 180 of 516 sells
+since 2026-08-29, plus 79 trailing, 159 score and 98 swap exits. The live stop
+sits at a median **10.3%** below entry (5–18%).
+
+**The cause is structural, not a parameter.** `_walk_managed`, which produced
+every validated management number (`takas_farki`, `skor_cikis`, the
+walk-forward), differs from `PortfolioDoctor` in two ways:
+1. it has **no fixed ATR stop**, only the 15% trailing stop;
+2. it **buys only at the monthly rebalance** toward fresh `_pick_at` targets.
+   Live managed portfolios never get a monthly target list at all. Freed cash
+   is redeployed **daily** into the top scanner scores (≥57, SMA200, sector
+   cap, max 2 per day), and that is the only way new names ever enter.
+
+Both mechanisms are now optional in `_walk_managed` (`atr_stop`,
+`gunluk_alim`; both off by default, and `karsilastir 8` is byte-identical:
+NAV 32.75, −0.8% real, −25.8%). The two replicas are faithful to the code
+paths, not to every rule. The regime gate, the 5-day minimum hold, partial
+profit-taking and daily swaps are **not** modelled. The stop needs
+`ATR_OLCEK = 2.0`, because the panel carries closes only and close-to-close ATR
+is half the true ATR (measured on 40 stocks: median 2.01, IQR 1.94–2.12).
+
+**Pre-registered:** the two mechanisms raise turnover and lower return. Vault
+window 2018-08 → 2024-08:
+
+| | final NAV | real/yr | MaxDD | Sharpe | turnover/yr | median hold |
+|---|---|---|---|---|---|---|
+| tested (baseline) | 32.75 | −0.8% | −25.8% | 0.10 | 707% | 12 days |
+| + ATR stop 3.5 | 32.62 | −0.8% | −25.8% | 0.09 | 707% | 12 |
+| **+ daily buying** | **13.28** | **−14.6%** | −32.8% | −0.42 | 1003% | 13 |
+| + both (closest to live) | 12.18 | −15.8% | −32.8% | −0.48 | 1005% | 13 |
+
+**Scored against the hypothesis:** half right, for a different reason.
+- **Daily redeployment is expensive:** real return falls by about 14 points a
+  year and the drawdown deepens. It is **not** uniform, though: it is worse in
+  4 of 7 calendar years (large losses in 2020, 2021 and 2024, gains in 2018,
+  2019 and 2023). It does not meet this file's "nearly every year" bar, so
+  read it as a large average effect with regime dependence, not a law. It
+  rhymes with the brake-release test (2026-08-18): buying back in right after
+  stop-outs is what costs.
+- **The 3.5×ATR stop is inert in the backtest**, but only because the backtest
+  picks are volatile. At the picks, 3.5×ATR sits a median 23% below entry, far
+  looser than live's 10.3%. Scaled to the **live** distance it costs NAV
+  32.75 → 24.88. That is a single window with no year split, so it is
+  suggestive only.
+- **The framing of 1.4 was partly wrong.** The *tested* system also holds only
+  ~12 days and turns over 707% a year. Short holding is not what separates
+  live from the validated configuration. Daily buying and a tighter stop are.
+
+**Consequence:** every validated management number in this file describes a
+monthly-rebalancing manager with no fixed stop. Production runs a
+daily-buying manager with a ~10% fixed stop. On the one replica we have, that
+manager is markedly worse. **Nothing is changed in production**: aligning it
+is a design decision (give managed portfolios a monthly `propose()` rebalance,
+and restrict the daily pass to exits), it would be the fifth cohort break, and
+it needs editor approval.
+
+**After 2.3, in order:** ~~3.3 the momentum benchmark~~ (done), ~~1.4 turnover~~
+(measured, awaiting a design decision), then 1.1 the price-echo double count.
 
 The user has also flagged wanting to move into **fundamental/financial-statement
 analysis** afterwards — `borsapy` exposes `income_stmt`, `balance_sheet`,
