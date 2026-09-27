@@ -3551,7 +3551,10 @@ class PortfolioManager:
                                  # rebalans anında NAV sabitlenir, sonrası oradan devam eder.
                                  ("nav_base",     "REAL DEFAULT 100"),
                                  ("rebalanced_at", "TEXT"),
-                                 ("managed",      "INTEGER DEFAULT 0")):
+                                 ("managed",      "INTEGER DEFAULT 0"),
+                                 # Aylık alım (2026-09-27): son aylık rebalansın ayı
+                                 # (YYYY-MM). Bkz. PortfolioDoctor.daily_manage adım 4.
+                                 ("aylik_rebal",  "TEXT")):
                 if kolon not in cols:
                     _PMDB.execute(f"ALTER TABLE pm_portfolios ADD COLUMN {kolon} {tanim}")
                     log.info("pm_portfolios: %s kolonu eklendi", kolon)
@@ -4507,6 +4510,11 @@ def _gerekce_kes(g: str, n: int = 180) -> str:
     return (g or "")[:n]
 
 
+# Aylık alıma geçişte (2026-09-27) mevcut portföylerin ilk aylık alımı bu
+# aydan SONRAKİ ay yapılır — bkz. PortfolioDoctor.daily_manage adım 4.
+AYLIK_ALIM_BASLANGIC = "2026-09"
+
+
 class PortfolioDoctor:
     """Günlük portföy yönetimi — gerçek bir portföy yöneticisinin sabah rutini.
 
@@ -4522,8 +4530,11 @@ class PortfolioDoctor:
     - Kazananı erken kesme: hedefte pozisyonun 1/3'ü satılır, kalan koşar
       (analyze-stops kalibrasyonu sert hedef-satışın momentumu öldürdüğünü
       göstermişti).
-    - Disiplin katmanı savrulmayı önler: min tutma süresi, satış sonrası bekleme,
-      günlük ihtiyari işlem tavanı, her işlemde maliyet.
+    - Disiplin katmanı savrulmayı önler: min tutma süresi, her işlemde maliyet.
+    - ÇIKIŞLAR GÜNLÜK, ALIM AYLIK (2026-09-27): yeni hisse yalnız ayın ilk
+      koşusunda, o ayın propose() önerisinden alınır — doğrulanmış backtest
+      (_walk_managed) böyle çalışıyor. Günlük alım ölçüldü ve reel getiriyi
+      yılda ~14 puan düşürdü (CLAUDE.md > 1.4).
     - Her aksiyon gerekçesiyle pm_trades'e yazılır (denetim izi + sunum kanıtı).
     """
 
@@ -4553,6 +4564,10 @@ class PortfolioDoctor:
         # yönü doğruladı (bkz. CLAUDE.md > takas_farki tablosu).
         "takas_farki":     6,
         "min_tutma_gun":   5,      # stop hariç, bu süreden önce satma
+        # Aşağıdaki üçü (bekleme_gun, gunluk_islem, min_aday_skor) 2026-09-27'den
+        # beri CANLIDA KULLANILMIYOR — günlük alım kaldırıldı, alım aylık
+        # öneriden yapılıyor. Yalnız pipeline_backtest'teki eski davranışın
+        # kopyası (gunluk_alim=True) okur; o ölçüm tekrarlanabilsin diye duruyor.
         "bekleme_gun":     10,     # sattığını bu süre geri alma
         "gunluk_islem":    2,      # ihtiyari (alım/takas) işlem tavanı
         "max_pozisyon":    30.0,   # tek pozisyon ağırlık tavanı %
@@ -4651,17 +4666,24 @@ class PortfolioDoctor:
         bugun = datetime.now().strftime("%Y-%m-%d")
         rapor = []
 
+        bu_ay = bugun[:7]
+        oneri_onbellek = {}      # (vade, profil) → propose() sonucu; günde bir kez
         for p in ports:
             pid = p["id"]
             pos = list(pos_map.get(pid, []))
-            if not pos:
+            # Ay başı mı? Kolon boşsa (aylık alımdan önce kurulan portföyler)
+            # ilk aylık alım EKİM 2026'da yapılır: aksi hâlde devreye alındığı
+            # hafta her portföy alım yapar, üç gün sonra 1 Ekim'de bir daha.
+            _son_ay = p.get("aylik_rebal") or max((p.get("created_at") or "")[:7],
+                                                  AYLIK_ALIM_BASLANGIC)
+            aylik_gun = _son_ay < bu_ay
+            if not pos and not aylik_gun:
                 continue
             prof = PortfolioManager.PROFILES.get(p.get("profile") or "Dengeli",
                                                  PortfolioManager.PROFILES["Dengeli"])
             fiyat = {x["ticker"]: scan[x["ticker"]].current_price
                      for x in pos if x["ticker"] in scan}
             aksiyonlar = []          # (ticker, aksiyon, yeni_agirlik, gerekce)
-            islem_butcesi = PortfolioDoctor.kural("gunluk_islem")
 
             # --- 0) Zirve fiyat güncelle (takip eden stop için) ---
             zirve_guncel = {}
@@ -4752,71 +4774,73 @@ class PortfolioDoctor:
                     aksiyonlar.append((t, "AZALT", w,
                                        f"%{w0:.0f} → %{w:.0f}: " + " · ".join(nedenler)))
 
-            # --- 4) NAKİT DEĞERLENDİRME / TAKAS (ihtiyari — bütçeli) ---
-            nakit = max(0.0, 100.0 - sum(hedef_w.values()))
-
-            tutulan = {x["ticker"] for x in kalan if x["ticker"] not in satilan}
-            sektor_say = {}
-            for t in tutulan:
-                sektor_say[_sector_of(t)] = sektor_say.get(_sector_of(t), 0) + 1
-
-            if ayi:
-                if nakit > 1:
-                    aksiyonlar.append(("-", "NAKİT", round(nakit, 1),
-                                       f"Ayı rejimi ({regime['score']}/7) — yeni alım yok, "
-                                       f"%{nakit:.0f} nakitte bekliyor"))
-            elif fren:
-                if nakit > 1:
-                    aksiyonlar.append(("-", "NAKİT", round(nakit, 1),
-                                       f"Portföy zirveden %{abs(dd):.1f} düştü (fren) — "
-                                       f"yeni alım durduruldu, %{nakit:.0f} nakit"))
-            elif nakit >= 8.0:
-                # Aday havuzu: portföyde olmayan, skoru yüksek, trendi sağlam
-                adaylar = sorted(
-                    [r for r in scan.values()
-                     if r.ticker not in tutulan
-                     and r.score >= PortfolioDoctor.kural("min_aday_skor")
-                     and r.price_above_sma200 and r.volume_ok
-                     and r.atr_pct <= prof["max_atr"]
-                     and PortfolioDoctor._son_satis_gunu(pid, r.ticker)
-                         >= PortfolioDoctor.kural("bekleme_gun")],
-                    key=lambda r: r.score, reverse=True)
-                for r in adaylar:
-                    if islem_butcesi <= 0 or nakit < 8.0:
-                        break
-                    sec = _sector_of(r.ticker)
-                    if prof["sector_cap"] > 0 and sektor_say.get(sec, 0) >= prof["sector_cap"]:
-                        continue
-                    _dogal = 100.0 / max(1, prof["max_pos"])   # profilin doğal ağırlığı
-                    w_yeni = round(min(nakit, tavan, _dogal), 1)
-                    aksiyonlar.append((r.ticker, "AL", w_yeni,
-                                       f"Skor {r.score:.0f}, SMA200 üstü, {sec} — "
-                                       f"boştaki %{w_yeni:.0f} nakit değerlendirildi"))
-                    nakit -= w_yeni
-                    sektor_say[sec] = sektor_say.get(sec, 0) + 1
-                    islem_butcesi -= 1
-
-                # Takas: en zayıf tutulan vs en iyi aday
-                if islem_butcesi > 0 and tutulan and adaylar:
-                    zayif = min((x for x in kalan if x["ticker"] in tutulan),
-                                key=lambda x: scan[x["ticker"]].score
-                                if x["ticker"] in scan else 100, default=None)
-                    if zayif is not None and zayif["ticker"] in scan:
-                        z_skor = scan[zayif["ticker"]].score
-                        z_yas = PortfolioDoctor._gun_farki(
-                            zayif.get("opened_at") or p.get("created_at"))
-                        en_iyi = next((r for r in adaylar
-                                       if r.ticker not in [a[0] for a in aksiyonlar]), None)
-                        if (en_iyi is not None
-                                and en_iyi.score - z_skor >= PortfolioDoctor.kural("takas_farki")
-                                and z_yas >= PortfolioDoctor.kural("min_tutma_gun")):
-                            w = float(zayif["weight"])
-                            aksiyonlar.append((zayif["ticker"], "SAT", 0.0,
-                                               f"Takas: skor {z_skor:.0f} → {en_iyi.ticker} "
-                                               f"{en_iyi.score:.0f} ({en_iyi.score-z_skor:.0f} puan iyi)"))
-                            aksiyonlar.append((en_iyi.ticker, "AL", round(w, 1),
-                                               f"Takas: {zayif['ticker']} yerine (skor {en_iyi.score:.0f})"))
-                            islem_butcesi -= 1
+            # --- 4) AYLIK ALIM (2026-09-27) ---
+            # Eskiden burada GÜNLÜK nakit değerlendirme + takas vardı: bir hisse
+            # satılınca boşalan para ertesi gün tarayıcının en yüksek skorlu
+            # hissesine yatırılıyordu. Doğrulanmış yönetim sonuçlarının HİÇBİRİ
+            # bu tasarımdan gelmiyordu — pipeline_backtest._walk_managed ayda bir,
+            # o ayın taze önerisine göre alım yapar. Aynı düzenek backtest'e
+            # günlük alımla koşturulunca reel getiri yılda ~14 puan düştü
+            # (−%0.8 → −%14.6, `pipeline_backtest.py devir 8`; CLAUDE.md > 1.4).
+            # Şimdi canlı yönetici test edilen yöneticiyle aynı kuralı izler:
+            # çıkışlar her gün, alım yalnız ayın ilk koşusunda.
+            if aylik_gun:
+                satilan = {t for t, a, _, _ in aksiyonlar if a == "SAT"}
+                tutulan = {x["ticker"]: hedef_w.get(x["ticker"], float(x["weight"]))
+                           for x in kalan if x["ticker"] not in satilan}
+                if ayi or fren:
+                    _neden = (f"Ayı rejimi ({regime['score']}/7)" if ayi
+                              else f"portföy zirveden %{abs(dd):.1f} düştü (fren)")
+                    aksiyonlar.append(("-", "NAKİT", round(100.0 - sum(tutulan.values()), 1),
+                                       f"Aylık alım yapılmadı: {_neden}"))
+                else:
+                    _anah = (p.get("horizon") or "orta", p.get("profile") or "Dengeli")
+                    if _anah not in oneri_onbellek:
+                        try:
+                            oneri_onbellek[_anah] = PortfolioManager.propose(
+                                list(scan.values()), _anah[0], _anah[1], regime, market=market)[0]
+                        except Exception as exc:
+                            log.warning("PortfolioDoctor: aylık öneri üretilemedi %s: %s", _anah, exc)
+                            oneri_onbellek[_anah] = []
+                    hedefler = oneri_onbellek[_anah]
+                    # Aday, tutulanların en zayıfını takas_farki kadar geçmeli
+                    # (_walk_managed ile birebir aynı kural).
+                    _skor = lambda t: scan[t].score if t in scan else 0.0
+                    yeni_w = {}
+                    for h in hedefler:
+                        t = h["ticker"]
+                        if t in tutulan:
+                            yeni_w[t] = float(h["agirlik"])
+                            continue
+                        if tutulan:
+                            z_sk = min(_skor(x) for x in tutulan)
+                            if _skor(t) - z_sk < PortfolioDoctor.kural("takas_farki"):
+                                continue
+                        yeni_w[t] = float(h["agirlik"])
+                    # Hedefte olmayan tutulanlar korunur (skoru çıkış eşiğinin
+                    # üstünde — değilse bugün zaten satıldı)
+                    for t, w in tutulan.items():
+                        yeni_w.setdefault(t, w)
+                    top = sum(yeni_w.values())
+                    if top > 100.0:
+                        yeni_w = {t: w * 100.0 / top for t, w in yeni_w.items()}
+                    # Bugün daha önce üretilmiş ağırlık aksiyonları aylık kararla
+                    # birleşir — aynı hisseye iki ağırlık aksiyonu yazılmasın.
+                    aksiyonlar = [a for a in aksiyonlar
+                                  if not (a[1] == "AZALT" and a[0] in yeni_w)]
+                    kar_alinanlar -= set(yeni_w)   # kâr alma aylık hedefe devredildi
+                    for t, w in yeni_w.items():
+                        w = round(w, 1)
+                        if t not in tutulan:
+                            aksiyonlar.append((t, "AL", w,
+                                               f"Aylık alım: {p.get('horizon')}/{p.get('profile')} "
+                                               f"önerisi, skor {_skor(t):.0f}"))
+                        elif abs(w - tutulan[t]) >= 0.5:
+                            aksiyonlar.append((t, "AYARLA", w,
+                                               f"Aylık dengeleme: %{tutulan[t]:.0f} → %{w:.0f}"))
+                if not dry_run:
+                    _PMDB.execute("UPDATE pm_portfolios SET aylik_rebal=? WHERE id=?",
+                                  (bu_ay, pid))
 
             if not aksiyonlar:
                 rapor.append({"pid": pid, "portfoy": p["name"], "aksiyonlar": []})
@@ -4881,7 +4905,7 @@ class PortfolioDoctor:
                               "weight, stop_price, target_price, peak_price, opened_at) "
                               "VALUES (?,?,?,?,?,?,?,?)",
                               (pid, t, f, yeni_w, stop, hedef, f, bugun)))
-            else:   # AZALT — ağırlık küçülür, pozisyon kalır
+            else:   # AZALT / AYARLA — yalnız ağırlık değişir, pozisyon kalır
                 if t in (kar_alinanlar or set()):
                     stmts.append(("UPDATE pm_positions SET weight=?, kar_alindi=1 "
                                   "WHERE pid=? AND ticker=?", (yeni_w, pid, t)))
@@ -5158,17 +5182,11 @@ class PortfolioAudit:
                 "kanit": m[2],
             })
 
-        m = metrikler.get("maliyet_yuku")
-        if m and m[1] >= N["maliyet_yuku"] and m[0] > E["maliyet_yuku_ust"]:
-            out.append({
-                "metrik": "maliyet_yuku",
-                "mesaj": f"İşlem maliyeti brüt hareketin %{m[0]*100:.0f}'ı ({m[2]}). "
-                         f"Sistem fazla işlem yapıyor.",
-                "parametre": "gunluk_islem",
-                "mevcut": PortfolioDoctor.kural("gunluk_islem"),
-                "onerilen": max(1, PortfolioDoctor.kural("gunluk_islem") - 1),
-                "kanit": m[2],
-            })
+        # maliyet_yuku ölçülmeye ve pm_audit'e yazılmaya devam eder ama artık
+        # parametre ÖNERMEZ (2026-09-27). Önerdiği `gunluk_islem`, günlük alım
+        # kaldırılınca hiçbir şeyi kontrol etmiyor; "Uygula" butonu etkisiz bir
+        # değişiklik kaydederdi. Aylık düzende devri süren tek kol takas_farki,
+        # onu yükseltmek ise ölçülmüş bir uçurumun yanlış tarafı (CLAUDE.md).
 
         m = metrikler.get("yonetilen_fark")
         if m and m[1] >= N["yonetilen_fark"] and m[0] < E["yonetilen_fark_alt"]:

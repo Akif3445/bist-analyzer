@@ -1795,12 +1795,47 @@ window 2018-08 → 2024-08:
   live from the validated configuration. Daily buying and a tighter stop are.
 
 **Consequence:** every validated management number in this file describes a
-monthly-rebalancing manager with no fixed stop. Production runs a
-daily-buying manager with a ~10% fixed stop. On the one replica we have, that
-manager is markedly worse. **Nothing is changed in production**: aligning it
-is a design decision (give managed portfolios a monthly `propose()` rebalance,
-and restrict the daily pass to exits), it would be the fifth cohort break, and
-it needs editor approval.
+monthly-rebalancing manager with no fixed stop. Production ran a
+daily-buying manager with a ~10% fixed stop, and on the one replica we have,
+that manager is markedly worse.
+
+**APPLIED 2026-09-27 (user-approved): exits daily, buying monthly.**
+`PortfolioDoctor.daily_manage` step 4 no longer redeploys cash or swaps every
+day. On the first run of each month (tracked in the new
+`pm_portfolios.aylik_rebal` column), each managed portfolio does what
+`_walk_managed` does at a rebalance:
+- fetch that month's `propose()` picks for its own horizon/profile;
+- held picks go to their target weight;
+- new picks are bought only if they beat the weakest holding by `takas_farki`;
+- holdings that are not in the picks are kept;
+- if the total exceeds 100%, everything is scaled down.
+
+Stops, the trailing stop, score exits, partial profit-taking and the 30% cap
+still run daily. What was kept, and why:
+- **Unchanged live safeguards:** the Ayı-regime gate and the drawdown brake
+  still block buying. Both existed before; BIST's backtest has no regime gate,
+  so this is a known remaining difference.
+- **The ~10% fixed stop stays.** Its cost is suggestive only and it was not
+  part of this decision.
+
+Other details:
+- `gunluk_islem`, `bekleme_gun` and `min_aday_skor` are now unused live. They
+  stay only for the `gunluk_alim` replica.
+- The cost audit no longer proposes `gunluk_islem`, which would have been a
+  no-op "Uygula" button.
+- Portfolios that existed before the switch make their first monthly buy in
+  **October 2026** (`AYLIK_ALIM_BASLANGIC`). Otherwise every portfolio would
+  have bought this week and again on 1 October.
+- Fully-cash portfolios are no longer skipped: they rebuy at month start.
+
+**Dry run on the live portfolios** (no writes). The market is currently in
+**Ayı (2/7)**, so the monthly pass correctly buys nothing: 34 "no monthly buy:
+bear regime" notes, plus 17 September-created portfolios that are not due yet.
+With the regime forced to Boğa it produced 22 buys and 22 re-weightings, with
+12 portfolios held back by the brake, and no portfolio above 100%.
+Expectation to state plainly: if October opens in Ayı, the managed cohorts
+will sit in cash, exactly as the old daily rule would have. The change shows up
+only once the regime allows buying.
 
 **After 2.3, in order:** ~~3.3 the momentum benchmark~~ (done), ~~1.4 turnover~~
 (measured, awaiting a design decision), then 1.1 the price-echo double count.
