@@ -1690,6 +1690,47 @@ alongside `kaynaklar`.
 
 Also found: see 1.5 below (relative-strength bonus is dead in production).
 
+**First week in production, and three silent failures (fixed 2026-10-06).**
+The log ran every weekday from 2026-09-28 (~470 rows a day). Two days were
+quietly wrong:
+- **2026-09-28:** 0 of 468 rows had an analyst target.
+- **2026-10-05:** only 300 of ~470 rows, no target and no KAP.
+
+The causes:
+1. **A failed TradingView query was cached for 4 hours.**
+   `fetch_tv_analyst_targets` returned `{}` on error and was itself
+   `@st.cache_data`, so a single failure meant "no target" for every stock
+   for 4 hours, and the Premium weight silently moved to Technical. The rows
+   looked valid but had been computed with a different formula. This affected
+   the **live app** too, not just the log. It is now split: the cached
+   `_tv_hedef_ham` **raises** on an error or an empty result (st.cache_data
+   does not cache exceptions), and the wrapper returns `{}`. Verified: a
+   failure followed by a success makes two queries, and the success is then
+   served from cache.
+2. **The step was killed by its 28-minute limit.** Per-stock time rose from
+   ~1.3 s to ~5 s, most likely because of the KAP outage. A killed step
+   prints no summary and loses its last unwritten batch.
+3. **The run started around 22:00 UTC instead of 15:40.** GitHub delays
+   scheduled jobs, so it overlapped the 21:30 US run.
+
+Fixes in `skor_gunlugu.py`:
+- **Analyst targets:** `TV_DENEME = 3` retries with backoff. If all fail, the
+  day is **sorunlu** (red) and the run continues target-less, with no
+  per-stock re-query.
+- **KAP probe** (`_kap_yokla`, 20 s, 3 tickers): if KAP is down,
+  `news_engine.KAP_KAPALI = True` for the run, so no stock waits on it, and
+  the day is **eksik** (green).
+- **Internal deadline** `SURE_SINIRI = 22 min`: remaining work is cancelled,
+  what exists is written, and the day is **sorunlu**.
+- **New table `skor_gunlugu_kosu`**, one quality row per run (written,
+  cancelled, `hedef_ok`, `kap_ok`, no-news share, `durum`). The past days were
+  backfilled: 09-28 and 10-05 are `sorunlu`. **Any analysis of `skor_gunlugu`
+  must join on this table and drop `sorunlu` days.**
+
+The workflow also got a `concurrency: daily-robot` group, so a delayed run
+waits instead of overlapping. All four scenarios (normal, TV down, KAP down,
+deadline) were tested against scratch SQLite.
+
 ### 3.3 momentum benchmark — `pipeline_backtest.py momentum [yil]` (2026-09-27)
 
 **Pre-registered before the first run** (the same text sits in the code above

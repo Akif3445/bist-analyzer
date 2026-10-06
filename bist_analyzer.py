@@ -1646,37 +1646,53 @@ class ValuationResult:
     prim_score: float             = 50.0
     deger_score: float            = 50.0
 
-@st.cache_data(ttl=14400, show_spinner=False)
 def fetch_tv_analyst_targets() -> dict:
     """TradingView screener'dan tüm BIST analist hedef fiyatları — TEK sorgu, 4 saat cache.
 
-    Dönüş: {ticker: {"target", "count", "high", "low"}}
+    Dönüş: {ticker: {"target", "count", "high", "low"}}; alınamazsa {}.
     En az 3 analist şartı: tek analistli hedefler gürültülü/güvenilmez.
-    Paket borsapy ile birlikte geliyor (tradingview-screener).
+
+    BAŞARISIZLIK ÖNBELLEĞE YAZILMAZ (2026-10-06). Eskiden hata durumunda {}
+    döndüren fonksiyonun KENDİSİ önbellekliydi: tek bir başarısız sorgu, 4 saat
+    boyunca HER hissede "hedef yok" demekti ve prim ağırlığı sessizce tekniğe
+    aktarılıyordu. Skor günlüğünde 28 Eylül ve 5 Ekim'de 470 hissenin hiçbirinde
+    hedef yoktu — satırlar geçerli görünüyor, aslında başka bir formülle
+    hesaplanmıştı. Şimdi önbellekli iç fonksiyon hata FIRLATIR (st.cache_data
+    istisnaları saklamaz), bu sarmalayıcı yakalar; sonraki çağrı yeniden dener.
     """
     try:
-        from tradingview_screener import Query
-        _n, df = (Query().set_markets("turkey")
-                  .select("name", "price_target_average", "price_target_high",
-                          "price_target_low", "recommendation_total")
-                  .limit(700).get_scanner_data())
-        out = {}
-        for _, r in df.iterrows():
-            t   = str(r.get("name") or "")
-            tgt = r.get("price_target_average")
-            cnt = r.get("recommendation_total")
-            if t and pd.notna(tgt) and pd.notna(cnt) and float(cnt) >= 3:
-                out[t] = {
-                    "target": float(tgt),
-                    "count":  int(cnt),
-                    "high":   float(r["price_target_high"]) if pd.notna(r.get("price_target_high")) else None,
-                    "low":    float(r["price_target_low"])  if pd.notna(r.get("price_target_low"))  else None,
-                }
-        log.info("TradingView hedef fiyat: %d hisse için konsensüs alındı", len(out))
-        return out
+        return _tv_hedef_ham()
     except Exception as exc:
         log.warning("TradingView hedef fiyat çekilemedi (prim bileşeni ağırlık dağıtır): %s", exc)
         return {}
+
+
+@st.cache_data(ttl=14400, show_spinner=False)
+def _tv_hedef_ham() -> dict:
+    """fetch_tv_analyst_targets'ın önbellekli çekirdeği — hatada/boşta FIRLATIR."""
+    from tradingview_screener import Query
+    _n, df = (Query().set_markets("turkey")
+              .select("name", "price_target_average", "price_target_high",
+                      "price_target_low", "recommendation_total")
+              .limit(700).get_scanner_data())
+    out = {}
+    for _, r in df.iterrows():
+        t   = str(r.get("name") or "")
+        tgt = r.get("price_target_average")
+        cnt = r.get("recommendation_total")
+        if t and pd.notna(tgt) and pd.notna(cnt) and float(cnt) >= 3:
+            out[t] = {
+                "target": float(tgt),
+                "count":  int(cnt),
+                "high":   float(r["price_target_high"]) if pd.notna(r.get("price_target_high")) else None,
+                "low":    float(r["price_target_low"])  if pd.notna(r.get("price_target_low"))  else None,
+            }
+    if not out:
+        # Boş sonuç da başarısızlıktır: BIST'te ~40 hissenin konsensüsü her
+        # zaman vardır. Boşu önbelleğe yazmak 4 saatlik sessiz kesinti demek.
+        raise RuntimeError("TradingView hedef sorgusu boş döndü")
+    log.info("TradingView hedef fiyat: %d hisse için konsensüs alındı", len(out))
+    return out
 
 
 class ValuationEngine:

@@ -16,6 +16,15 @@ on:
 permissions:
   contents: read
 
+# Koşular ÜST ÜSTE binmesin. GitHub zamanlanmış işleri saatlerce geciktirebiliyor:
+# 2026-10-05'te 15:40 UTC'lik BIST koşusu ~22:00 UTC'de başladı, yani 21:30
+# UTC'lik US koşusuyla aynı saatlere düştü. İki robotun aynı anda yfinance,
+# haber kaynakları ve Turso'ya yüklenmesi ikisini de yavaşlatır. Sıradaki
+# koşu öncekini İPTAL ETMEZ, bitmesini bekler.
+concurrency:
+  group: daily-robot
+  cancel-in-progress: false
+
 jobs:
   robot:
     runs-on: ubuntu-latest

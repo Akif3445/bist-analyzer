@@ -48,6 +48,32 @@ ISCI = 8            # ölçüldü: 8 işçi → hisse başı ~1.6s, 16 → ~1.2s
 YAZ_PARTI = 50      # Turso'ya kaç satırda bir yazılır (yarıda ölürse kayıp sınırlı)
 MIN_KAPSAMA = 0.80  # evrenin bundan azı skorlanabildiyse koşu HATALI sayılır
 MAX_HABERSIZ = 0.90 # satırların bundan fazlası haber_n=0 ise kaynaklar çökmüş olabilir
+# İç süre sınırı. Workflow adımı 28 dk'da ZORLA kesilir; o zaman özet basılmaz,
+# yazılmamış son parti kaybolur ve günün kalitesi hiçbir yere kaydedilmez
+# (2026-10-05: 470 hissenin 300'ünde böyle kesildi). Bu sınırda kalan işler
+# iptal edilir, eldeki yazılır, gün "eksik" diye kaydedilir.
+SURE_SINIRI = 22 * 60
+TV_DENEME = 3       # analist hedefi sorgusu kaç kez denenir (bekleme 10s, 30s)
+
+# Koşu başına kalite kaydı — analizde kusurlu günler satır satır tahmin
+# edilmek yerine buradan ayıklanır.
+KOSU_SQL = """
+    CREATE TABLE IF NOT EXISTS skor_gunlugu_kosu (
+        tarih     TEXT,
+        market    TEXT,
+        baslangic TEXT,
+        sure_sn   INTEGER,
+        evren     INTEGER,
+        yazilan   INTEGER,
+        hatali    INTEGER,
+        hedef_ok  INTEGER,   -- analist hedefleri alınabildi mi (0 → prim ağırlığı tekniğe gitti)
+        kap_ok    INTEGER,   -- koşu başında KAP (borsapy) yanıt verdi mi
+        habersiz  REAL,      -- haber_n=0 olan satır oranı
+        durum     TEXT,      -- tam | eksik | sorunlu
+        notlar    TEXT,
+        PRIMARY KEY (tarih, market)
+    )
+"""
 
 TABLO_SQL = """
     CREATE TABLE IF NOT EXISTS skor_gunlugu (
@@ -154,20 +180,55 @@ def yaz() -> int:
         print(f"HATA: skor_gunlugu tablosu hazırlanamadı — {type(exc).__name__}: {exc}")
         return 1
 
-    evren = ba.get_scan_universe(PIYASA)
-    # Paylaşılan önbellekleri iş parçacıkları başlamadan ısıt: yoksa ilk 8
-    # hisse aynı anda TradingView hedef sorgusunu ve endeks indirmesini
-    # tetikler (8 kopya istek, olası kısıtlama).
-    ba.fetch_tv_analyst_targets()
-    ba._fetch_benchmark_cached(ba._default_index(PIYASA))
-    print(f"    evren: {len(evren)} hisse, {ISCI} işçi")
+    try:
+        ba._PMDB.execute(KOSU_SQL)
+    except Exception as exc:
+        print(f"HATA: skor_gunlugu_kosu tablosu hazırlanamadı — {exc}")
+        return 1
 
+    baslangic = datetime.now().strftime("%Y-%m-%d %H:%M")
+    evren = ba.get_scan_universe(PIYASA)
+    sorun, notlar = [], []
+
+    # 1) ANALİST HEDEFLERİ — yeniden denenir; alınamazsa gün SORUNLU.
+    # Hedefsiz bir gün sessizce başka bir formülle (prim ağırlığı tekniğe
+    # devredilmiş) hesaplanmış olur; satırlar geçerli görünür ama değildir.
+    hedefler = {}
+    for deneme in range(TV_DENEME):
+        hedefler = ba.fetch_tv_analyst_targets()
+        if hedefler:
+            break
+        if deneme < TV_DENEME - 1:
+            time.sleep(10 * (3 ** deneme))
+    hedef_ok = bool(hedefler)
+    if not hedef_ok:
+        sorun.append(f"analist hedefleri {TV_DENEME} denemede alınamadı")
+        # Her hisse için sorguyu yeniden denemesin (470 istek, kısıtlama riski):
+        # bu koşu hedefsiz yürür, satırlarda w_prim=0 bunu zaten gösterir.
+        ba.fetch_tv_analyst_targets = lambda: {}
+    print(f"    analist hedefi: {len(hedefler)} hisse" + ("" if hedef_ok else "  ← ALINAMADI"))
+
+    # 2) KAP YOKLAMASI — düşükse bu koşu için kapatılır (her hissede bekleme).
+    kap_ok = _kap_yokla()
+    if not kap_ok:
+        import news_engine as _ne
+        _ne.KAP_KAPALI = True
+        notlar.append("KAP yanıt vermedi, koşu KAP'sız")
+    print(f"    KAP (borsapy): {'yanıt veriyor' if kap_ok else 'YANIT YOK — bu koşu KAPsız'}")
+
+    ba._fetch_benchmark_cached(ba._default_index(PIYASA))
+    print(f"    evren: {len(evren)} hisse, {ISCI} işçi, iç süre sınırı {SURE_SINIRI // 60} dk")
+
+    # 3) SKORLAMA — iç süre sınırıyla
     t0 = time.time()
-    bekleyen, yazilan, hatali = [], 0, []
+    bekleyen, yazilan, hatali, kesildi, iptal_n = [], 0, [], False, 0
     with ThreadPoolExecutor(ISCI) as ex:
         isler = {ex.submit(_satir, t, tarih): t for t in evren}
         for i, fut in enumerate(as_completed(isler), 1):
             t = isler[fut]
+            if fut.cancelled():          # iç süre sınırında iptal edilen — hata değil
+                iptal_n += 1
+                continue
             try:
                 bekleyen.append(fut.result())
             except Exception as exc:
@@ -178,22 +239,26 @@ def yaz() -> int:
                 bekleyen = []
             if i % 100 == 0:
                 print(f"    {i}/{len(evren)} ({time.time() - t0:.0f}s)")
+            if not kesildi and time.time() - t0 > SURE_SINIRI:
+                kesildi = True
+                iptal = sum(1 for f in isler if f.cancel())
+                print(f"    İÇ SÜRE SINIRI: {iptal} hisse iptal edildi, çalışanlar bitiriliyor")
     if bekleyen:
         _yaz(bekleyen)
         yazilan += len(bekleyen)
 
     sure = time.time() - t0
-    print(f"    yazıldı: {yazilan}/{len(evren)} hisse, {len(hatali)} hata, {sure:.0f}s")
+    print(f"    yazıldı: {yazilan}/{len(evren)} hisse, {len(hatali)} hata, {iptal_n} iptal, {sure:.0f}s "
+          f"(hisse başı {sure / max(yazilan, 1):.1f}s)")
     for t, e in hatali[:10]:
         print(f"      {t}: {e}")
 
-    # Çıkış kodu gerçeği söylemeli (bkz. robotun 2026-07-31 olayı). İki sessiz
-    # bozulma biçimi yakalanır: evrenin büyük kısmı skorlanamadı, ya da haber
-    # kaynakları CI IP'sini kısıtladı ve her hisse "haber yok" döndü — ikincisi
-    # sessizce yanlış bir duygu günlüğü üretir, tam da ölçmeye çalıştığımız şey.
-    sorun = []
+    # 4) KALİTE. Çıkış kodu gerçeği söylemeli (bkz. robotun 2026-07-31 olayı).
+    if kesildi:
+        sorun.append(f"iç süre sınırı ({SURE_SINIRI // 60} dk) aşıldı, {iptal_n} hisse iptal")
     if not evren or yazilan < MIN_KAPSAMA * len(evren):
         sorun.append(f"kapsama düşük ({yazilan}/{len(evren)})")
+    oran = None
     if yazilan:
         r = ba._PMDB.execute(
             "SELECT SUM(CASE WHEN COALESCE(haber_n,0)=0 THEN 1 ELSE 0 END) AS h, "
@@ -206,19 +271,56 @@ def yaz() -> int:
         print(f"    haberi olmayan hisse: %{oran * 100:.0f} | KAP'tan veri gelen: %{kap * 100:.0f}")
         if oran > MAX_HABERSIZ:
             sorun.append(f"haber kaynakları boş dönüyor (%{oran * 100:.0f} haber_n=0)")
-        # KAP, ölçülmüş iki sinyalin (geri alım +, bedelsiz −) TEK girdisi.
-        # Hiç gelmemesi koşuyu kırmızı YAPMAZ — borsapy yolu bilinen kırılgan
-        # bir dış kaynak, kalıcı kırmızı sinyali köreltir (ENAG gibi) — ama
-        # o günün duygu satırları "KAP'sız" diye ayırt edilebilsin diye
-        # yüksek sesle söylenir; `kaynaklar` kolonu da aynı bilgiyi taşır.
-        if kap == 0:
-            print("    UYARI: KAP hiçbir hissede veri getirmedi — ölçülmüş KAP "
-                  "sinyalleri bugün girdisiz (borsapy yolu düşmüş olabilir)")
+        # KAP'ın düşmesi kırmızı YAPMAZ (bilinen kırılgan dış kaynak, ENAG gibi);
+        # gün kaydında kap_ok=0 ve satırlarda `kaynaklar` ile ayırt edilir.
+        if kap == 0 and kap_ok:
+            notlar.append("KAP koşu boyunca hiç veri getirmedi")
+
+    durum = "sorunlu" if sorun else ("eksik" if notlar else "tam")
+    try:
+        ba._PMDB.execute(
+            "INSERT OR REPLACE INTO skor_gunlugu_kosu (tarih, market, baslangic, sure_sn, "
+            "evren, yazilan, hatali, hedef_ok, kap_ok, habersiz, durum, notlar) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (tarih, PIYASA, baslangic, int(sure), len(evren), yazilan, len(hatali),
+             int(hedef_ok), int(kap_ok), oran, durum, "; ".join(sorun + notlar) or None))
+    except Exception as exc:
+        sorun.append(f"koşu kaydı yazılamadı: {exc}")
+
     if sorun:
         print(f"=== Skor günlüğü SORUNLU: {'; '.join(sorun)} ===")
         return 1
-    print("=== Skor günlüğü tamamlandı ===")
+    print(f"=== Skor günlüğü tamamlandı ({durum}{': ' + '; '.join(notlar) if notlar else ''}) ===")
     return 0
+
+
+def _kap_yokla(ornek=("THYAO", "ASELS", "GARAN"), sure=20) -> bool:
+    """borsapy'nin KAP yolu yanıt veriyor mu? Örneklerden biri bile gelirse evet.
+
+    Ayrı iş parçacığında süreli çalışır — KAP askıda kaldığında yoklamanın
+    kendisi de askıda kalmasın.
+    """
+    try:
+        import borsapy
+    except Exception:
+        return False
+
+    def _bir(t):
+        df = borsapy.Ticker(t).news
+        return df is not None and len(df) > 0
+
+    with ThreadPoolExecutor(len(ornek)) as ex:
+        isler = [ex.submit(_bir, t) for t in ornek]
+        try:
+            for f in as_completed(isler, timeout=sure):
+                try:
+                    if f.result():
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    return False
 
 
 def ozet() -> int:
@@ -242,6 +344,22 @@ def ozet() -> int:
               f"{r['haberli'] * 100:>7.0f}% {r['kapli'] * 100:>4.0f}% "
               f"{r['hedefli'] * 100:>7.0f}% "
               f"{r['fkli'] * 100:>5.0f}% {r['ort_toplam']:>8.1f}")
+    try:
+        ba._PMDB.execute(KOSU_SQL)
+        kosu = ba._PMDB.execute(
+            "SELECT * FROM skor_gunlugu_kosu ORDER BY tarih DESC LIMIT 15")["rows"]
+    except Exception:
+        kosu = []
+    if kosu:
+        print()
+        print(f"{'tarih':10} {'durum':8} {'yazılan':>8} {'süre':>6} {'hedef':>6} {'KAP':>4}  not")
+        for k in kosu:
+            # Geriye dönük kayıtlarda evren/süre bilinmiyor (NULL) — "?" basılır
+            evr = k['evren'] if k['evren'] is not None else "?"
+            sur = f"{k['sure_sn'] // 60}dk" if k['sure_sn'] is not None else "?"
+            print(f"{k['tarih']:10} {k['durum']:8} {k['yazilan']:>4}/{evr!s:<4} "
+                  f"{sur:>6} {'evet' if k['hedef_ok'] else 'YOK':>6} "
+                  f"{'evet' if k['kap_ok'] else 'YOK':>4}  {k['notlar'] or ''}")
     return 0
 
 

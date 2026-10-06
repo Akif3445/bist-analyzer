@@ -1677,6 +1677,13 @@ def _fetch_rss(
 
 # KAYNAK FONKSİYONLARI
 
+# Toplu koşularda (skor_gunlugu) borsapy'nin KAP yolu düşükse her hissede
+# beklemek yerine KAP o koşu için kapatılır. 2026-10-05'te KAP yanıt vermezken
+# hisse başı süre ~1.3 sn'den ~5 sn'ye çıktı ve günlük kayıt süre sınırında
+# 470 hissenin 300'ünde kesildi. Varsayılan False — canlı uygulama etkilenmez.
+KAP_KAPALI = False
+
+
 def _src_kap(ticker, cutoff):
     """KAP bildirimleri — borsapy üzerinden (KAP RSS/API bot korumalı, tek çalışan yol).
 
@@ -1684,7 +1691,7 @@ def _src_kap(ticker, cutoff):
     Başlıklar jenerik olabilir ('Özel Durum Açıklaması (Genel)' vb.) — sentiment
     çoğunlukla nötr kalır ama is_kap/official_bonus güven skorunu besler.
     """
-    if not BORSAPY_OK:
+    if not BORSAPY_OK or KAP_KAPALI:
         return []
 
     kap_ticker = ticker.upper().replace(".IS", "")
