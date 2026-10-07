@@ -1,0 +1,78 @@
+{
+ "_aciklama": "Ders notlarındaki mali oran kriterleri. 'esik' doluysa o değerle, null ise aynı sektördeki şirketlerin medyanıyla karşılaştırılır ('mümasil şirketlere bak ve karşılaştır'). 'yon': 'az' = küçük olması iyi, 'cok' = büyük olması iyi. Yeni not geldikçe buraya eklenir; skora hiçbir şey bağlı değildir (bilanco.py altyapıdır).",
+ "_guncellendi": "2026-10-06",
+ "oranlar": {
+  "stok_gun": {
+   "ad": "Stokların ortalama tüketim süresi (gün)",
+   "yon": "az",
+   "esik": 30,
+   "kaynak": "Ders notu: etkinlik oranı küçük olmalı, stoğun paraya çevrildiği süre bugünkü ekonomik durumda 1 ayı geçmesin. Mümasil şirketlerle de karşılaştırılmalı.",
+   "not": "Eşik herkese aynı uygulanırsa savunma/inşaat gibi uzun üretim döngülü sektörler otomatik elenir; sektör karşılaştırması ayrıca raporlanır."
+  },
+  "donen_varlik_devir": {
+   "ad": "Dönen varlık devir hızı",
+   "yon": "cok",
+   "esik": null,
+   "kaynak": "Ders notu: yüksek olsun, üst sınırı yok."
+  },
+  "ticari_borc_devir": {
+   "ad": "Ticari borç devir hızı",
+   "yon": "cok",
+   "esik": null,
+   "kaynak": "Ders notu: borç ödeyebilme kabiliyeti. Eşik verilmedi."
+  },
+  "net_kar_marji": {
+   "ad": "Net kâr / Net satışlar",
+   "yon": "cok",
+   "esik": 0,
+   "kaynak": "Ders notu: istisnalar dışında zarar eden firmalar problem.",
+   "istisna": "Tek dönemlik zarar ve özkaynak küçülmüyorsa geçer sayılır (ders notu: ASELSAN gibi sağlam şirketler bir dönem zarar etse de sorun olmayabilir). İsim listesi değil kural."
+  },
+  "roa": {
+   "ad": "Net kâr / Aktifler",
+   "yon": "cok",
+   "esik": null,
+   "kaynak": "Ders notu: önemli. Eşik verilmedi."
+  },
+  "roe": {
+   "ad": "Net kâr / Özsermaye",
+   "yon": "cok",
+   "esik": null,
+   "kaynak": "Ders notu. Eşik verilmedi."
+  },
+  "faiz_karsilama": {
+   "ad": "FVÖK / Finansman giderleri",
+   "yon": "cok",
+   "esik": null,
+   "kaynak": "Ders notu: gelişmiş ülkelerde 7-8, gelişmekte olan ülkede biraz daha az, tam kriter yok.",
+   "not": "Kesin eşik verilmediği için şimdilik sektör medyanı; hoca bir değer verirse buraya yazılır."
+  },
+  "net_kar_finansman": {
+   "ad": "Net kâr / Finansman gideri",
+   "yon": "cok",
+   "esik": 3,
+   "kaynak": "Ders notu: 3-4. Alt sınır 3 alındı."
+  },
+  "ozkaynak_buyume": {
+   "ad": "Özsermayedeki büyüme (yıllık)",
+   "yon": "cok",
+   "esik": null,
+   "kaynak": "Ders notu: büyüme oranlarına bakılmalı.",
+   "not": "REEL: tüm rakamlar resmi TÜFE ile sabit paraya çevrilmiş olarak hesaplanır (bilanco.py)."
+  },
+  "satis_buyume": {
+   "ad": "Satışlardaki büyüme (yıllık)",
+   "yon": "cok",
+   "esik": null,
+   "kaynak": "Ders notu: büyüme oranlarına bakılmalı.",
+   "not": "REEL (TÜFE ile sabit para)."
+  },
+  "kar_buyume": {
+   "ad": "Kârlılıktaki büyüme (yıllık)",
+   "yon": "cok",
+   "esik": null,
+   "kaynak": "Ders notu: büyüme oranlarına bakılmalı.",
+   "not": "Önceki dönem zarar ise büyüme işaretle düzeltilir (zarardan kâra geçiş pozitif çıkar)."
+  }
+ }
+}

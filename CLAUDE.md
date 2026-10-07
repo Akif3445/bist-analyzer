@@ -38,6 +38,10 @@ python pipeline_backtest.py transfer UK 8   # generic form; markets in TRANSFER_
 python pipeline_backtest.py kasa        # data vault status — what is locked
 python pipeline_backtest.py kasa-ac 8 EVET  # OPEN the vault — once, in October
 
+python bilanco.py cek                   # pull quarterly financial statements (resumable, ~1 h)
+python bilanco.py ozet                  # what bilanco_veri/ holds
+python bilanco.py oran THYAO            # one stock's ratio history (constant TÜFE money)
+python bilanco.py kesit 2024Q2          # whole universe for a quarter, vs sector medians
 python tools/kap_gecmis.py cek 2018-01-01 2024-08-31  # pull KAP history (weekly chunks, ~35 min)
 python tools/kap_gecmis.py ozet         # what is in kap_veri/
 python tools/kap_olay.py --min-ornek 50 # event study: which disclosure type moves the price
@@ -1917,6 +1921,108 @@ the phrase was chosen on this data. It also matches the independent
 type-level buyback result (+2.63%, t 4.6). Of the neutral headlines a human
 would still call directional (~38 of 280, 14%), most are unevidenced positives
 (contracts, orders, earnings beats) or families measured as noise.
+
+### Financial-statement infrastructure — `bilanco.py` (2026-10-06, infrastructure only)
+
+Built at the user's request after a proposal and their approval. The ratios
+come from their course notes (`bilanco_esikler.json`, with each threshold and
+its source). Where the teacher gave a threshold it is used; otherwise the
+stock is compared with its **sector median** ("mümasil şirketlere bak ve
+karşılaştır"). **Nothing is wired into the score or portfolio construction.**
+That needs a pre-registered test and approval first.
+
+**Data:** İş Yatırım `MaliTablo` via borsapy, XI_29 template, 40 quarters
+(2016Q3 →), frozen to `bilanco_veri/<TICKER>.pkl` (gitignored), plus
+`_tufe.pkl` and `_hatalar.json`. **Banks have no data in this source** and
+the teacher's ratios do not fit them anyway (inventory, interest coverage), so
+they are out of scope.
+
+**Four traps, each found by measurement before it could produce a number:**
+1. **borsapy bug.** For more than 4 periods it merges batches by row *name*.
+   Duplicate names (Stoklar ×2, Ticari Borçlar ×2) then cross-multiply: the
+   40-quarter balance sheet came back as 13,866 rows with "Stoklar" 1,024
+   times. Every multi-year balance sheet from `get_balance_sheet(last_n=…)`
+   is corrupt. Fix: call the endpoint directly in 4-period batches and key
+   rows by the API's unique **`itemCode`** (1AF current inventory, 1BFA
+   non-current, 2AAGAA short-term trade payables, 3C sales, 3L net profit, 4C
+   operating cash flow…). One call returns all three statements.
+2. **Income and cash-flow figures are year-to-date cumulative.** BİM 2026Q2
+   sales 450 bn is H1; Q1 is 213.
+3. **TMS 29 (inflation accounting).**
+   - Statements are in period-end money from the 2023 year-end onwards.
+   - İş Yatırım also **overwrites year-end (Q4) columns with the next year's
+     restated comparatives**, so Q4(Y) is in December(Y+1) money. Measured:
+     BİM equity 2022Q3 11 → 2022Q4 58 → 2023Q1 26 bn TL, and Q4→Q1 equity
+     "falls" 0.81–0.86× every year.
+   - `_para_birimi` detects this per stock and per year-end from the data:
+     Q4's inflation against its neighbours versus one year of TÜFE, only for
+     2022+ and only once the Y+1 annual report exists. It flags BİM/ASELSAN
+     2022–24 and only THYAO 2024 (USD functional currency).
+   - Everything is converted to constant money with **official TÜFE**
+     (borsapy `Inflation().tufe()`, frozen), not ENAG, because that is what
+     companies restate with. Growth rates are therefore **real**.
+   - TTM = YTD + prior FY − prior YTD, accepted **only if all three are in
+     the same regime**; Q4 TTM is the annual figure itself. Mixed-regime
+     quarters (2023Q1–Q3, 2024Q1–Q3 for restating firms) are **left empty,
+     not invented**. Before this, BİM showed 312% sales growth and 124% ROE
+     in 2023, and ASELSAN a negative margin.
+   - Pre-2023 values stay historical-cost (inventory and fixed assets at old
+     prices), which TÜFE cannot repair. The `muhasebe` column marks every
+     quarter `tarihi` or `tms29`.
+4. **Point in time.** Each quarter carries `aciklanma` (publication date).
+   This is the first "Finansal Rapor" publishDate in the KAP archive (year
+   and period fields). After the archive ends, it is a conservative statutory
+   estimate (+75 days, +100 for Q4), marked `tahmini`.
+
+**Ratios** (`oranlar`, one row per quarter):
+- inventory, receivable and trade-payable days, and the cash-conversion cycle;
+- current-asset and trade-payable turnover;
+- net margin, ROA, ROE;
+- FVÖK / finance expense and net profit / finance expense. FVÖK is İş
+  Yatırım's "Finansman Gideri Öncesi Faaliyet Kârı", not pre-tax + interest,
+  because TMS 29 monetary gains inflate pre-tax profit;
+- cash/earnings quality;
+- real sales, profit and equity growth;
+- a loss streak and an equity-shrinking flag for the ASELSAN-type exception,
+  applied as a rule rather than a name list (≤4 loss quarters and equity not
+  shrinking).
+
+`degerlendir` checks one row against the thresholds, or against the sector
+median. `kesit` does the whole universe for one quarter.
+
+**Full pull (2026-10-07): 461 of 500 universe stocks.** The other 39 are all
+"no data": banks, insurers, factoring/leasing and asset-management firms
+(another template), plus a few delisted names (KOZAL, IPEKE, EMLAK…). There
+were no network failures. The median history is 28 quarters, the oldest
+2016Q3. `cek` is resumable and writes each file via tmp + rename, so an
+interrupted run leaves no half-written pickle. Run it as a detached process:
+the Claude tool's background limit killed the first attempt at 120 stocks.
+
+**Year-end money detection, universe-wide.** Where the neighbours exist, Q4
+was in next-year money for 322 of 402 stocks in 2022, 368 of 439 in 2023 and
+407 of 457 in 2024. The two groups separate cleanly: median Q4 inflation is
+2.34 in 2022 and 1.30 in 2024 for the "next-year" group (2024's one-year TÜFE
+factor is 1.31), versus 1.01 and 1.08 for the "own-year" group. The own-year
+group includes PGSUS and others that report in USD. When detection is
+impossible (mostly 2023 IPOs, which have only annual 2022 figures), the
+**majority rule** applies and the quarter is flagged `para_varsayim`. Without
+it, ADGYO showed 221× real sales growth for 2022.
+
+**Universe medians** (real terms): net margin 1–3%, ROE 1–4% (2024–26),
+current-asset turnover ~1.6, trade-payable turnover ~5.5, FVÖK/finance
+expense ~1.0, real sales growth +2% (2023Q4) and −5% (2024Q4). Real-estate
+trusts (GYO) have extreme inventory days, because their inventory is property
+and cost of sales is small. This is another reason the sector comparison
+matters more than a single threshold. For publication dates up to 2024Q2,
+7,832 come from KAP and 2,956 are estimated (mostly quarters before 2018,
+where there is no archive).
+
+Sanity on three stocks:
+- inventory days: THYAO ~13, BİM ~34, ASELSAN ~200. This is exactly why the
+  teacher's 30-day threshold must be read against the sector;
+- BİM real sales growth 10–25%, net margin 3–5%;
+- expense items arrive positive despite "(-)" in their names, so absolute
+  values are used.
 
 ### 1.4 turnover — `pipeline_backtest.py devir [yil]` (2026-09-27): the live manager is not the tested manager
 
