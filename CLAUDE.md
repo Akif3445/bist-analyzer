@@ -34,6 +34,7 @@ python pipeline_backtest.py us 8        # US transfer test — out-of-sample in 
 python pipeline_backtest.py uk 8        # UK transfer test — the method did NOT transfer
 python pipeline_backtest.py momentum 8  # system vs textbook 12-1 momentum, BIST/US/UK
 python pipeline_backtest.py devir 8     # tested manager vs live mechanisms (ATR stop, daily buying)
+python pipeline_backtest.py saglik 8    # pre-registered financial-health filter/score test (failed)
 python pipeline_backtest.py transfer UK 8   # generic form; markets in TRANSFER_PIYASA
 python pipeline_backtest.py kasa        # data vault status — what is locked
 python pipeline_backtest.py kasa-ac 8 EVET  # OPEN the vault — once, in October
@@ -2023,6 +2024,67 @@ Sanity on three stocks:
 - BİM real sales growth 10–25%, net margin 3–5%;
 - expense items arrive positive despite "(-)" in their names, so absolute
   values are used.
+
+### Financial-health score tested — `pipeline_backtest.py saglik [yil]` (2026-10-07): FAILED as pre-registered
+
+The course-note ratios (now 20 criteria in five groups, with user-approved
+Turkey adaptations and the teacher's original values side by side in
+`bilanco_esikler.json`) were turned into a Piotroski-style score: passed ÷
+evaluated, with at least 12 of 20 evaluated. It is point-in-time: the latest
+**published** quarter at each rebalance, and sector medians taken from that
+same snapshot.
+
+Two uses were pre-registered and committed (`2cdd538`) **before** the first
+run:
+- **A** excludes stocks scoring below 0.50;
+- **B** ranks by 0.9 × technical + 10 × health.
+
+Success was defined on the **managed** track, the configuration that runs
+live. On average 371 stocks are scored each month and the filter removes 118;
+30% of the baseline's own picks had weak balance sheets.
+
+| | real/yr | MaxDD | Sharpe | vs random-6 | 2018-19 crisis | 2020 H1 |
+|---|---|---|---|---|---|---|
+| baseline / unmanaged | −14.7% | −69.9% | −0.09 | 10th | −12.5% | +82.5% |
+| baseline / managed | −0.8% | −25.8% | 0.10 | 62nd | +19.1% | +5.1% |
+| A filter / unmanaged | **−9.2%** | **−48.1%** | −0.06 | 24th | **+46.6%** | +76.0% |
+| A filter / managed | −12.7% | −25.6% | −0.47 | 18th | +7.5% | +11.7% |
+| B score / unmanaged | −11.6% | −68.3% | −0.02 | 22nd | −8.4% | +80.0% |
+| B score / managed | −0.8% | −24.7% | 0.09 | 62nd | +19.2% | +9.2% |
+
+**Verdict under the pre-registered rule:**
+- **A FAILED.** On the managed track it is worse in 6 of 7 years, at
+  −12.7% vs −0.8% real.
+- **B FAILED.** No effect: the same −0.8%, better in only 3 of 7 years, and
+  MaxDD just 1.1 points better.
+
+**Nothing is wired into the score.**
+
+**The diagnostic that matters, reported but deliberately not acted on.** On
+the **unmanaged** (pure selection) track, the filter did what the
+"avoid-the-blowups" hypothesis predicts:
+- MaxDD −69.9% → −48.1%;
+- real return −14.7% → −9.2%;
+- the 2018–19 TL crisis went from −12.5% to **+46.6%**.
+
+On the managed track this does not survive, plausibly because the management
+layer already supplies the drawdown protection and a pool a third smaller
+leaves it fewer fresh names. Acting on this now would mean choosing the
+favourable track after seeing the results, which is exactly the forking path
+the pre-registration exists to block. **The honest route is a new,
+separately pre-registered hypothesis**: "the A filter improves the unmanaged
+selection track's drawdown". It should be tested once on data that took no
+part in this run, and the natural candidate is the reserve when the vault is
+opened.
+
+Teacher's notes transcribed 2026-10-07 from the user's PDF. Corrections to
+the earlier reading:
+- inventory consumption ≤ 30–60 days (not 30);
+- the "≤1 month" belongs to the *etkinlik oranı* (inventory-to-cash cycle);
+- new ratios: current ratio (2 developed / 1.5 emerging / "1 is fine now"),
+  acid test 1, cash ratio >20%, leverage 50%, short-term debt / assets
+  ≤35%, long-term debt / permanent capital <1/3 for industry and <1/2 for
+  services, receivable collection 2–3 months.
 
 ### 1.4 turnover — `pipeline_backtest.py devir [yil]` (2026-09-27): the live manager is not the tested manager
 
