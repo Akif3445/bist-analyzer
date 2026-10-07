@@ -420,8 +420,17 @@ def _pick_at(date, feats, ret_panel, max_pos=None, kur=None):
     # şey (likidite, SMA200, sektör, korelasyon, ATR ağırlık) aynı makine, yalnız
     # "hangi hisse daha iyi" sorusunun cevabı değişir.
     _sira = k.get("sira")
+    # Sağlamlık testi (2026-10-07, ön kayıt bilanco_esikler.json):
+    #   "haric"  → bu hisseler aday listesine hiç girmez (A: filtre)
+    #   "saglik" → {hisse: 0-1}; verilirse sıralama 0.9×teknik + 10×sağlamlık
+    #              (bilinmiyorsa 0.5) + 0.4×3A momentum olur (B: puan)
+    # İkisi de verilmezse davranış önceki ile birebir aynıdır.
+    _haric = k.get("haric") or set()
+    _saglik = k.get("saglik")
     cands = []
     for t, f in feats.items():
+        if t in _haric:
+            continue
         cl = f["close"]
         ix = cl.index.searchsorted(date, side="right") - 1
         if ix < 260:
@@ -440,7 +449,12 @@ def _pick_at(date, feats, ret_panel, max_pos=None, kur=None):
         if tlv < _min_vol or price <= 0 or not sma or price < sma or score < _skor_min:
             continue
         mom3 = (price / float(cl.iloc[max(0, ix-63)]) - 1) * 100
-        cands.append((t, score + mom3 * 0.4, atr))
+        if _saglik is not None:
+            sg = _saglik.get(t)
+            sg = 0.5 if sg is None or not np.isfinite(sg) else sg
+            cands.append((t, 0.9 * score + 10.0 * sg + mom3 * 0.4, atr))
+        else:
+            cands.append((t, score + mom3 * 0.4, atr))
     cands.sort(key=lambda x: -x[1])
 
     picks, sec_n, kept = [], {}, []
@@ -2028,6 +2042,106 @@ def devir(years=8):
     print(f"Tamamlandı ({time.time()-t0:.0f}s)")
 
 
+# SAĞLAMLIK TESTİ (2026-10-07) — ders notu kriterleri skorlamada işe yarar mı?
+#
+# Ön kayıt: bilanco_esikler.json → "_on_kayit" (testten ÖNCE yazıldı). İki
+# deneme, başka varyant yok:
+#   A (filtre): sağlamlık skoru < 0.50 olan hisse aday listesine girmez
+#   B (puan)  : sıralama = 0.9×teknik + 10×sağlamlık + 0.4×3A momentum
+# Başarı (birincil iz YÖNETİLEN): temele göre (a) reel yıllık getiri yüksek VE
+# 7 takvim yılının ≥4'ünde getiri yüksek, YA DA (b) MaxDD ≥5 puan iyi VE reel
+# yıllık getiri en fazla 2 puan düşük. Kriz dönemleri ve yönetimsiz iz tanıdır.
+def saglik_testi(years=8):
+    import bilanco as bl
+    from bist_analyzer import _sector_of
+    t0 = time.time()
+    print(f"=== SAĞLAMLIK TESTİ | {years} yıl | {datetime.now():%Y-%m-%d %H:%M} ===")
+    print("Ön kayıt: bilanco_esikler.json _on_kayit (A filtre <0.50, B puan 10 ağırlık)\n")
+    closes, vols = _panel_hazirla(years)
+    feats = _precompute(closes, vols)
+    ret_panel = pd.DataFrame({t: f["ret"] for t, f in feats.items()})
+    xu, dates = _endeks_penceresi("XU100.IS", years)
+    dates = list(dates)
+    reb = pd.date_range(dates[0], dates[-1], freq="MS")
+    reb = [dates[pd.Index(dates).searchsorted(d)] for d in reb if d <= dates[-1]]
+
+    tum = bl.tum_oranlar()
+    sh = {t: _sector_of(t) for t in tum["ticker"].unique()}
+    print(f"Mali tablo: {tum['ticker'].nunique()} hisse, {len(tum)} hisse-çeyrek ({time.time()-t0:.0f}s)")
+
+    wbd = {"temel": {}, "A_filtre": {}, "B_puan": {}}
+    hariç_say, skorlu_say, temelde_zayif = [], [], 0
+    for d in reb:
+        s = bl.saglik_anlik(tum, d, sh)
+        haric = {t for t, v in s.items() if np.isfinite(v) and v < 0.50}
+        hariç_say.append(len(haric))
+        skorlu_say.append(int(s.notna().sum()))
+        for ad, kur in (("temel", None), ("A_filtre", {"haric": haric}),
+                        ("B_puan", {"saglik": s.to_dict()})):
+            w = _pick_at(d, feats, ret_panel, kur=kur)
+            if w:
+                wbd[ad][d] = w
+        temelde_zayif += sum(1 for t in wbd["temel"].get(d, {}) if t in haric)
+    n_temel = sum(len(w) for w in wbd["temel"].values())
+    print(f"Ayda ortalama {np.mean(skorlu_say):.0f} skorlu hisse, {np.mean(hariç_say):.0f}'i "
+          f"filtrede eleniyor | temel seçimlerin %{100 * temelde_zayif / max(n_temel, 1):.0f}'i "
+          f"zayıf bilançolu ({time.time()-t0:.0f}s)\n")
+
+    xu_n = xu.loc[dates] / xu.loc[dates].iloc[0]
+    sonuc = {}
+    print("=" * 118)
+    for ad in wbd:
+        for iz in ("yönetimsiz", "yönetilen"):
+            nav = (_walk(wbd[ad], closes, dates) if iz == "yönetimsiz" else
+                   _walk_managed(wbd[ad], closes, dates, feats, dict(MGMT_VARSAYILAN)))
+            st = _stats(nav, xu_n, f"{ad} / {iz}")
+            sonuc[(ad, iz)] = (nav, st)
+    print("=" * 118)
+
+    # Rastgele-6 yeri (yönetimsiz iz) — run ile aynı çekiliş
+    all_t = sorted(feats)
+    rf = []
+    for seed in range(RANDOM_SEEDS):
+        rng = np.random.default_rng(seed)
+        wr = {}
+        for d in reb:
+            elig = [t for t in all_t if feats[t]["close"].index.searchsorted(d) > 260]
+            if len(elig) >= MAX_POS:
+                wr[d] = {t: 1 / MAX_POS for t in rng.choice(elig, MAX_POS, replace=False)}
+        rf.append(_walk(wr, closes, dates).iloc[-1])
+    rf = np.array(rf)
+
+    def yillik(nav):
+        return nav.groupby(nav.index.year).agg(lambda x: x.iloc[-1] / x.iloc[0] - 1) * 100
+
+    def donem(nav, a, b):
+        x = nav[(nav.index >= a) & (nav.index <= b)]
+        return (x.iloc[-1] / x.iloc[0] - 1) * 100 if len(x) > 1 else np.nan
+
+    print(f"\n{'':22}{'reel/yıl':>9}{'MaxDD':>8}{'Sharpe':>8}{'rastgele %':>11}"
+          f"{'2018-19 kriz':>13}{'2020 Covid':>11}")
+    for (ad, iz), (nav, st) in sonuc.items():
+        print(f"{ad + ' / ' + iz:22}{st['reel_yillik']:>+8.1f}%{st['maxdd']:>7.1f}%{st['sharpe']:>8.2f}"
+              f"{(rf < nav.iloc[-1]).mean() * 100:>10.0f}%"
+              f"{donem(nav, '2018-08-01', '2019-12-31'):>+12.1f}%{donem(nav, '2020-01-01', '2020-06-30'):>+10.1f}%")
+
+    print("\nYÖNETİLEN iz, takvim yılı getirileri (%):")
+    yt = pd.DataFrame({ad: yillik(sonuc[(ad, "yönetilen")][0]) for ad in wbd})
+    print(yt.round(1).to_string())
+
+    print("\n--- ÖN KAYITLI KARAR (birincil iz: yönetilen) ---")
+    tb = sonuc[("temel", "yönetilen")][1]
+    for ad in ("A_filtre", "B_puan"):
+        st = sonuc[(ad, "yönetilen")][1]
+        iyi_yil = int((yt[ad] > yt["temel"]).sum())
+        a = st["reel_yillik"] > tb["reel_yillik"] and iyi_yil >= 4
+        b = st["maxdd"] >= tb["maxdd"] + 5 and st["reel_yillik"] >= tb["reel_yillik"] - 2
+        print(f"{ad}: reel {st['reel_yillik']:+.1f}% vs {tb['reel_yillik']:+.1f}% | daha iyi yıl "
+              f"{iyi_yil}/{len(yt)} | MaxDD {st['maxdd']:.1f}% vs {tb['maxdd']:.1f}% → "
+              f"{'BAŞARILI (' + ('a' if a else 'b') + ')' if (a or b) else 'BAŞARISIZ'}")
+    print(f"\nTamamlandı ({time.time()-t0:.0f}s). Deneme sayısı 2 (A, B); başka varyant denenmez.")
+
+
 # MOMENTUM KONTROLÜ (2026-09-27) — "sistem bir momentum aracı mı?"
 #
 # Dört piyasa-dönemin hepsi "orada o zaman momentum ödedi mi?" sorusuyla aynı
@@ -2422,6 +2536,8 @@ if __name__ == "__main__":
                 sys.argv[3] if len(sys.argv) > 3 else "")
     elif _cmd == "pozisyon":
         pozisyon(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
+    elif _cmd == "saglik":
+        saglik_testi(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     elif _cmd == "devir":
         devir(int(sys.argv[2]) if len(sys.argv) > 2 else 8)
     elif _cmd == "momentum":

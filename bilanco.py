@@ -457,6 +457,9 @@ def oranlar(ticker: str) -> pd.DataFrame:
     aktif = _kalem(bak, cols, "1BL")
     ozk = _kalem(bak, cols, "2N")
     ana_ozk = _kalem(bak, cols, "2O")
+    nakit = _kalem(bak, cols, "1AA")
+    kv = _kalem(bak, cols, "2A")
+    uv = _kalem(bak, cols, "2B")
 
     # Akışlar zaten son 12 ay (TTM) — _ttm_sabit.
     s4, smm4, fvok4, fin4 = satis, smm, fvok, fin_gid
@@ -477,6 +480,15 @@ def oranlar(ticker: str) -> pd.DataFrame:
     o["nakit_donusum_gun"] = o["stok_gun"] + o["alacak_gun"] - o["ticari_borc_gun"]
     o["donen_varlik_devir"] = _bol(s4, _ort(donen))
     o["ticari_borc_devir"] = _bol(smm4, _ort(t_borc))
+    o["faaliyet_dongusu_gun"] = o["stok_gun"] + o["alacak_gun"]   # hoca: "etkinlik oranı"
+    # Likidite (aynı tarihli bakiyeler — rejim karışması yok)
+    o["cari_oran"] = _bol(donen, kv)
+    o["asit_test"] = _bol(donen - stok.fillna(0), kv)
+    o["nakit_oran"] = _bol(nakit, kv)
+    # Finansal yapı (borçluluk)
+    o["kaldirac"] = _bol(kv + uv, aktif)
+    o["kv_yk_aktif"] = _bol(kv, aktif)
+    o["uv_surekli"] = _bol(uv, ozk + uv)
     # Kârlılık
     o["net_kar_marji"] = _bol(nk4, s4)
     o["roa"] = _bol(nk4, _ort(aktif))
@@ -484,6 +496,11 @@ def oranlar(ticker: str) -> pd.DataFrame:
     # Sabit yükümlülükleri karşılama gücü
     o["faiz_karsilama"] = _bol(fvok4, fin4)
     o["net_kar_finansman"] = _bol(nk4, fin4)
+    # Borçsuz şirket: finansman gideri satışların binde birinden azsa oran
+    # tanımsız değil "yükümlülük yok" demektir → çok büyük kabul edilir.
+    _borcsuz = ((fin4.abs() <= 0.001 * s4.abs()) & s4.notna()).values
+    o.loc[_borcsuz, "net_kar_finansman"] = np.where(nk4.values[_borcsuz] > 0, 999.0, -999.0)
+    o.loc[_borcsuz, "faiz_karsilama"] = np.where(fvok4.values[_borcsuz] > 0, 999.0, -999.0)
     # Kâr kalitesi (kâr nakitle destekleniyor mu)
     o["nakit_kar_orani"] = _bol(fn4, nk4)
     # Büyüme (REEL, yıllık — tüm rakamlar zaten sabit TÜFE parasıyla):
@@ -491,6 +508,7 @@ def oranlar(ticker: str) -> pd.DataFrame:
     o["satis_buyume"] = _bol(s4, _yillik(s4)) - 1
     o["kar_buyume"] = _bol(nk4, _yillik(nk4).abs()) - np.sign(_yillik(nk4))
     o["ozkaynak_buyume"] = _bol(ozk, _yillik(ozk)) - 1
+    o["aktif_buyume"] = _bol(aktif, _yillik(aktif)) - 1
     # İstisna kuralı için: zarar dizisi ve özkaynak erimesi
     # Zarar dizisi: son 12 ayı zararlı geçen ARDIŞIK çeyrek sayısı. İstisna
     # kuralı (bilanco.degerlendir) ≤4 çeyrek = en fazla bir yıllık zarar.
@@ -511,6 +529,8 @@ def oranlar(ticker: str) -> pd.DataFrame:
     # Açıklanma
     ac = [aciklanma(ticker, c) for c in cols]
     o["aciklanma"] = [a[0] for a in ac]
+    o["donem_sonu"] = [pd.Timestamp(year=int(c[:4]), month=3 * int(c[-1]), day=1)
+                       + pd.offsets.MonthEnd(0) for c in cols]
     o["aciklanma_kaynak"] = [a[1] for a in ac]
     o.index.name = "ceyrek"
     return o
@@ -519,65 +539,120 @@ def oranlar(ticker: str) -> pd.DataFrame:
 # ---------------------------------------------------------------- EŞİKLER
 
 def esikler() -> dict:
+    """Ön kayıtlı sağlamlık kriterleri (bilanco_esikler.json → 'kriterler')."""
     with open(ESIK_DOSYA, encoding="utf-8") as f:
-        return json.load(f)["oranlar"]
+        return json.load(f)["kriterler"]
+
+
+MIN_KRITER = 12        # bundan azı değerlendirilebiliyorsa skor yok (bilinmiyor)
 
 
 def degerlendir(satir: pd.Series, sektor_medyan: pd.Series = None) -> dict:
-    """Bir hisse-çeyreği ders notu kriterlerine göre değerlendirir.
+    """Bir hisse-çeyreği ön kayıtlı kriterlere göre değerlendirir.
 
-    Eşik verilmişse eşiğe, verilmemişse SEKTÖR MEDYANINA göre ("mümasil
-    şirketlerle karşılaştır"). Dönüş: {oran: True/False/None}; None = veri yok
-    ya da karşılaştırılacak bir şey yok. Hiçbir puan üretmez — sayım altyapısı.
+    kural: 'esik' mutlak eşik; 'sektor' sektör medyanı; 'esik_veya_sektor'
+    ikisinden birini geçmek yeter. Dönüş {kriter: True/False/None}; None =
+    veri yok ya da karşılaştırılacak sektör değeri yok.
     """
     sonuc = {}
     for ad, k in esikler().items():
-        if ad.startswith("_"):
-            continue
         v = satir.get(ad)
         if v is None or pd.isna(v):
             sonuc[ad] = None
             continue
-        ref = k.get("esik")
-        if ref is None and sektor_medyan is not None:
-            ref = sektor_medyan.get(ad)
-        if ref is None or pd.isna(ref):
-            sonuc[ad] = None
-            continue
-        sonuc[ad] = bool(v <= ref) if k["yon"] == "az" else bool(v >= ref)
-    # İstisna: tek dönemlik zarar + özkaynak küçülmüyorsa marj kriteri geçer
-    # (ders notu: "ASELSAN gibi sağlam şirket bir dönem zarar etse de sorun
-    # olmayabilir"). İsim listesi yerine kural — öznel olmasın.
+        az = k["yon"] == "az"
+
+        def gec(ref):
+            if ref is None or pd.isna(ref):
+                return None
+            return bool(v <= ref) if az else bool(v >= ref)
+
+        sek = sektor_medyan.get(ad) if sektor_medyan is not None else None
+        if k["kural"] == "esik":
+            sonuc[ad] = gec(k["esik"])
+        elif k["kural"] == "sektor":
+            sonuc[ad] = gec(sek)
+        else:                                   # esik_veya_sektor
+            a1, a2 = gec(k["esik"]), gec(sek)
+            sonuc[ad] = (bool(a1) or bool(a2)) if (a1 is not None or a2 is not None) else None
+    # İstisna (ders notu: ASELSAN gibi sağlam şirket bir dönem zarar etse de
+    # sorun olmayabilir). İsim listesi yerine kural: en fazla 4 çeyreklik zarar
+    # dizisi ve özkaynak küçülmüyorsa marj kriteri geçer.
     if sonuc.get("net_kar_marji") is False:
         if satir.get("ust_uste_zarar", 0) <= 4 and satir.get("ozkaynak_kuculdu") == 0:
             sonuc["net_kar_marji"] = True
     return sonuc
 
 
+def saglik(satir: pd.Series, sektor_medyan: pd.Series = None) -> tuple:
+    """(skor 0-1 ya da NaN, değerlendirilen kriter sayısı)."""
+    d = degerlendir(satir, sektor_medyan)
+    olculen = [v for v in d.values() if v is not None]
+    if len(olculen) < MIN_KRITER:
+        return np.nan, len(olculen)
+    return sum(olculen) / len(olculen), len(olculen)
+
+
+def tum_oranlar(tickers=None) -> pd.DataFrame:
+    """Evrendeki tüm hisselerin oran tablosu, tek DataFrame (ticker + ceyrek kolonlu)."""
+    if tickers is None:
+        tickers = sorted(f[:-4] for f in os.listdir(VERI_DIZIN)
+                         if f.endswith(".pkl") and not f.startswith("_"))
+    parcalar = []
+    for t in tickers:
+        try:
+            o = oranlar(t)
+        except Exception:
+            continue
+        if not o.empty:
+            parcalar.append(o.assign(ticker=t).reset_index())
+    return pd.concat(parcalar, ignore_index=True) if parcalar else pd.DataFrame()
+
+
+def saglik_anlik(tum: pd.DataFrame, tarih, sektor_haritasi: dict,
+                 en_eski_ay: int = 15) -> pd.Series:
+    """O GÜN bilinen bilgiyle her hissenin sağlamlık skoru (ön kayıt 'zaman').
+
+    Her hisse için açıklanma tarihi <= tarih olan, en az MIN_KRITER dolu oranı
+    olan son çeyrek (dönem sonu en fazla en_eski_ay ay önce). Sektör medyanı
+    da yalnız bu anlık görüntüden: sonradan açıklanan bir rakam karışmaz.
+    """
+    tarih = pd.Timestamp(tarih)
+    kriter = list(esikler())
+    df = tum[tum["aciklanma"] <= tarih]
+    if df.empty:
+        return pd.Series(dtype=float)
+    df = df[df["donem_sonu"] >= tarih - pd.DateOffset(months=en_eski_ay)]
+    df = df[df[kriter].notna().sum(axis=1) >= MIN_KRITER]
+    if df.empty:
+        return pd.Series(dtype=float)
+    anlik = (df.sort_values(["ticker", "donem_sonu"]).groupby("ticker").tail(1)
+             .set_index("ticker"))
+    anlik = anlik.assign(sektor=[sektor_haritasi.get(t, "Diğer") for t in anlik.index])
+    medyan = anlik.groupby("sektor")[kriter].median()
+    out = {}
+    for t, r in anlik.iterrows():
+        out[t] = saglik(r, medyan.loc[r["sektor"]])[0]
+    return pd.Series(out, dtype=float)
+
+
 def kesit(ceyrek: str) -> pd.DataFrame:
     """Tüm evrenin o çeyrekteki oranları + sektör medyanına göre değerlendirme."""
     from bist_analyzer import _sector_of
-    satirlar = []
-    for t in _evren():
-        o = oranlar(t)
-        if o.empty or ceyrek not in o.index:
-            continue
-        r = o.loc[ceyrek].copy()
-        r["ticker"], r["sektor"] = t, _sector_of(t)
-        satirlar.append(r)
-    df = pd.DataFrame(satirlar).set_index("ticker")
+    tum = tum_oranlar()
+    df = tum[tum["ceyrek"] == ceyrek].set_index("ticker")
     if df.empty:
         return df
-    sayisal = [c for c in esikler() if not c.startswith("_") and c in df.columns]
-    medyan = df.groupby("sektor")[sayisal].median()
-    deg = []
+    df = df.assign(sektor=[_sector_of(t) for t in df.index])
+    kriter = list(esikler())
+    medyan = df.groupby("sektor")[kriter].median()
+    satir = []
     for t, r in df.iterrows():
-        d = degerlendir(r, medyan.loc[r["sektor"]] if r["sektor"] in medyan.index else None)
-        gecen = sum(1 for v in d.values() if v is True)
-        olculen = sum(1 for v in d.values() if v is not None)
-        deg.append({"ticker": t, "gecen": gecen, "olculen": olculen,
-                    **{f"ok_{k}": v for k, v in d.items()}})
-    return df.join(pd.DataFrame(deg).set_index("ticker"))
+        d = degerlendir(r, medyan.loc[r["sektor"]])
+        sk, n = saglik(r, medyan.loc[r["sektor"]])
+        satir.append({"ticker": t, "skor": sk, "gecen": sum(1 for v in d.values() if v),
+                      "olculen": n})
+    return df.join(pd.DataFrame(satir).set_index("ticker"))
 
 
 # ---------------------------------------------------------------- CLI
@@ -625,7 +700,7 @@ if __name__ == "__main__":
     if komut == "kesit" and len(sys.argv) > 2:
         pd.set_option("display.width", 200, "display.max_columns", 30)
         k = kesit(sys.argv[2])
-        print(k[["sektor", "gecen", "olculen"]].sort_values("gecen", ascending=False).to_string())
+        print(k[["sektor", "skor", "gecen", "olculen"]].sort_values("skor", ascending=False).round(2).to_string())
         sys.exit(0)
     print(__doc__)
     sys.exit(2)
