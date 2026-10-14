@@ -2364,6 +2364,41 @@ def kasa_durum():
     print("\nAçmak için:  python pipeline_backtest.py kasa-ac 8 EVET")
 
 
+def _saglik_kasa_kolu(reb, feats, ret_panel, closes, dates, xu_n, su):
+    """H2 (bilanco_esikler.json _on_kayit_2), kasa açılışında BİR KEZ koşar.
+
+    A filtresi yönetimsiz izde düşüşü azaltıyor mu? Kural, skor ve eşik
+    _on_kayit ile aynı; karar satırları ön kayıttan birebir. `su` temel
+    yönetimsiz izin _stats sonucudur (aynı koşudan).
+    """
+    import bilanco as bl
+    from bist_analyzer import _sector_of
+    tum = bl.tum_oranlar()
+    sh = {t: _sector_of(t) for t in tum["ticker"].unique()}
+    wbd, haric_say = {}, []
+    for d in reb:
+        s = bl.saglik_anlik(tum, d, sh)
+        haric = {t for t, v in s.items() if np.isfinite(v) and v < 0.50}
+        haric_say.append(len(haric))
+        w = _pick_at(d, feats, ret_panel, kur={"haric": haric})
+        if w:
+            wbd[d] = w
+    print(f"\n--- H2: bilanço filtresi, yönetimsiz iz (ön kayıt _on_kayit_2) ---")
+    print(f"Ayda ortalama {np.mean(haric_say):.0f} hisse filtrede eleniyor | "
+          f"{len(wbd)}/{len(reb)} rebalans")
+    st = _stats(_walk(wbd, closes, dates), xu_n, "A_filtre / yönetimsiz")
+    if su["maxdd"] > -20:
+        karar = "ÖLÇÜLEMEDİ"
+    elif st["maxdd"] >= su["maxdd"] + 5 and st["reel_yillik"] >= su["reel_yillik"] - 2:
+        karar = "BAŞARILI"
+    else:
+        karar = "BAŞARISIZ"
+    print(f"H2: MaxDD {st['maxdd']:.1f}% vs {su['maxdd']:.1f}% | reel/yıl "
+          f"{st['reel_yillik']:+.1f}% vs {su['reel_yillik']:+.1f}% → {karar}")
+    return {"karar": karar, "a_filtre_yonetimsiz": st,
+            "ort_elenen": float(np.mean(haric_say))}
+
+
 def kasa_ac(years=8, onay=""):
     """REZERV DÖNEM TESTİ — kasayı açar. Tek seferlik ve geri alınamaz.
 
@@ -2458,6 +2493,13 @@ def kasa_ac(years=8, onay=""):
     print(f"\nRastgele dağılımda seçim modelinin yeri: son NAV {nav_u.iloc[-1]:.2f} | "
           f"rastgele %5-%95 bandı [{np.percentile(rng_final,5):.2f}, "
           f"{np.percentile(rng_final,95):.2f}] → {yuzde:.0f}. yüzdelik")
+    # H2 ana sonuçtan SONRA ve ayrı korumayla: bir hata ana kasa sonucunu
+    # ve açılış kaydını asla düşürmemeli.
+    try:
+        h2 = _saglik_kasa_kolu(reb, feats, ret_panel, closes, dates, xu_n, su)
+    except Exception as e:
+        print(f"\nH2 koşamadı: {e!r}")
+        h2 = {"karar": "HATA", "hata": repr(e)}
     print("\nBu sayı bir kez üretilir. Sonucu beğenmeyip parametre değiştirmek,")
     print("rezerv dönemi sıradan bir eğitim penceresine çevirir — kasanın")
     print("tüm değeri buna direnmekte.")
@@ -2473,7 +2515,8 @@ def kasa_ac(years=8, onay=""):
                          "SECTOR_CAP": SECTOR_CAP, "CORR_LIMIT": CORR_LIMIT,
                          "MIN_TL_VOL": MIN_TL_VOL},
         "sonuc": {"yonetimsiz": su, "yonetilen": sm, "rastgele6_ort": sr,
-                  "xu100": sx, "rastgele_yuzdelik": yuzde},
+                  "xu100": sx, "rastgele_yuzdelik": yuzde,
+                  "h2_bilanco_filtresi": h2},
     }
     meta.setdefault("acilis_kaydi", []).append(kayit)
     meta["durum"] = "acildi"

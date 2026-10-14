@@ -12,6 +12,17 @@
   "pencere": "Veri kasası penceresi 2018-08-31 → 2024-08-31 (pipeline_backtest 8). Rezerv döneme dokunulmaz.",
   "deneme_sayisi": "2 (A ve B). Başka eşik ya da varyant denenmez."
  },
+ "_on_kayit_2": {
+  "tarih": "2026-10-14",
+  "not": "Kasa açılmadan ÖNCE yazıldı. Kaynak: _on_kayit testinin yönetimsiz izdeki tanı bulgusu (2018-24: MaxDD −69.9% → −48.1%, reel −14.7% → −9.2%). O bulgu karara girmedi; burada ayrı bir iddia olarak, o teste katılmamış veride BİR KEZ sınanıyor. Sonuca bakıldıktan sonra değiştirilmez.",
+  "hipotez": "H2: A filtresi (skoru <0.50 olanı aday listesinden çıkar; _on_kayit'teki skor, zaman ve eşik AYNEN) YÖNETİMSİZ (yalnız seçim) izin düşüşünü azaltır.",
+  "veri": "Yalnız rezerv dönem: kesim 2024-08-31'den sonrası, `kasa-ac 8 EVET` içinde, ana kasa sonucuyla aynı koşuda. Bu dönemin bilanço yayın tarihleri KAP arşivi bittiği için yasal süre tahminidir (+75 gün, Q4 +100) — ihtiyatlı yön, ileriye bakış yok.",
+  "karsilastirma": "A_filtre/yönetimsiz vs temel/yönetimsiz; aynı rebalans günleri, aynı donmuş parametreler.",
+  "basari": "BAŞARILI: MaxDD en az 5 puan daha iyi VE reel yıllık getiri en fazla 2 puan daha düşük. Değilse BAŞARISIZ.",
+  "olculemez": "Temel/yönetimsiz izin MaxDD'si −20%'den sığsa dönemde korunacak bir düşüş yok demektir: sonuç 'ÖLÇÜLEMEDİ' yazılır, başarı ya da başarısızlık sayılmaz.",
+  "sonuc_ne_degistirir": "Başarılı olsa bile canlı sisteme otomatik bir şey eklenmez. İddia yalnız 'seçim tek başına krizde bilançoyla korunabilir' olur; yönetilen ize eklemek ayrı bir karar ve ayrı bir testtir.",
+  "deneme_sayisi": "1. Başka eşik, iz ya da dönem denenmez; yönetilen iz bu hipotezin parçası değildir."
+ },
  "kriterler": {
   "cari_oran":            {"grup": "likidite", "yon": "cok", "kural": "esik", "esik": 1.0,
                            "hoca": "Gelişmiş ülkede 2, gelişmekte olan ülkede 1.5; 'şu an savaş zamanı, 1 bile iyi, altına düşerse sıkıntı'. Sektöre ve ülkeye göre bakılmalı."},

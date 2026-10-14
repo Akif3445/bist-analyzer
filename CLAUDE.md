@@ -2077,6 +2077,22 @@ selection track's drawdown". It should be tested once on data that took no
 part in this run, and the natural candidate is the reserve when the vault is
 opened.
 
+**H2 pre-registered 2026-10-14 (user-approved), before the vault is opened.**
+It is in `bilanco_esikler.json` → `_on_kayit_2`. Rule:
+- same score, same 0.50 cut, unmanaged track only, reserve period only;
+- success = MaxDD at least 5 points better **and** real return at most 2
+  points lower;
+- if the baseline MaxDD is shallower than −20%, the verdict is "ÖLÇÜLEMEDİ";
+- one trial.
+
+`_saglik_kasa_kolu` runs it inside `kasa-ac`, after the main vault result and
+behind its own try/except, so a failure cannot lose the main number. The
+verdict is stored in `acilis_kaydi`. A dry run on the last two
+**development** years (2022-08 → 2024-08, data already used) only checked that
+the code works. It came back BAŞARISIZ: MaxDD −42.8% vs −49.1%, but real
+return −33.8% vs −29.5%. Read it as a hint to expect little, not as evidence;
+the hypothesis was written before that run.
+
 Teacher's notes transcribed 2026-10-07 from the user's PDF. Corrections to
 the earlier reading:
 - inventory consumption ≤ 30–60 days (not 30);
