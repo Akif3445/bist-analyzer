@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BIST Smart Investment Assistant — a Streamlit app that scores BIST (Borsa Istanbul) and US stocks 0-100 by combining technical analysis, news sentiment, analyst target upside, and valuation, then generates buy/sell signals. Single-user, runs locally or on Streamlit Cloud. Not financial advice (disclaimer is baked into the UI).
 
-Live demo: https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app
+Live demo: https://bist-analyzer.streamlit.app
 
 ## Commands
 

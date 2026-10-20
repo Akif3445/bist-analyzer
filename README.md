@@ -2,7 +2,7 @@
 
 A stock analysis and portfolio management platform for Borsa Istanbul (BIST) and US markets. It scores stocks 0–100 by combining technical analysis, news sentiment, analyst upside and valuation — then proposes portfolios, manages them daily, and measures whether any of it actually works.
 
-Live demo: [bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app)
+Live demo: [bist-analyzer.streamlit.app](https://bist-analyzer.streamlit.app)
 
 > **Not investment advice.** This is a research and educational project. See [Disclaimer](#disclaimer).
 

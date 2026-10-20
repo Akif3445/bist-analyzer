@@ -2,7 +2,7 @@
 
 Borsa İstanbul (BIST) ve ABD piyasaları için hisse analizi ve portföy yönetimi platformu. Hisseleri teknik analiz, haber duyarlılığı, analist primi ve değerlemeyi birleştirerek 0–100 arası puanlar; ardından portföy önerir, onları günlük yönetir ve **bunların gerçekten işe yarayıp yaramadığını ölçer.**
 
-Canlı demo: [bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fxrpkkrcz.streamlit.app)
+Canlı demo: [bist-analyzer.streamlit.app](https://bist-analyzer.streamlit.app)
 
 > **Yatırım tavsiyesi değildir.** Bu bir araştırma ve eğitim projesidir. Bkz. [Sorumluluk reddi](#sorumluluk-reddi).
 
