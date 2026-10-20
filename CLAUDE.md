@@ -2416,6 +2416,20 @@ The public Streamlit Cloud demo runs with Turso WRITE credentials and Streamlit 
 
 **Repository visibility (2026-07-31).** The user decided to make the repo **private** (done via GitHub web UI; `gh` CLI is not installed on this machine). Rationale: CLAUDE.md, the code comments and `weight_calibration.py` together expose every calibration finding and parameter, so trimming the README alone would have been theatre — the coherent lever is repo visibility. Verified before the switch that **no secret ever leaked**: full-history scan found no `.env`, no `secrets.toml`, and no real `sk-ant-`/JWT/Turso-URL value in any commit; the only config file ever tracked is `.streamlit/config.toml` (theme/server settings only). If the repo goes public again, review CLAUDE.md and both READMEs together — they now carry the full evidence trail.
 
+**Made public again 2026-10-20 (user decision, for CV / internship applications).**
+It followed the pre-publication review (see that section):
+- secrets were re-scanned across the full history: clean;
+- both READMEs were rewritten to current, honest results, with Known Issues
+  and Roadmap;
+- the user accepted that the commit email becomes visible;
+- `APP_EDIT_KEY` was confirmed set on Streamlit Cloud ("🔒 Editör girişi"
+  shows in the live sidebar);
+- the license stays "Proprietary, all rights reserved": source-visible,
+  not reusable.
+
+Public repos get free Actions minutes, but the 60-day inactivity cron rule
+still applies.
+
 Two Actions notes for a private repo: minutes are metered (free tier 2000/month; this robot uses ~220), and GitHub disables scheduled workflows after 60 days with no repository activity — check the Actions tab occasionally during quiet stretches.
 
 ## Known constraints
