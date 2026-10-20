@@ -101,14 +101,17 @@ Percentile of the system's final NAV among 50 random 6-stock portfolios from the
 
 Against a **textbook 12-1 momentum portfolio** with no tuned parameters, the system's alpha is zero to negative in all three markets, and momentum alone does better in the US (final NAV 12.19 vs 4.55) and the UK (2.29 vs 0.68). The score function's value over plain momentum is not established.
 
-**Deflated Sharpe Ratio: 0.03–0.14** across plausible trial counts, against a 0.95 threshold. The backtest alone cannot establish an edge.
+**Deflated Sharpe Ratio: 0.11–0.31** across plausible trial counts, against a 0.95 threshold. The backtest alone cannot establish an edge.
 
 ### What does hold up: the management layer in BIST
 
 | BIST | Selection only | Managed |
 |---|---|---|
 | Percentile vs random-6 | 10th | 62nd |
+| Real return per year (ENAG) | −10.0% | **+4.8%** |
 | Max drawdown | −69.9% | **−25.8%** |
+
+For reference, XU100 returned −13.2% per year in real terms over the same window.
 
 Measured over six consecutive sub-periods (2018–2026, before the vault existed), the managed track had the smaller drawdown in **6 of 6**. Through the 2018 currency crisis the unmanaged track drew down 69.9% while the managed one drew down 23.8%. The same rules did **not** transfer to the US, where they made both return and drawdown worse — so this is a market-specific risk overlay, not a general property of the method.
 
@@ -134,9 +137,7 @@ Measured over six consecutive sub-periods (2018–2026, before the vault existed
 Found in a code and calculation review in October 2026. Fixed items are listed under Roadmap history; these are still open.
 
 **Affects reported numbers**
-- **ENAG inflation before 2020 is a placeholder.** ENAG starts in 2020, and missing months are filled with the average of the latest 12 months (~54%/yr). For 2018-08 → 2019-12 that is a factor of 1.77 against official TÜFE's 1.20, so every "real" figure on a window starting before 2020 understates real return by roughly 6–7 points per year. Comparisons between strategies (percentiles, rankings) are unaffected, because every series is deflated the same way.
-- **2020–2024 ENAG months are flat estimates with some archived months overlaid**, so yearly totals drift from the published annual figures (e.g. 2021: 69.8% vs 82.8%).
-- **Months after the last entered ENAG value** are filled with the trailing 12-month average until someone enters them.
+- **Inflation data is partly estimated.** ENAG did not exist before 2020, so 2017–2019 use official TÜFE. For 2020–2025, months without a published monthly figure are filled with one rate per year so that the year matches ENAG's published annual. Months after the last entered value use the trailing 12-month average until they are entered.
 - **Price-return benchmarks against total-return portfolios.** The stock panels include dividends, while XU100, S&P 500 and FTSE 100 do not; "vs index" figures are flattered by ~2 points/yr in the US and more in the UK and BIST.
 - **The backtest tests the technical core only.** News and analyst targets cannot be reconstructed historically; the live composite shares about 3 of its top 6 picks with the backtest. The live liquidity filter is also 20× looser than the backtest's.
 - **Survivorship:** the universe is today's liquid list; bounded by simulation at ~2 points of real CAGR.
@@ -159,7 +160,6 @@ Found in a code and calculation review in October 2026. Fixed items are listed u
 
 **Next**
 - Open the data vault once, with the pre-registered tests: system vs random on the reserved two years, and the financial-health filter on the unmanaged track.
-- Fix the ENAG series: official TÜFE for months before ENAG existed, and monthly values scaled to match published annual totals. Then re-run every real-return table.
 - Total-return benchmarks where the data source allows.
 
 **After a few months of daily component logs**
@@ -180,6 +180,7 @@ Found in a code and calculation review in October 2026. Fixed items are listed u
 - Information Ratio subtracted a nominal index return from an inflation-adjusted portfolio return, and US (dollar) portfolios were deflated with Turkish inflation.
 - Analysis history was not saved on older local databases, and the reading side used a different column name from the writing side.
 - A duplicated month in the ENAG defaults overwrote an official value with an estimate on fresh installs.
+- **Inflation before 2020 was wrong.** ENAG has no data before 2020, and those months were filled with the latest year's average (~54%/yr instead of ~20%). Every real return on the 2018–2024 window was understated by about 5 points a year. Managed BIST moved from −0.8% to +4.8% per year; rankings against random portfolios did not change. 2020–2024 yearly totals now also match ENAG's published annual figures.
 
 ---
 

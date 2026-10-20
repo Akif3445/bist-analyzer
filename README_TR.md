@@ -101,14 +101,17 @@ Sistemin son NAV'ının, aynı evrenden aynı rebalans ve maliyetle çekilen 50 
 
 Hiçbir parametresi ayarlanmamış **ders kitabı 12-1 momentum portföyüne** karşı sistemin alfası üç piyasada da sıfır ya da eksi; ABD'de (son NAV 12,19'a 4,55) ve İngiltere'de (2,29'a 0,68) momentum tek başına daha iyi. Skor fonksiyonunun düz momentuma üstünlüğü kanıtlanmış değil.
 
-**Deflated Sharpe Ratio: 0,03–0,14**, eşik 0,95. Backtest tek başına bir üstünlük kanıtlayamıyor.
+**Deflated Sharpe Ratio: 0,11–0,31**, eşik 0,95. Backtest tek başına bir üstünlük kanıtlayamıyor.
 
 ### Ayakta kalan: BIST'te yönetim katmanı
 
 | BIST | Yalnız seçim | Yönetilen |
 |---|---|---|
 | Rastgele-6'ya göre yüzdelik | 10. | 62. |
+| Yıllık reel getiri (ENAG) | −%10,0 | **+%4,8** |
 | En büyük düşüş | −%69,9 | **−%25,8** |
+
+Karşılaştırma için: aynı dönemde XU100'ün yıllık reel getirisi −%13,2.
 
 Ardışık altı alt dönemde (2018–2026, kasa kurulmadan önce ölçüldü) yönetilen iz **6'nın 6'sında** daha küçük düşüş yaşadı. 2018 kur krizinde yönetimsiz iz %69,9 düşerken yönetilen iz %23,8 düştü. Aynı kurallar ABD'ye **taşınmadı**, orada hem getiriyi hem düşüşü kötüleştirdi; yani bu genel bir yöntem özelliği değil, piyasaya özgü bir risk katmanı.
 
@@ -134,9 +137,7 @@ Ardışık altı alt dönemde (2018–2026, kasa kurulmadan önce ölçüldü) y
 Ekim 2026'daki kod ve hesap incelemesinde bulundu. Düzeltilenler Yol Haritası'nın sonunda; bunlar hâlâ açık.
 
 **Raporlanan sayıları etkileyenler**
-- **2020 öncesi ENAG enflasyonu yer tutucu.** ENAG 2020'de başlıyor; eksik aylar son 12 ayın ortalamasıyla (~yıllık %54) dolduruluyor. 2018-08 → 2019-12 için bu 1,77'lik bir çarpan, resmi TÜFE'de 1,20. Bu yüzden 2020 öncesinde başlayan pencerelerdeki her "reel" sayı reel getiriyi yılda kabaca 6–7 puan düşük gösteriyor. Stratejiler arası karşılaştırmalar (yüzdelikler, sıralamalar) etkilenmez, çünkü her seri aynı şekilde düşülüyor.
-- **2020–2024 ENAG ayları düz tahmin, üstüne bazı arşiv ayları yazılmış**; yıllık toplamlar yayımlanan yıllık rakamlardan sapıyor (örn. 2021: %69,8'e karşı %82,8).
-- **Girilen son ENAG ayından sonraki aylar** biri girene kadar son 12 ayın ortalamasıyla dolduruluyor.
+- **Enflasyon verisi kısmen tahmini.** ENAG 2020'den önce yoktu, bu yüzden 2017–2019 için resmi TÜFE kullanılıyor. 2020–2025'te aylık rakamı yayımlanmamış aylar, yıl toplamı ENAG'ın yayımladığı yıllığı tutacak tek bir oranla dolduruluyor. Girilen son aydan sonraki aylar, girilene kadar son 12 ayın ortalamasını kullanıyor.
 - **Fiyat endeksi, toplam getiri portföyüyle karşılaştırılıyor.** Hisse panelleri temettüyü içeriyor; XU100, S&P 500 ve FTSE 100 içermiyor. "Endekse göre" sayılar ABD'de yılda ~2 puan, İngiltere ve BIST'te daha fazla lehimize.
 - **Backtest yalnız teknik çekirdeği test ediyor.** Haber ve analist hedefi tarihsel olarak kurulamıyor; canlı bileşik skor ilk 6 seçimin yaklaşık 3'ünü backtest'le paylaşıyor. Canlı likidite filtresi de backtest'inkinden 20 kat gevşek.
 - **Hayatta kalma yanlılığı:** evren bugünün likit listesi; simülasyonla reel yıllık getiride ~2 puanla sınırlandı.
@@ -159,7 +160,6 @@ Ekim 2026'daki kod ve hesap incelemesinde bulundu. Düzeltilenler Yol Haritası'
 
 **Sıradaki**
 - Veri kasasını önceden kaydedilmiş testlerle bir kez açmak: kilitli iki yılda sistem–rastgele karşılaştırması ve yönetimsiz izde mali sağlamlık filtresi.
-- ENAG serisini düzeltmek: ENAG'den önceki aylar için resmi TÜFE, aylık değerlerin yayımlanan yıllık toplamlara ölçeklenmesi. Ardından tüm reel getiri tablolarını yeniden koşmak.
 - Veri kaynağının izin verdiği yerde toplam getiri endeksleri.
 
 **Birkaç aylık günlük bileşen kaydından sonra**
@@ -180,6 +180,7 @@ Ekim 2026'daki kod ve hesap incelemesinde bulundu. Düzeltilenler Yol Haritası'
 - Bilgi Oranı enflasyondan arındırılmış portföy getirisinden nominal endeks getirisini çıkarıyordu; ABD (dolar) portföyleri Türk enflasyonuyla düşülüyordu.
 - Eski yerel veritabanlarında analiz geçmişi kaydedilmiyordu; okuyan taraf yazan taraftan farklı bir sütun adı kullanıyordu.
 - ENAG varsayılanlarında iki kez yazılmış bir ay, sıfırdan kurulumda resmi değeri bir tahminle eziyordu.
+- **2020 öncesi enflasyon yanlıştı.** ENAG'ın 2020 öncesi verisi yok ve o aylar son yılın ortalamasıyla (~%20 yerine ~yıllık %54) dolduruluyordu. 2018–2024 penceresindeki her reel getiri yılda yaklaşık 5 puan düşük görünüyordu. Yönetilen BIST portföyü yılda −%0,8'den +%4,8'e çıktı; rastgele portföylere göre sıralama değişmedi. 2020–2024 yıllık toplamları da artık ENAG'ın yayımladığı rakamları tutuyor.
 
 ---
 

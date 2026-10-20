@@ -2894,19 +2894,41 @@ class SmartPortfolioBuilder:
 # PORTFÖY YÖNETİCİSİ v2 — ENAG reel getiri + piyasa rejimi + vade/profil portföyleri
 
 # ENAG E-TÜFE aylık artışları (%). Kaynak: enagrup.org / basın duyuruları.
-# "tahmini" işaretliler: 2025 yıllığı %56.14'ten türetildi (ay verisi bulunamadı).
 # Yeni aylar UI'daki "ENAG Verisi" bölümünden eklenir — tablo DB'de tutulur.
-ENAG_MOM_DEFAULTS = {
-    # 2020-2024: ENAG yıllık değerlerinden türetilmiş düz aylık eşdeğerler
-    # (ay bazlı seri yayında yok; yıllıklar: 2020 %36.7, 2021 %82.8,
-    #  2022 %137.5, 2023 %127.2, 2024 %83.4). Tarihsel simülasyon için.
-    **{f"2020-{m:02d}": (2.65, "tahmini-yillik") for m in range(1, 13)},
-    **{f"2021-{m:02d}": (5.16, "tahmini-yillik") for m in range(1, 13)},
-    **{f"2022-{m:02d}": (7.47, "tahmini-yillik") for m in range(1, 13)},
-    **{f"2023-{m:02d}": (7.08, "tahmini-yillik") for m in range(1, 13)},
-    **{f"2024-{m:02d}": (5.18, "tahmini-yillik") for m in range(1, 13)},
-    # Wayback arşivinden hasat edilen GERÇEK aylık değerler (2026-07 taraması;
-    # site kopyalarındaki resmi duyurulardan) — düz tahminlerin üzerine yazar:
+# Kod varsayılanlarını canlı tabloya taşımak: tools/pmdb_admin.py enag-senkron.
+#
+# DÜZELTME 2026-10-20 — iki hata vardı ve 2018-2024 penceresindeki HER reel
+# sayıyı etkiliyordu (stratejiler arası karşılaştırmaları değil):
+#  1. 2020 öncesinde hiç satır yoktu. _monthly_rate eksik ayı SON 12 bilinen
+#     ayın ortalamasıyla (~aylık %3.6, yıllık ~%54) dolduruyordu; 2018-08 →
+#     2019-12 çarpanı 1.774 çıkıyordu, resmi TÜFE'de 1.198. ENAG o dönemde
+#     yayında yoktu, dolayısıyla elimizdeki en iyi ölçü resmi TÜFE'dir.
+#  2. 2020-2024 ayları düz yıllık eşdeğerdi, üstüne arşivden gerçek aylar
+#     yazılınca yıl toplamı yayımlanan yıllıktan kayıyordu (2021: %69.8 ↔
+#     %82.8). Şimdi arşiv ayları SABİT, kalan aylar yıl toplamını tutturacak
+#     tek bir oranla doldurulur (_enag_yil_doldur).
+
+# 2017-2019: ENAG yok → resmi TÜFE aylık değişimi (TÜİK; borsapy Inflation()
+# ile alınıp bilanco_veri/_tufe.pkl'de donduruldu). Yıllıklar TÜİK'le aynı.
+_TUFE_ENAG_ONCESI = {
+    # 2017: yıllık %11.9
+    "2017-01": 2.46, "2017-02": 0.81, "2017-03": 1.02, "2017-04": 1.31, "2017-05": 0.45, "2017-06": -0.27,
+    "2017-07": 0.15, "2017-08": 0.52, "2017-09": 0.65, "2017-10": 2.08, "2017-11": 1.49, "2017-12": 0.69,
+    # 2018: yıllık %20.3
+    "2018-01": 1.02, "2018-02": 0.73, "2018-03": 0.99, "2018-04": 1.87, "2018-05": 1.62, "2018-06": 2.61,
+    "2018-07": 0.55, "2018-08": 2.30, "2018-09": 6.30, "2018-10": 2.67, "2018-11": -1.44, "2018-12": -0.40,
+    # 2019: yıllık %11.8
+    "2019-01": 1.06, "2019-02": 0.16, "2019-03": 1.03, "2019-04": 1.69, "2019-05": 0.95, "2019-06": 0.03,
+    "2019-07": 1.36, "2019-08": 0.86, "2019-09": 0.99, "2019-10": 2.00, "2019-11": 0.38, "2019-12": 0.74,
+}
+
+# Yayımlanan ENAG yıllıkları (Aralık/Aralık, %) — ay serisi bulunamayan
+# aylar bunlara göre doldurulur.
+_ENAG_YILLIK = {2020: 36.7, 2021: 82.8, 2022: 137.5, 2023: 127.2, 2024: 83.4, 2025: 56.14}
+
+# Bilinen GERÇEK aylar: Wayback arşivi (2026-07 taraması, site kopyalarındaki
+# resmi duyurular) ve elle girilen resmi duyurular. Bunlara dokunulmaz.
+_ENAG_BILINEN = {
     "2020-11": (4.03, "resmi-arsiv"), "2020-12": (4.08, "resmi-arsiv"),
     "2021-01": (2.99, "resmi-arsiv"), "2021-03": (3.36, "resmi-arsiv"),
     "2021-04": (2.62, "resmi-arsiv"), "2021-05": (3.94, "resmi-arsiv"),
@@ -2916,19 +2938,31 @@ ENAG_MOM_DEFAULTS = {
     "2024-02": (4.32, "resmi-arsiv"), "2024-05": (5.66, "resmi-arsiv"),
     "2024-06": (4.27, "resmi-arsiv"), "2024-12": (2.34, "resmi-arsiv"),
     "2025-02": (3.37, "resmi-arsiv"),
-    # 2025-02 yukarıda resmi-arşiv (3.37). Burada ikinci kez "tahmini 5.10"
-    # yazılıydı ve sözlükte SONRAKİ anahtar kazandığı için resmi değeri
-    # eziyordu (canlı tablo INSERT OR IGNORE ile doğru kaldı; sorun yalnız
-    # sıfırdan kurulan veritabanlarındaydı).
-    "2025-01": (5.10, "tahmini"),
-    "2025-03": (5.10, "tahmini"), "2025-04": (4.46, "resmi"),
-    "2025-05": (3.66, "resmi"),   "2025-06": (1.94, "resmi"),
-    "2025-07": (5.10, "tahmini"), "2025-08": (3.23, "resmi"),
-    "2025-09": (3.79, "resmi"),   "2025-10": (3.74, "resmi"),
-    "2025-11": (2.13, "resmi"),   "2025-12": (2.11, "resmi"),
-    "2026-01": (6.32, "resmi"),   "2026-02": (4.01, "resmi"),
-    "2026-03": (4.10, "resmi"),   "2026-04": (5.07, "resmi"),
-    "2026-05": (2.16, "resmi"),   "2026-06": (1.94, "resmi"),
+    "2025-04": (4.46, "resmi"), "2025-05": (3.66, "resmi"), "2025-06": (1.94, "resmi"),
+    "2025-08": (3.23, "resmi"), "2025-09": (3.79, "resmi"), "2025-10": (3.74, "resmi"),
+    "2025-11": (2.13, "resmi"), "2025-12": (2.11, "resmi"),
+    "2026-01": (6.32, "resmi"), "2026-02": (4.01, "resmi"), "2026-03": (4.10, "resmi"),
+    "2026-04": (5.07, "resmi"), "2026-05": (2.16, "resmi"), "2026-06": (1.94, "resmi"),
+}
+
+
+def _enag_yil_doldur(yil: int, yillik_pct: float, bilinen: dict) -> dict:
+    """Bir yılın bilinmeyen aylarını, yıl toplamı yayımlanan yıllığı tutacak
+    TEK bir aylık oranla doldurur; bilinen aylar olduğu gibi kalır."""
+    aylar = [f"{yil}-{m:02d}" for m in range(1, 13)]
+    sabit = [bilinen[a][0] for a in aylar if a in bilinen]
+    eksik = [a for a in aylar if a not in bilinen]
+    if not eksik:
+        return {}
+    kalan = (1 + yillik_pct / 100) / float(np.prod([1 + v / 100 for v in sabit]))
+    oran = round((kalan ** (1 / len(eksik)) - 1) * 100, 3)
+    return {a: (oran, "tahmini-olcekli") for a in eksik}
+
+
+ENAG_MOM_DEFAULTS = {
+    **{ym: (v, "tufe-resmi") for ym, v in _TUFE_ENAG_ONCESI.items()},
+    **{k: v for y, a in _ENAG_YILLIK.items() for k, v in _enag_yil_doldur(y, a, _ENAG_BILINEN).items()},
+    **_ENAG_BILINEN,
 }
 
 

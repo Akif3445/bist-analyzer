@@ -1268,6 +1268,11 @@ the new baseline below, never against a pre-vault figure.
 
 #### The baseline on the development window — this is uncomfortable and it is the point
 
+> **Real-return and Sharpe columns superseded 2026-10-20.** The ENAG series
+> had no pre-2020 rows and deflated 2018-19 at ~54%/yr. See "Pre-publication
+> review" for the corrected figures (managed −0.8% → +4.8%/yr, DSR 0.11–0.31).
+> NAVs and percentiles below are unaffected.
+
 `karsilastir 8` and `run 8` under the lock, 448 stocks, 72/72 rebalances,
 2018-08-31 → 2024-08-29:
 
@@ -2147,9 +2152,9 @@ minutes. Static check: pyflakes reports no undefined names.
   were affected: the live table was seeded with `INSERT OR IGNORE` and holds
   3.37.
 
-**Found and NOT fixed: awaiting a decision, because it moves every real-return
-number in this file.**
-- **ENAG has no rows before 2020-01.** `_monthly_rate` fills missing months
+**ENAG series: FIXED 2026-10-20 (user-approved). Every real-return number in
+this file older than this note is superseded by the table below.**
+- **ENAG had no rows before 2020-01.** `_monthly_rate` fills missing months
   with the mean of the **latest** 12 known months, about 3.6% a month (54% a
   year). So 2018-08 → 2019-12 is deflated by **1.774**, while official TÜFE
   for the same months is **1.198**.
@@ -2163,10 +2168,52 @@ number in this file.**
   132.4% vs 127.2%. 2024 matches.
 - **Months after 2026-06** have not been entered, so they also take the
   trailing average.
-- **Proposed fix:** official TÜFE for the months before ENAG existed, and
-  non-archived months scaled so each year matches its published annual. This
-  writes to the live `enag_monthly` table and then needs every real-return
-  table re-run.
+- **Fix.**
+  - 2017–2019 use official TÜFE monthly changes, labelled `tufe-resmi`
+    (frozen from `bilanco_veri/_tufe.pkl`; the yearly totals 11.9 / 20.3 /
+    11.8% match TÜİK).
+  - For 2020–2025, `_enag_yil_doldur` keeps every archived or official month
+    and fills the rest with **one rate per year**, chosen so that the year
+    multiplies out to its published annual (`_ENAG_YILLIK`). Those months are
+    labelled `tahmini-olcekli`. Verified: every year now matches to 0.1 pt,
+    and 2018-08 → 2020-01 deflates by 1.199.
+  - The live table was moved with the new `tools/pmdb_admin.py enag-senkron`.
+    It shows the change list by default and writes only with `--yaz`; it
+    inserts missing months and updates only rows whose source is a code
+    estimate, never `resmi`, `resmi-arsiv` or manual entries.
+  - One caveat to record: the first dry run **did** insert the 36 pre-2020
+    rows, because it called `InflationEngine._init_table()`, which seeds with
+    `INSERT OR IGNORE`. That was the approved outcome anyway, and the call has
+    been removed from the dry-run path.
+- **Months after 2026-06 are still missing.** They take the trailing 12-month
+  average until they are entered in the UI.
+
+**Re-measured on the vault window, 2018-08-31 → 2024-08-29.**
+Percentiles, NAVs and nominal figures are unchanged; only the deflation moved.
+
+| | Real/yr before → after | Sharpe before → after |
+|---|---|---|
+| System, unmanaged (`karsilastir`/`run 8`) | −14.7% → **−10.0%** | |
+| System, managed | −0.8% → **+4.8%** | 0.10 → **0.31** |
+| Equal-weight BIST-30 | −10.2% → −5.2% | |
+| Random-6 (mean) | +0.7% → +6.3% | |
+| XU100 | −17.8% → −13.2% | |
+| Health A / unmanaged | −9.2% → −4.1% | |
+| Health A / managed | −12.7% → −7.9% | |
+| Health B / managed | −0.8% → +4.8% | |
+| `devir`: + daily buying | −14.6% → −9.9% | |
+| `devir`: + both (closest to live) | −15.8% → −11.2% | |
+
+Unchanged:
+- Selection is still at the 10th percentile and managed at the 62nd.
+- Management adds +14.7 real pts/yr in BIST.
+- Both health verdicts are still FAILED: A −7.9% vs +4.8%, worse in 6 of 7
+  years; B identical.
+- Daily buying still costs about 14 pts/yr.
+
+**DSR re-run:** annualised Sharpe 0.31, DSR **0.11–0.31** (it was 0.03–0.14)
+across N = 25 to 695, against a 0.95 threshold. It still fails, and the
+uncorrected PSR is 0.78.
 
 Other open items are listed in README "Known Issues": nominal MaxDD,
 closed-trade drawdown in the single-stock backtest, Cutler RSI, dotted US
