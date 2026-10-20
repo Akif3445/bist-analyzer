@@ -10,14 +10,14 @@ Canlı demo: [bist-analyzer.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fx
 
 ## Bu projeyi farklı kılan ne
 
-Çoğu hisse tarayıcı size ne alacağınızı söyler. Asıl zor soru, *size söyleyen şeyin çalışıp çalışmadığıdır* — emeğin büyük kısmı oraya gitti:
+Çoğu hisse tarayıcısı ne alınacağını söyler. Asıl zor soru, *bunu söyleyen şeyin işe yarayıp yaramadığıdır* — emeğin çoğu buraya gitti:
 
-- **Ağırlıklar tahmin değil, kalibrasyon.** Bileşen ağırlıkları, geçmişin her noktasında hesaplanmış kesitsel Bilgi Katsayısı (Information Coefficient, Grinold–Kahn) ölçümlerinden geliyor.
-- **Bilimsel kontrol grupları.** Sistem her hafta kendi seçimlerini gölge portföy olarak kaydeder — yanına iki kontrol grubu koyar: rastgele kura ile seçilmiş portföy ve eşit ağırlıklı pasif endeks sepeti. Sistem şansı ve pasifliği yenemiyorsa ortada bir üstünlük yoktur.
-- **Yönetim, seçimden ayrı ölçülür.** Her haftalık kohort iki kez kaydedilir: biri pasif, diğeri aynı hisseler ve aynı fiyatlarla başlayıp aktif yönetilen. Aradaki fark **tam olarak yönetimin katkısıdır.**
-- **Örneklem-dışı doğrulama.** Kural parametreleri bir dönemde seçilir, seçime hiç katılmayan başka bir dönemde sınanır. İç-örneklem optimizasyonunun ürettiği önerilerin yarısı bu testte gürültü çıkıp elendi.
-- **Nominal değil, reel getiri.** Yüksek enflasyonlu bir ekonomide nominal getiri neredeyse anlamsızdır; performans ENAG enflasyonuna ve endekse göre raporlanır.
-- **Bilinen yanlılıklar gizlenmez, yazılır.** Hayatta kalma yanlılığı, boğa piyasası örneklemi, iç-örneklem seçimi ve backtest ile canlı sistem arasındaki fark açıkça belgelenmiştir.
+- **Ağırlıklar tahmin değil, ölçüm.** Bileşen ağırlıkları, tarihe sadık (point-in-time) panellerde ölçülen kesitsel Bilgi Katsayılarından (Grinold–Kahn) gelir.
+- **Bilimsel kontrol grupları.** Her sonuç; aynı evrenden rastgele çekilen 6 hisselik portföylerle, eşit ağırlıklı pasif sepetle, endeksle ve ders kitabı 12-1 momentum portföyüyle karşılaştırılır.
+- **Yönetim, seçimden ayrı ölçülür.** Her haftalık canlı kohort iki kez kaydedilir: biri pasif, biri aynı seçim ve fiyatlarla aktif yönetilen. Aradaki fark yönetimin katkısıdır.
+- **Kilitli veri kasası.** Son iki yıl varsayılan olarak her backtest'in dışında tutulur ve yalnız bir kez açılabilir; o koşunun hipotezleri önceden depoya yazılır.
+- **Çoklu test düzeltmesi.** Deflated Sharpe Ratio, gerçekten denenen yapılandırma sayısına (~695) göre hesaplanır.
+- **Olumsuz sonuçlar da yazılır.** Burada test edilen hipotezlerin çoğu başarısız oldu ve raporlar bunu açıkça söyler — projenin kendi manşet iddialarını zayıflatanlar dahil.
 
 ---
 
@@ -25,18 +25,20 @@ Canlı demo: [bist-analyzer.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fx
 
 | Dosya | Satır | Görev |
 |---|---|---|
-| `bist_analyzer.py` | ~12.600 | Her şey: veri çekme, skorlama motorları, portföy yöneticisi, günlük yönetim, denetim, veritabanı, backtest ve tüm Streamlit sayfaları |
-| `news_engine.py` | ~1.950 | Bağımsız haber duyarlılık motoru (ana dosyaya geri bağımlılığı yok) |
-| `weight_calibration.py` | ~690 | Araştırma aracı: point-in-time paneller kurar, skorlama ağırlıklarını verilendirmek için IC hesaplar |
-| `pipeline_backtest.py` | ~650 | Tam-hat tarihsel simülasyon, yönetim kuralı taraması, örneklem-dışı doğrulama |
-| `daily_robot.py` | ~240 | Otonom günlük bakım (GitHub Actions üzerinde çalışır) |
-| `tools/pmdb_admin.py` | ~90 | Sınırlandırılmış veritabanı bakım komutları |
+| `bist_analyzer.py` | ~12.700 | Kullanıcıya dönük her şey: veri çekme, skor motorları, portföy yöneticisi, günlük yönetim, denetim, depolama ve tüm Streamlit sayfaları |
+| `news_engine.py` | ~2.300 | Bağımsız haber duyarlılık motoru (ana dosyaya geri bağımlılığı yok) |
+| `pipeline_backtest.py` | ~2.350 | Tam hat tarihsel simülasyon, kontroller, walk-forward, transfer testleri, DSR, veri kasası |
+| `weight_calibration.py` | ~700 | Point-in-time paneller kurar, ağırlıklar için IC hesaplar |
+| `bilanco.py` | ~600 | Çeyreklik mali tablolar (TMS 29 farkında, sabit TÜFE parası) ve ders notu oranları |
+| `skor_gunlugu.py` | ~330 | Tüm BIST evreni için her skor bileşeninin günlük kalıcı kaydı |
+| `daily_robot.py` | ~310 | Otonom günlük bakım (GitHub Actions'ta çalışır) |
+| `tools/` | — | KAP bildirim geçmişi, olay çalışması, ifade ölçümü, sınırlı veritabanı bakımı |
 
 ### Çekirdek motorlar
 
 `PortfolioScanner` dinamik evreni tarar → `PortfolioManager` vade × yatırımcı profiline göre portföy önerir → `PortfolioDoctor` onları günlük yönetir → `PortfolioAudit` kuralların işe yarayıp yaramadığını ölçer.
 
-Evren dinamiktir ve likidite filtrelidir, günlük yenilenir: TL hacim eşiğini geçen ~500 BIST hissesi ve günlük 50M$ üzeri işlem gören ~1.400 ABD hissesi.
+Evren dinamik ve likidite filtrelidir, her gün yenilenir: TL hacim eşiğini aşan ~500 BIST hissesi ve günlük $50M hacmi aşan ~1.400 ABD hissesi.
 
 ---
 
@@ -44,105 +46,158 @@ Evren dinamiktir ve likidite filtrelidir, günlük yenilenir: TL hacim eşiğini
 
 | Bileşen | Ağırlık | Kaynak |
 |---|---|---|
-| Teknik | %45 | SMA, RSI, MACD, Bollinger, Stochastic, OBV, ADX, 52 hafta pozisyonu |
-| Haber duyarlılığı | %25 | Kademeli ağırlıklı RSS kaynakları + KAP bildirimleri |
-| Yükseliş potansiyeli | %20 | Analist konsensüs hedefi ile güncel fiyat farkı |
-| Değerleme | %10 | Sektör ortalamalarına göre F/K, PD/DD |
+| Teknik | %60 | SMA, RSI, MACD, Bollinger, Stochastic, OBV, ADX, 52 hafta pozisyonu |
+| Haber duyarlılığı | %10 | Kademeli ağırlıklı RSS kaynakları + KAP bildirimleri; skoru yalnız fiyatla doğrulanmış yönler oynatabilir |
+| Prim potansiyeli | %20 | Analist konsensüs hedefi / güncel fiyat (TradingView, en az 3 analist) |
+| Değerleme | %10 | Sektöre göre F/K, PD/DD ve özsermaye kârlılığı |
 
-Ağırlıklar Temmuz 2026'da 35/35/20/10'dan güncellendi — kalibrasyon, haber duyarlılığının öngörü gücünün zayıf olduğunu gösterdi. Hedef fiyat veya temel veri yoksa o ağırlık boşta bırakılmaz, diğer bileşenlere dağıtılır.
+Bir bileşenin gerçek girdisi yoksa (haber yok, analist hedefi yok) ağırlığı nötr 50 ile ortalanmaz, tekniğe aktarılır. Duyarlılık %25'ten %10'a indirildi: denetim, hisselerin çoğunun tam 50 aldığını ve bunun sıralamaya bilgi katmadan skorun yayılımını daralttığını gösterdi.
 
 **Sinyal bantları:** 72+ Güçlü Al · 57–71 Al · 43–56 Nötr · 30–42 Sat · <30 Güçlü Sat
 
 ### Teknik stil rejime bağlı
 
-Orijinal kontrarian skorlama (aşırı satım RSI'ı, düşük Bollinger konumu, 52 hafta zirvesinden uzaklığı ödüllendiren) BIST'te **sıfır öngörü gücü** ölçtü. Piyasa momentum rejiminde: yüksek RSI ve yüksek 52 hafta pozisyonu *daha yüksek* ileri getiri öngördü (t > 3, alt dönemlerde tutarlı). Hem canlı hem backtest skorlama yolları artık momentum stilini kullanıyor.
+İlk kontraryan skorlama (aşırı satılmış RSI'ı, düşük Bollinger konumunu, 52 hafta zirvesinden uzaklığı ödüllendiren) BIST'te **sıfır öngörü gücü** ölçtü. Piyasa momentum rejiminde: yüksek RSI ve yüksek 52 hafta pozisyonu *daha yüksek* ileri getiri öngördü. Canlı ve backtest skor yolları artık momentum stilini kullanır.
 
-Segment bazlı melez bir yaklaşım denendi ve **reddedildi** — farklı cetvelleri karıştırmak kesitsel sıralamayı bozuyor, IC +0.045'ten +0.012'ye düşüyor.
+### Skoru oynatan haber, fiyatı da oynatmış olmalı
+
+2018–2024 arası 411.656 KAP bildirimi bir olay çalışmasıyla fiyatlarla eşleştirildi. 16 yön hipotezinden ikisi ayakta kaldı: **pay geri alımı** (30 günde piyasaya göre %+2,63, t = 4,6) ve **bedelsiz sermaye artırımı** (%−3,86, t = −5,0 — sulandırma teorisinin beklediğinin tersi). Etkisi gürültü çıkan ifadeler artık oy kullanmıyor; "olumlu" etiketi ancak yönü kanıtlıysa skoru yükseltiyor.
 
 ---
 
 ## Portföy Yöneticisi
 
-Tüm evrenin taramasından, **vade** (kısa / orta / uzun) × **yatırımcı profili** (Temkinli / Dengeli / Agresif) matrisine göre portföy önerir. Sektör limiti, korelasyon eleme (>0.85 "aynı bahis" sayılır), ATR-ters-orantılı ağırlıklandırma ve tek pozisyon tavanı uygulanır.
+Tüm evren taramasından **vade** (kısa / orta / uzun) × **yatırımcı profili** (Temkinli / Dengeli / Agresif) bazında portföy önerir: sektör sınırı, korelasyon filtresi, ATR'ye ters orantılı ağırlık ve tek pozisyon üst sınırıyla.
 
-- **Piyasa rejimi kapısı.** BIST: XU100 trendi + BIST-30 genişliği + kur baskısı. ABD: S&P 500 trendi + genişlik + **seviye olarak** VIX. Dolar bazlı portföyde kur riski yoktur, oynaklık rejimi vardır.
-- **Minimum çeşitlendirme koruması.** Filtrelerden üçten az hisse geçerse portföy kurulmaz. Tek hisseye %100 ağırlık temkinlilik değil, konsantrasyondur.
-- **Performans defteri.** Portföy başına günlük NAV; nominal + ENAG-reel + endekse göreli raporlanır, kurumsal metriklerle (Sharpe, Sortino, maksimum düşüş, Bilgi Oranı).
+- **Piyasa rejimi kapısı.** BIST: XU100 trendi + BIST-30 genişliği + kur baskısı. ABD: S&P 500 trendi + genişlik + *seviye olarak* VIX.
+- **Asgari çeşitlendirme koruması.** Filtreleri üçten az hisse geçerse portföy kurulmaz.
+- **Performans defteri.** Her portföy için günlük NAV; nominal + ENAG-reel + endekse göreli, Sharpe, Sortino, en büyük düşüş ve Bilgi Oranı ile.
 
 ### Günlük aktif yönetim
 
-`PortfolioDoctor` her hafta içi kapanıştan sonra çalışır ve gerçek bir portföy yöneticisi gibi davranır:
+`PortfolioDoctor` her iş günü kapanıştan sonra çalışır:
 
-1. **Önce çıkışlar, bütçesiz** — stop kırılımı, takip eden stop, tez bozulması (skor çöküşü). Riski kesmek asla sınırlanmaz; sınırlanan sadece fırsat kovalamaktır.
-2. **Pozisyon başına tek ağırlık kararı** — hedefte kısmi kâr alma, ardından yoğunlaşma tavanı.
-3. **Nakit değerlendirme ve takas** — düşüş freni ve ayı rejimi kapısıyla sınırlı.
+1. **Çıkışlar günlük ve bütçesiz** — stop kırılımı, iz süren stop, tez bozulması (skor çöküşü). Risk azaltmak hiçbir zaman sınırlanmaz.
+2. **Pozisyon başına tek ağırlık kararı** — hedefte bir kerelik kısmi kâr alımı, ardından yoğunlaşma sınırı.
+3. **Alım aylık** — her ayın ilk koşusunda, o ayın taze seçimlerine doğru; düşüş freni ve ayı rejimi kapısıyla. Bu, backtest'in doğruladığı yapılandırmadır; önceki günlük alım sürümü yılda yaklaşık 14 puan daha kötü ölçüldü.
 
-Nakit gerçek bir pozisyondur: uygun aday yoksa ağırlık %0 getiriyle nakitte bekler. Disiplin kuralları (minimum tutma süresi, satış sonrası bekleme, günlük işlem tavanı) savrulmayı önler ve **işlem maliyetleri NAV'a yansıtılır** — sürtünmesiz bir NAV aktif yönetimi olduğundan iyi gösterirdi.
-
-Her aksiyon gerekçesiyle denetim defterine yazılır. `PortfolioAudit` ardından kuralların işleyip işlemediğini ölçer — stop isabeti, takas isabeti, maliyet yükü, nakit maliyeti ve yönetilen-eksi-pasif farkı — ve ancak yeterli örnek biriktiğinde parametre önerisi üretir. Öneriyi uygulamak editör anahtarı gerektirir; sistem kendi kendini yeniden ayarlamaz, çünkü on parametreli ve haftalarca veriye sahip sürekli bir öz-optimizasyon gürültüye uyum sağlar.
+Nakit gerçek bir pozisyondur, işlem maliyeti NAV'dan düşülür ve her işlem gerekçesiyle denetim kaydına yazılır. `PortfolioAudit` stop isabetini, takas isabetini, maliyet yükünü ve yönetilen-eksi-pasif farkını ölçer; parametre değişikliğini yalnız *önerir*, uygulamak editör anahtarı ister.
 
 ---
 
 ## Kanıt ve doğrulama
 
+Aşağıdaki tüm sayılar **geliştirme penceresine (2018-08-31 → 2024-08-31)** aittir; sonraki iki yıl veri kasasında kilitli. Bilerek göze hoş gelmeyen sayılar bunlar: kilitli dönemi de içeren eski beş yıllık pencere çok daha iyi görünüyordu, kasanın kilitlenme sebebi de tam olarak buydu.
+
+### Seçim şanstan iyi mi?
+
+Sistemin son NAV'ının, aynı evrenden aynı rebalans ve maliyetle çekilen 50 rastgele 6 hisselik portföy arasındaki yüzdeliği; parametreler BIST'te seçilip diğer piyasalara değiştirilmeden uygulandı:
+
+| Piyasa | Yalnız seçim | Sonuç |
+|---|---|---|
+| BIST | 10. | rastgeleyi geçemiyor |
+| ABD | 94. | rastgeleyi ve S&P 500'ü geçiyor |
+| İngiltere | 22. | rastgeleyi geçemiyor (sıfır maliyet dahil her maliyet düzeyinde) |
+
+Hiçbir parametresi ayarlanmamış **ders kitabı 12-1 momentum portföyüne** karşı sistemin alfası üç piyasada da sıfır ya da eksi; ABD'de (son NAV 12,19'a 4,55) ve İngiltere'de (2,29'a 0,68) momentum tek başına daha iyi. Skor fonksiyonunun düz momentuma üstünlüğü kanıtlanmış değil.
+
+**Deflated Sharpe Ratio: 0,03–0,14**, eşik 0,95. Backtest tek başına bir üstünlük kanıtlayamıyor.
+
+### Ayakta kalan: BIST'te yönetim katmanı
+
+| BIST | Yalnız seçim | Yönetilen |
+|---|---|---|
+| Rastgele-6'ya göre yüzdelik | 10. | 62. |
+| En büyük düşüş | −%69,9 | **−%25,8** |
+
+Ardışık altı alt dönemde (2018–2026, kasa kurulmadan önce ölçüldü) yönetilen iz **6'nın 6'sında** daha küçük düşüş yaşadı. 2018 kur krizinde yönetimsiz iz %69,9 düşerken yönetilen iz %23,8 düştü. Aynı kurallar ABD'ye **taşınmadı**, orada hem getiriyi hem düşüşü kötüleştirdi; yani bu genel bir yöntem özelliği değil, piyasaya özgü bir risk katmanı.
+
 ### Kalibrasyon bulguları
 
 | Piyasa | Bulgu |
 |---|---|
-| BIST | Momentum IC **+0.045 (t = 2.8)**, alt dönemlerde tutarlı. En güçlü tekil sinyal: 52 hafta pozisyonu. |
-| ABD mega-cap | Momentum IC +0.0065 (t = 0.53) — dünyanın en verimli segmentinde **üstünlük yok**. |
-| ABD orta ölçek | Momentum IC **+0.0212 (t = 2.06)**, tutarlı. Üstünlük, analist takibinin seyreldiği yerde yaşıyor. |
-| ABD, rejime göre | Boğa rejiminde ABD IC'si **+0.053'e (t = 6.0)** çıkıyor; ayı rejiminde momentum skoru anlamlı biçimde **ters dönüyor** (t = −3.24). Kısa vadeli öneriler buna göre engelleniyor. |
+| BIST | Momentum IC **+0,045 (t = 2,8)**. En güçlü tekil sinyal: 52 hafta pozisyonu. |
+| ABD büyük şirketler | İki stilde de istikrarlı üstünlük yok. |
+| ABD orta ölçek | Önceki "istikrarlı üstünlük" bulgusu, likidite dilimi düzeltilince **tekrarlanmadı**. |
+| ABD, rejime göre | Boğa rejiminde 52 hafta pozisyonu IC **+0,074 (t = 8,6)**; ayı rejiminde momentum skoru anlamlı biçimde **ters** (t = −4,7). Ayı rejiminde tüm ABD önerileri engellenir. |
 
-### Tam-hat backtest
+### Diğer testler
 
-Bugünün portföy kurma hattı, beş yıl boyunca point-in-time işletildi; aylık rebalans ve devir maliyeti dahil:
+- **Parametre araması durduruldu.** 5 genişleyen katlı walk-forward önerilen değişikliklerin neredeyse hepsini reddetti; eğitimin "en iyisi" test edilen aralığın tamamında geziniyorsa yüzey gürültüdür.
+- **Mali sağlamlık skoru** (ders notu oranları, 20 kriter, sektöre göreli): önceden kaydedildi, bir kez test edildi, yönetilen izde **başarısız** oldu. Yönetimsiz iz için ayrı bir hipotez kasa açılışına önceden kaydedildi.
+- **Kapasite:** karekök piyasa etkisi modeliyle üstünlük ~1M TL altında büyük ölçüde korunuyor, ~50M TL'de bitiyor.
 
-| | Nominal | **Reel (ENAG)** | Sharpe | Maks. düşüş |
-|---|---|---|---|---|
-| Aktif yönetilen | %+4083 | **%+10.9 CAGR** | 0.70 | −%25.8 |
-| Yönetimsiz | %+3642 | %+8.4 CAGR | 0.60 | −%48.4 |
-| XU100 endeksi | %+863 | **−%17.3 CAGR** | — | — |
+---
 
-Aynı dönemde enflasyon **25 kat**tı — nominal rakamların neden asla tek başına söylenmemesi gerektiğinin sebebi tam olarak budur.
+## Bilinen Sorunlar
 
-### Örneklem-dışı doğrulama
+Ekim 2026'daki kod ve hesap incelemesinde bulundu. Düzeltilenler Yol Haritası'nın sonunda; bunlar hâlâ açık.
 
-Parametreler 8 yıllık pencerenin (2018 kur krizi ve 2020 çöküşünü içerir) ilk %60'ında seçilir, seçime hiç katılmayan son %40'ında sınanır. İç-örneklem optimizasyonunun ürettiği dört öneriden **ikisi reddedildi** — örneklem dışında belirgin biçimde daha kötü performans gösterdiler.
+**Raporlanan sayıları etkileyenler**
+- **2020 öncesi ENAG enflasyonu yer tutucu.** ENAG 2020'de başlıyor; eksik aylar son 12 ayın ortalamasıyla (~yıllık %54) dolduruluyor. 2018-08 → 2019-12 için bu 1,77'lik bir çarpan, resmi TÜFE'de 1,20. Bu yüzden 2020 öncesinde başlayan pencerelerdeki her "reel" sayı reel getiriyi yılda kabaca 6–7 puan düşük gösteriyor. Stratejiler arası karşılaştırmalar (yüzdelikler, sıralamalar) etkilenmez, çünkü her seri aynı şekilde düşülüyor.
+- **2020–2024 ENAG ayları düz tahmin, üstüne bazı arşiv ayları yazılmış**; yıllık toplamlar yayımlanan yıllık rakamlardan sapıyor (örn. 2021: %69,8'e karşı %82,8).
+- **Girilen son ENAG ayından sonraki aylar** biri girene kadar son 12 ayın ortalamasıyla dolduruluyor.
+- **Fiyat endeksi, toplam getiri portföyüyle karşılaştırılıyor.** Hisse panelleri temettüyü içeriyor; XU100, S&P 500 ve FTSE 100 içermiyor. "Endekse göre" sayılar ABD'de yılda ~2 puan, İngiltere ve BIST'te daha fazla lehimize.
+- **Backtest yalnız teknik çekirdeği test ediyor.** Haber ve analist hedefi tarihsel olarak kurulamıyor; canlı bileşik skor ilk 6 seçimin yaklaşık 3'ünü backtest'le paylaşıyor. Canlı likidite filtresi de backtest'inkinden 20 kat gevşek.
+- **Hayatta kalma yanlılığı:** evren bugünün likit listesi; simülasyonla reel yıllık getiride ~2 puanla sınırlandı.
+- **En büyük düşüş nominal NAV üzerinden ölçülüyor**; yüksek enflasyonda reel düşüşü eksik gösterir.
+- **Tek hisse backtest'inde düşüş** yalnız kapanan işlemlerden hesaplanıyor; işlem içi düşüşler sayılmıyor.
+- **RSI basit ortalamayla hesaplanıyor**, Wilder yumuşatmasıyla değil; değerler TradingView'dan farklı. Kalibrasyon bu tanımla ölçüldüğü için olduğu gibi bırakıldı.
 
-### Bilinen sınırlar
+**Davranış ve sağlamlık**
+- **Noktalı ABD hisse sınıfları** (örn. `BRK.A`) Yahoo'nun `BRK-A` biçimine çevrilmiyor ve sessizce atlanıyor.
+- **Yerel SQLite için göç (migration) sistemi yok.** Çok eski bir sürümün oluşturduğu veritabanında sütun adları farklı olabilir (eski Zaman Makinesi tablolarında görüldü); sıfırdan kurulumda sorun yok.
+- **Zaman Makinesi** hâlâ eski portföy mantığını simüle ediyor, doğrulanmış hattı değil; Backtest sayfasından başlatılan bir koşu testte 10 dakikayı aştı ve iptal edilemiyor.
+- **`use_container_width`** ~85 yerde kullanılıyor; sabitlenmiş Streamlit 1.59'da çalışıyor ama kullanımdan kalkıyor, sürüm yükseltilince bozulur.
+- **İngilizce arayüz çevirisi yarım.**
+- **Canlı kanıt kısa.** Canlı kohortlar haftalardır çalışıyor ve dört yapılandırma kırılması taşıyor; yönetilen portföyler de aynı hisselere yakınsıyor (35 portföy 49 farklı hisse tutuyordu).
+- **Alt bağımlılıklar serbest.** Doğrudan bağımlılıklar tam sabit; hash'li kilit dosyası henüz yok.
 
-- Backtest yalnızca **teknik çekirdeği** test eder; haber ve analist verisi geriye dönük üretilemediği için bu, sahadaki 45/25/20/10 sisteminin kendisi değildir.
-- Evren bugünün likit listesidir, borsadan çıkmış şirketler yoktur (hayatta kalma yanlılığı).
-- Beş yıllık pencere bir boğa piyasasıdır; stop gibi sigortalar böyle bir örneklemde sadece maliyet gibi görünür.
-- Kayma (slippage) modellenmemiştir; maliyet sabit yüzdedir.
-- Canlı takip haftalarla ölçülür, yıllarla değil. Gerçekçi bir Sharpe'ta beceriyi şanstan ayırmak **yıllar** alır.
+---
+
+## Yol Haritası
+
+**Sıradaki**
+- Veri kasasını önceden kaydedilmiş testlerle bir kez açmak: kilitli iki yılda sistem–rastgele karşılaştırması ve yönetimsiz izde mali sağlamlık filtresi.
+- ENAG serisini düzeltmek: ENAG'den önceki aylar için resmi TÜFE, aylık değerlerin yayımlanan yıllık toplamlara ölçeklenmesi. Ardından tüm reel getiri tablolarını yeniden koşmak.
+- Veri kaynağının izin verdiği yerde toplam getiri endeksleri.
+
+**Birkaç aylık günlük bileşen kaydından sonra**
+- Tarihsel olarak hiç doğrulanmamış duyarlılık, analist primi ve değerlemenin ileriye dönük IC'si. O zamana kadar ağırlıkları değişmez.
+
+**Yöntem**
+- Deflated Sharpe'ın tamamlayıcısı olarak kombinatoryal arındırılmış çapraz doğrulama ve backtest aşırı uyum olasılığı.
+- Ders kitabı momentum portföyünü kalıcı kontrol olarak tutmak; skor fonksiyonunu yalnız rastgeleye değil ona karşı da test etmek.
+
+**Ürün**
+- Zaman Makinesi'ni tam hat backtest mantığıyla yeniden kurmak.
+- ABD hisse sınıfı kodlarını eşlemek, `use_container_width`'ten çıkmak, İngilizce arayüzü bitirmek, hash'li kilit dosyası eklemek.
+
+**Ekim 2026 incelemesinde düzeltilenler**
+- Zarar eden ya da özkaynağı eksi şirket değerlemede *en yüksek* puanı alıyordu (eksi F/K ve PD/DD dev iskonto sayılıyordu).
+- yfinance biçim değişikliğinden sonra Zaman Makinesi'nin endeks getirisi hep 0'dı; "alfa" aslında ham getiriydi.
+- Portfolyum tek hisselik portföyü %−100 gösteriyordu (fiyat 0 okunuyordu); ABD listesi tek sembolü fiyatlayamıyordu.
+- Bilgi Oranı enflasyondan arındırılmış portföy getirisinden nominal endeks getirisini çıkarıyordu; ABD (dolar) portföyleri Türk enflasyonuyla düşülüyordu.
+- Eski yerel veritabanlarında analiz geçmişi kaydedilmiyordu; okuyan taraf yazan taraftan farklı bir sütun adı kullanıyordu.
+- ENAG varsayılanlarında iki kez yazılmış bir ay, sıfırdan kurulumda resmi değeri bir tahminle eziyordu.
 
 ---
 
 ## Sayfalar
 
-Her iki piyasa da aynı yedi sayfalık şekle sahiptir. ABD sayfaları kopya değil, piyasaya göre parametrelenmiş aynı fonksiyonlardır.
+İki piyasa da aynı yedi sayfalık yapıdadır. ABD sayfaları, piyasa parametresi alan aynı render fonksiyonlarıdır; kopya değildir.
 
-**Kokpit** (varsayılan açılış — piyasa rejimi, makro şerit, günün sinyalleri, sistem durumu) · **Portföy Yöneticisi** · **Hisse Listesi** · **Hisse Analizi** · **Portfolyum** · **Backtest** · **Sinyal Takip**
+**Kokpit** (açılış — piyasa rejimi, makro şerit, günün sinyalleri, sistem durumu) · **Portföy Yöneticisi** · **Hisse Listesi** · **Hisse Analizi** · **Portfolyum** · **Backtest** · **Sinyal Takip**
 
-İki tema (aydınlık "Gazete", karanlık "Obsidyen"). Piyasa `?piyasa=US`, tema `?tema=` ile derin bağlanabilir.
-
-**Sinyal Takip**, sistemin ürettiği her sinyali kaydeder ve 1/3/7/14/30 gün sonraki getirisini ölçer — backtest değil, canlı üretim takibi.
+İki tema (açık "Gazete", koyu "Obsidyen"). Piyasa `?piyasa=US`, tema `?tema=` ile bağlantıya eklenebilir.
 
 ---
 
 ## Otomasyon
 
-`daily_robot.py` GitHub Actions üzerinde hafta içi iki kez çalışır — BIST kapanışından sonra ve ABD kapanışından sonra; çünkü ABD pozisyonlarına seans ortasında karar vermek yarım günün fiyatını kullanmak olurdu. Her koşuda:
+`daily_robot.py` hafta içi iki kez GitHub Actions'ta çalışır: BIST kapanışından ve ABD kapanışından sonra. Her koşu NAV'ı günceller, haftalık gölge ve kontrol kohortlarını yeniler, günlük yönetimi ve kural denetimini çalıştırır, risk alarmlarını kontrol eder ve piyasa rejimini kaydeder. İkinci bir adım tüm BIST evreni için her skor bileşenini veritabanına yazar; bozuk günler sonradan ayıklanabilsin diye her koşunun kalite satırı da tutulur.
 
-1. Her aktif portföyün NAV'ını günceller (piyasa başına)
-2. Haftalık gölge ve kontrol kohortlarını tazeler
-3. Günlük portföy yönetimini çalıştırır
-4. Kural denetimini çalıştırır
-5. Risk alarmlarını kontrol eder
-6. Piyasa rejimini kaydeder
-7. Aylık kalibrasyon ve enflasyon verisi hatırlatmalarını yönetir
+Robot işe başlamadan önce veritabanını yoklar ve hata varsa sıfırdan farklı kodla çıkar: daha önce bir hafta boyunca hiçbir şey yapmadan yeşil çalıştığı bir olay yaşandı, çünkü başarı hiç doğrulanmıyordu.
 
 ---
 
@@ -152,10 +207,11 @@ Her iki piyasa da aynı yedi sayfalık şekle sahiptir. ABD sayfaları kopya de�
 |---|---|
 | Arayüz | Streamlit + Plotly |
 | Fiyat verisi | yfinance |
-| Evren & analist hedefleri | TradingView screener |
-| Haber | feedparser (20+ RSS kaynağı), KAP bildirimleri için borsapy |
-| Duyarlılık | Türkçe BERT (opsiyonel), anahtar kelime yedeği |
-| Depolama | Turso (HTTP üzerinden libSQL), yerel SQLite yedeği |
+| Evren ve analist hedefleri | TradingView screener |
+| Haber | feedparser (RSS kaynakları), bildirimler için borsapy ve KAP API |
+| Mali tablolar | borsapy üzerinden İş Yatırım, resmi TÜFE ile sabit paraya çevrilmiş |
+| Duyarlılık | Fiyatla doğrulanmış kural katmanları; isteğe bağlı Türkçe BERT |
+| Depolama | Yapılandırılmışsa Turso (HTTP üzerinden libSQL), değilse yerel SQLite — ikisi arasında asla sessiz geçiş yok |
 | Otomasyon | GitHub Actions |
 
 ---
@@ -169,49 +225,45 @@ pip install -r requirements.txt
 streamlit run bist_analyzer.py
 ```
 
-Bağımlılıklar tedarik zinciri önlemi olarak tam sürüme sabitlenmiştir — CI, veritabanı yazma anahtarı ortamdayken kurulum yapar; sabitlenmemiş, ele geçirilmiş bir sürüm o anahtarı sızdırabilir. Sürümleri otomatik değil, bilinçli güncelleyin.
+Bağımlılıklar tedarik zinciri önlemi olarak tam sürüme sabitlenmiştir: CI bunları ortamda veritabanı yazma anahtarı varken kurar, sabitlenmemiş ve ele geçirilmiş bir sürüm anahtarı sızdırabilir.
 
-Opsiyonel `.env`:
+İsteğe bağlı `.env`:
 
 ```
-ANTHROPIC_API_KEY=...      # yapay zekâ Türkçe özet
-TURSO_DATABASE_URL=...     # bulut kalıcılık; yoksa yerel SQLite'a düşer
+ANTHROPIC_API_KEY=...      # yapay zekâ ile Türkçe özet
+TURSO_DATABASE_URL=...     # bulut kalıcılığı; yoksa yerel SQLite
 TURSO_AUTH_TOKEN=...
-APP_EDIT_KEY=...           # yazma koruması (aşağıya bkz.)
-```
-
-Opsiyonel Türkçe BERT duyarlılığı (~2 GB; Streamlit Cloud ücretsiz katmanı RAM kısıtlı olduğu için requirements'ta değil):
-
-```bash
-pip install transformers torch
+APP_EDIT_KEY=...           # yazma koruması (aşağıya bakın)
 ```
 
 ### Araştırma araçları
 
 ```bash
-python weight_calibration.py build-tech      # point-in-time panel kur
-python weight_calibration.py analyze         # IC analizi + önerilen ağırlıklar
-python pipeline_backtest.py run 5            # tam-hat simülasyon
-python pipeline_backtest.py sweep 5          # yönetim kuralı taraması
-python pipeline_backtest.py validate 8       # örneklem-dışı doğrulama
-python tools/pmdb_admin.py enag-list         # veritabanı bakımı
+python pipeline_backtest.py run 8         # tam hat: XU100 / BIST-30 / rastgele-6 ile
+python pipeline_backtest.py karsilastir 8 # yönetilen ve yönetimsiz
+python pipeline_backtest.py walkforward 8 5
+python pipeline_backtest.py momentum 8    # sistem ve ders kitabı momentumu, BIST/ABD/İngiltere
+python pipeline_backtest.py dsr 8         # deflated Sharpe
+python pipeline_backtest.py kasa          # veri kasası durumu
+python tools/kap_olay.py --min-ornek 50   # KAP olay çalışması
+python bilanco.py oran THYAO              # bir hissenin oran geçmişi
 ```
+
+`CLAUDE.md` tam araştırma günlüğüdür: her ölçüm, her değişikliğin gerekçesi ve sonradan geri çekilen her sonuç.
 
 ---
 
 ## Güvenlik
 
-Halka açık demo, veritabanı yazma kimlik bilgileriyle çalışır ve Streamlit'in yerleşik kimlik doğrulaması yoktur. `APP_EDIT_KEY` tanımlıysa tüm yazma işlemleri — portföy kaydetme, enflasyon tablosu düzenleme, kural parametresi değiştirme — kenar çubuğundan kilit açmayı gerektirir; okumalar herkese açık kalır. Anahtar tanımlı değilse (yerel geliştirme) yazmalar korumasızdır ve davranış değişmez.
+Halka açık demo veritabanı yazma yetkisiyle çalışır ve Streamlit'in yerleşik kimlik doğrulaması yoktur. `APP_EDIT_KEY` tanımlıysa her arayüz yazma işlemi kenar çubuğundan kilit açmayı gerektirir; okuma herkese açık kalır. HTML olarak gösterilen dış RSS içeriği kaçışlanır ve bağlantı şemaları kontrol edilir. SQL baştan sona parametrelidir. Günlük robot en az yetkiyle (`contents: read`) çalışır.
 
-HTML olarak çizilen dış RSS içeriği escape edilir, link şemaları kontrol edilir. SQL baştan sona parametrelidir. Günlük robot en az yetkiyle çalışır (`contents: read`).
-
-**Halka açık demoya gerçek kişisel pozisyonlarınızı girmeyin** — yazma koruması kirlenmeyi engeller, görünmeyi değil.
+**Halka açık demoya gerçek kişisel varlık bilgisi girmeyin** — yazma koruması kirlenmeyi önler, ifşayı değil.
 
 ---
 
 ## Sorumluluk reddi
 
-Yalnızca bilgilendirme ve eğitim amaçlıdır. Yatırım tavsiyesi değildir ve buradaki hiçbir şey herhangi bir menkul kıymeti alma veya satma önerisi değildir. Tüm yatırım kararları risk taşır, geçmiş performans gelecek sonuçları garanti etmez ve bu sistemin canlı kanıtı şu an **haftalarla** ölçülmektedir — beceriyi kanıtlamak için fazlasıyla kısa bir süre. Kendi araştırmanızı yapın.
+Yalnızca bilgilendirme ve eğitim amaçlıdır. Yatırım tavsiyesi değildir ve hiçbir menkul kıymet için al-sat önerisi içermez. Backtest istatistiksel olarak savunulabilir bir üstünlük kanıtlamıyor ve canlı kanıt haftalarla sınırlı. Kendi araştırmanızı yapın.
 
 ---
 

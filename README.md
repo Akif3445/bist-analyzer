@@ -13,11 +13,11 @@ Live demo: [bist-analyzer.streamlit.app](https://bist-analyzer-wrtwzcsmdv4z9fxrp
 Most stock screeners tell you what to buy. The harder question is *whether the thing telling you works at all* — and that is where most of the effort here went:
 
 - **Weights are calibrated, not guessed.** Component weights come from measured cross-sectional Information Coefficients (Grinold–Kahn) on point-in-time historical panels, not intuition.
-- **Scientific control groups.** Every week the system saves its own picks as shadow portfolios *and* two controls: a random-draw portfolio and an equal-weight passive index basket. If the system cannot beat luck and passivity, it has no edge.
-- **Management is measured separately from selection.** Each weekly cohort is saved twice — once passive, once actively managed from identical picks and prices. The difference *is* the management contribution.
-- **Out-of-sample validation.** Rule parameters are chosen on one period and tested on another that never participated in the choice. Half the proposals produced by in-sample optimisation were exposed as noise-fitting and discarded.
-- **Real returns, not nominal.** In a high-inflation economy nominal returns are close to meaningless, so performance is reported against ENAG inflation as well as the index.
-- **Known biases are documented, not hidden.** Survivorship, bull-market sampling, in-sample selection and the gap between the backtest and the deployed system are all written down.
+- **Scientific control groups.** Every result is compared against random 6-stock portfolios drawn from the same universe, an equal-weight passive basket, the index, and a textbook 12-1 momentum portfolio.
+- **Management is measured separately from selection.** Each weekly live cohort is saved twice — once passive, once actively managed from identical picks and prices. The difference *is* the management contribution.
+- **A locked data vault.** The last two years of history are held out of every backtest by default and can be opened exactly once; hypotheses for that run are pre-registered in the repository before it happens.
+- **Multiple-testing correction.** The Deflated Sharpe Ratio is computed against the number of configurations actually tried (~695).
+- **Negative results are reported.** Most hypotheses tested here failed, and the write-ups say so — including the ones that undercut the project's own headline claims.
 
 ---
 
@@ -25,12 +25,14 @@ Most stock screeners tell you what to buy. The harder question is *whether the t
 
 | File | Lines | Role |
 |---|---|---|
-| `bist_analyzer.py` | ~12,600 | Everything: data fetching, scoring engines, portfolio manager, daily management, audit, database, backtesting, and every Streamlit page |
-| `news_engine.py` | ~1,950 | Standalone news sentiment engine (no dependency back on the main file) |
-| `weight_calibration.py` | ~690 | Research tool: builds point-in-time panels and computes ICs to ground the scoring weights |
-| `pipeline_backtest.py` | ~650 | Full-pipeline historical simulation, management-rule sweep, out-of-sample validation |
-| `daily_robot.py` | ~240 | Autonomous daily maintenance (runs on GitHub Actions) |
-| `tools/pmdb_admin.py` | ~90 | Bounded database maintenance commands |
+| `bist_analyzer.py` | ~12,700 | Everything user-facing: data fetching, scoring engines, portfolio manager, daily management, audit, storage, and every Streamlit page |
+| `news_engine.py` | ~2,300 | Standalone news sentiment engine (no dependency back on the main file) |
+| `pipeline_backtest.py` | ~2,350 | Full-pipeline historical simulation, controls, walk-forward, transfer tests, DSR, the data vault |
+| `weight_calibration.py` | ~700 | Builds point-in-time panels and computes ICs to ground the scoring weights |
+| `bilanco.py` | ~600 | Quarterly financial statements (TMS 29 aware, constant-TÜFE money) and course-note ratios |
+| `skor_gunlugu.py` | ~330 | Daily durable log of every score component for the whole BIST universe |
+| `daily_robot.py` | ~310 | Autonomous daily maintenance (runs on GitHub Actions) |
+| `tools/` | — | KAP disclosure history, event study, phrase measurement, bounded DB maintenance |
 
 ### Core engines
 
@@ -44,79 +46,140 @@ The universe is dynamic and liquidity-filtered, refreshed daily: roughly 500 BIS
 
 | Component | Weight | Source |
 |---|---|---|
-| Technical | 45% | SMA, RSI, MACD, Bollinger, Stochastic, OBV, ADX, 52-week position |
-| News sentiment | 25% | Tier-weighted RSS sources + KAP disclosures |
-| Upside potential | 20% | Analyst consensus target vs. current price |
-| Valuation | 10% | P/E, P/B relative to sector averages |
+| Technical | 60% | SMA, RSI, MACD, Bollinger, Stochastic, OBV, ADX, 52-week position |
+| News sentiment | 10% | Tier-weighted RSS sources + KAP disclosures, with only price-validated directions allowed to move the score |
+| Upside potential | 20% | Analyst consensus target vs. current price (TradingView, ≥3 analysts) |
+| Valuation | 10% | P/E, P/B relative to sector, ROE |
 
-Weights were rebalanced from 35/35/20/10 in July 2026 after calibration showed news sentiment had weak predictive power. When target prices or fundamentals are missing, their weight is redistributed rather than left as a gap.
+When a component has no real input — no news, no analyst target — its weight moves to Technical instead of averaging in a neutral 50. Sentiment was cut from 25% to 10% after an audit showed most stocks received exactly 50, which compressed the composite's spread without adding ranking information.
 
 **Signal bands:** 72+ Strong Buy · 57–71 Buy · 43–56 Neutral · 30–42 Sell · <30 Strong Sell
 
 ### The technical style is regime-dependent
 
-The original contrarian scoring (rewarding oversold RSI, low Bollinger position, distance from 52-week highs) measured **zero predictive power** on BIST. The market is in a momentum regime: high RSI and high 52-week position predicted *higher* forward returns (t > 3, stable across sub-periods). Both the live and backtest scoring paths now use the momentum style.
+The original contrarian scoring (rewarding oversold RSI, low Bollinger position, distance from 52-week highs) measured **zero predictive power** on BIST. The market is in a momentum regime: high RSI and high 52-week position predicted *higher* forward returns. Both the live and backtest scoring paths now use the momentum style.
 
-A segment-based hybrid was tried and rejected — mixing scales corrupts cross-sectional ranking, dropping IC from +0.045 to +0.012.
+### News that moves the score must have moved prices
+
+411,656 historical KAP disclosures (2018–2024) were matched to prices in an event study. Of 16 directional hypotheses, two survived: **share buybacks** (+2.63% over 30 days vs. the market, t = 4.6) and **bonus share issues** (−3.86%, t = −5.0 — the opposite of what dilution theory predicts). Phrases whose measured effect was noise no longer vote; a positive label only raises the score when its direction is evidenced.
 
 ---
 
 ## Portfolio Manager
 
-Proposes portfolios from a scan of the full universe, by **horizon** (short / medium / long) × **investor profile** (Cautious / Balanced / Aggressive), with sector caps, correlation filtering (>0.85 is "the same bet"), ATR-inverse position sizing and a maximum single-position weight.
+Proposes portfolios from a scan of the full universe, by **horizon** (short / medium / long) × **investor profile** (Cautious / Balanced / Aggressive), with sector caps, correlation filtering, ATR-inverse position sizing and a maximum single-position weight.
 
-- **Market regime gate.** BIST: XU100 trend + BIST-30 breadth + currency pressure. US: S&P 500 trend + breadth + VIX as a *level*. A dollar portfolio has no currency risk, it has a volatility regime.
-- **Minimum diversification guard.** If fewer than three stocks pass the filters, no portfolio is built. A single stock at 100% weight is concentration, not caution.
-- **Performance ledger.** Daily NAV per portfolio, reported nominal + ENAG-real + index-relative, with institutional metrics (Sharpe, Sortino, max drawdown, Information Ratio).
+- **Market regime gate.** BIST: XU100 trend + BIST-30 breadth + currency pressure. US: S&P 500 trend + breadth + VIX as a *level*.
+- **Minimum diversification guard.** If fewer than three stocks pass the filters, no portfolio is built.
+- **Performance ledger.** Daily NAV per portfolio, reported nominal + ENAG-real + index-relative, with Sharpe, Sortino, max drawdown and Information Ratio.
 
 ### Daily active management
 
-`PortfolioDoctor` runs every weekday after the close and behaves like a real portfolio manager:
+`PortfolioDoctor` runs every weekday after the close:
 
-1. **Exits first, and unbudgeted** — stop breach, trailing stop, thesis break (score collapse). Cutting risk is never rate-limited; only opportunity-chasing is.
-2. **One consolidated weight decision per position** — partial profit-take at target, then the concentration cap.
-3. **Cash deployment and swaps** — gated by a drawdown brake and the bear-regime gate.
+1. **Exits daily, and unbudgeted** — stop breach, trailing stop, thesis break (score collapse). Cutting risk is never rate-limited.
+2. **One consolidated weight decision per position** — a one-time partial profit-take at target, then the concentration cap.
+3. **Buying monthly** — on the first run of each month, toward that month's fresh picks, gated by a drawdown brake and the bear-regime gate. This matches the configuration the backtest validated; an earlier daily-buying version was measured at roughly 14 points of real return per year worse.
 
-Cash is a real position: when nothing qualifies, weight waits in cash at 0% return. Discipline constraints (minimum holding period, cooldown after selling, daily trade cap) prevent churn, and **transaction costs are charged to NAV** — a frictionless NAV would overstate active management.
-
-Every action is written to an audit trail with its reason. `PortfolioAudit` then measures whether the rules work — stop accuracy, swap accuracy, cost burden, cash drag, and the managed-minus-passive spread — and proposes parameter changes only when a finding clears a minimum sample size. Applying a change requires the editor key; the system never retunes itself, because a continuous self-optimiser with ten parameters and weeks of live data fits noise.
+Cash is a real position, transaction costs are charged to NAV, and every action is written to an audit trail. `PortfolioAudit` measures stop accuracy, swap accuracy, cost burden and the managed-minus-passive spread, and only *proposes* parameter changes; applying one requires the editor key.
 
 ---
 
 ## Evidence and validation
 
+All numbers below are on the **development window, 2018-08-31 → 2024-08-31**, with the following two years locked in the data vault. They are deliberately the unflattering ones: an earlier five-year window that included the reserved period looked far better, and that is exactly why the reserve was locked.
+
+### Does selection beat luck?
+
+Percentile of the system's final NAV among 50 random 6-stock portfolios from the same universe, same rebalancing, same costs; parameters chosen on BIST and applied unchanged elsewhere:
+
+| Market | Selection only | Verdict |
+|---|---|---|
+| BIST | 10th | does not beat random |
+| US | 94th | beats random and the S&P 500 |
+| UK | 22nd | does not beat random (holds at every cost level, including zero) |
+
+Against a **textbook 12-1 momentum portfolio** with no tuned parameters, the system's alpha is zero to negative in all three markets, and momentum alone does better in the US (final NAV 12.19 vs 4.55) and the UK (2.29 vs 0.68). The score function's value over plain momentum is not established.
+
+**Deflated Sharpe Ratio: 0.03–0.14** across plausible trial counts, against a 0.95 threshold. The backtest alone cannot establish an edge.
+
+### What does hold up: the management layer in BIST
+
+| BIST | Selection only | Managed |
+|---|---|---|
+| Percentile vs random-6 | 10th | 62nd |
+| Max drawdown | −69.9% | **−25.8%** |
+
+Measured over six consecutive sub-periods (2018–2026, before the vault existed), the managed track had the smaller drawdown in **6 of 6**. Through the 2018 currency crisis the unmanaged track drew down 69.9% while the managed one drew down 23.8%. The same rules did **not** transfer to the US, where they made both return and drawdown worse — so this is a market-specific risk overlay, not a general property of the method.
+
 ### Calibration findings
 
 | Market | Finding |
 |---|---|
-| BIST | Momentum IC **+0.045 (t = 2.8)**, stable across sub-periods. Strongest single signal: 52-week position. |
-| US mega-cap | Momentum IC +0.0065 (t = 0.53) — **no edge** in the world's most efficient segment. |
-| US mid-cap | Momentum IC **+0.0212 (t = 2.06)**, stable. The edge lives where analyst coverage thins out. |
-| US, regime-split | In a bull regime US IC reaches **+0.053 (t = 6.0)**; in a bear regime the momentum score is significantly **inverted** (t = −3.24). Short-horizon proposals are blocked accordingly. |
+| BIST | Momentum IC **+0.045 (t = 2.8)**. Strongest single signal: 52-week position. |
+| US mega-cap | No stable edge in either style. |
+| US mid-cap | An earlier "stable edge" did **not** replicate once the liquidity slice was corrected. |
+| US, regime-split | In a bull regime 52-week position reaches IC **+0.074 (t = 8.6)**; in a bear regime the momentum score is significantly **inverted** (t = −4.7). All US proposals are blocked in a bear regime. |
 
-### Full-pipeline backtest
+### Other tests
 
-Today's portfolio construction replayed point-in-time over five years, monthly rebalanced, with turnover costs charged:
+- **Parameter search was stopped.** Walk-forward over 5 expanding folds rejected nearly every proposed change; when the training "optimum" ranges across the whole tested grid, the surface is noise.
+- **Financial-health score** built from course-note ratios (20 criteria, sector-relative): pre-registered, tested once, **failed** on the managed track. A follow-up hypothesis for the unmanaged track is pre-registered for the vault opening.
+- **Capacity:** with a square-root market-impact model the edge is largely intact below ~1M TL and gone by ~50M TL.
 
-| | Nominal | **Real (ENAG)** | Sharpe | Max drawdown |
-|---|---|---|---|---|
-| Actively managed | +4083% | **+10.9% CAGR** | 0.70 | −25.8% |
-| Unmanaged | +3642% | +8.4% CAGR | 0.60 | −48.4% |
-| XU100 index | +863% | **−17.3% CAGR** | — | — |
+---
 
-Inflation over the same window was 25×, which is exactly why nominal figures must never be quoted alone.
+## Known Issues
 
-### Out-of-sample validation
+Found in a code and calculation review in October 2026. Fixed items are listed under Roadmap history; these are still open.
 
-Parameters are chosen on the first 60% of an 8-year window (which includes the 2018 currency crisis and the 2020 crash) and tested on the last 40%, which never participates in the choice. Of four proposals produced by in-sample optimisation, **two were rejected** because they performed materially worse out of sample.
+**Affects reported numbers**
+- **ENAG inflation before 2020 is a placeholder.** ENAG starts in 2020, and missing months are filled with the average of the latest 12 months (~54%/yr). For 2018-08 → 2019-12 that is a factor of 1.77 against official TÜFE's 1.20, so every "real" figure on a window starting before 2020 understates real return by roughly 6–7 points per year. Comparisons between strategies (percentiles, rankings) are unaffected, because every series is deflated the same way.
+- **2020–2024 ENAG months are flat estimates with some archived months overlaid**, so yearly totals drift from the published annual figures (e.g. 2021: 69.8% vs 82.8%).
+- **Months after the last entered ENAG value** are filled with the trailing 12-month average until someone enters them.
+- **Price-return benchmarks against total-return portfolios.** The stock panels include dividends, while XU100, S&P 500 and FTSE 100 do not; "vs index" figures are flattered by ~2 points/yr in the US and more in the UK and BIST.
+- **The backtest tests the technical core only.** News and analyst targets cannot be reconstructed historically; the live composite shares about 3 of its top 6 picks with the backtest. The live liquidity filter is also 20× looser than the backtest's.
+- **Survivorship:** the universe is today's liquid list; bounded by simulation at ~2 points of real CAGR.
+- **Max drawdown is measured on nominal NAV**, which understates real drawdown in high inflation.
+- **Single-stock backtest drawdown** is computed from closed trades only, so intra-trade drawdowns are not counted.
+- **RSI uses simple averages** rather than Wilder smoothing, so values differ from TradingView's. Kept as is because the calibration was measured with this definition.
 
-### Known limitations
+**Behaviour and robustness**
+- **US share classes with a dot** (e.g. `BRK.A`) are not converted to Yahoo's `BRK-A` format and are silently skipped.
+- **No migration system for local SQLite.** A database created by a much older version can carry renamed columns (seen in the old Time Machine tables); fresh installs are unaffected.
+- **Zaman Makinesi** (Time Machine) still simulates the old portfolio logic, not the validated pipeline, and a run from the Backtest page took more than 10 minutes in testing with no way to cancel it.
+- **`use_container_width`** is used ~85 times; it works on the pinned Streamlit 1.59 but is deprecated and will break on upgrade.
+- **English UI translation is partial.**
+- **Live evidence is short.** Live cohorts have run for weeks and carry four configuration breaks; managed portfolios also converge on the same names (35 portfolios held 49 unique stocks).
+- **Transitive dependencies float.** Direct dependencies are pinned exactly; a hash-pinned lockfile is not in place yet.
 
-- The backtest exercises only the **technical core**; news and analyst inputs cannot be reconstructed historically, so it is not the deployed 45/25/20/10 system.
-- The universe is today's liquid list, so delisted companies are absent (survivorship bias).
-- The five-year window is a bull market, where insurance such as stops can only look like cost.
-- No slippage model; costs are a flat percentage.
-- Live tracking is measured in weeks, not years. Distinguishing skill from luck at a realistic Sharpe takes **years**, not weeks.
+---
+
+## Roadmap
+
+**Next**
+- Open the data vault once, with the pre-registered tests: system vs random on the reserved two years, and the financial-health filter on the unmanaged track.
+- Fix the ENAG series: official TÜFE for months before ENAG existed, and monthly values scaled to match published annual totals. Then re-run every real-return table.
+- Total-return benchmarks where the data source allows.
+
+**After a few months of daily component logs**
+- Forward IC of sentiment, analyst premium and valuation, which have never been validated historically. Their weights stay unchanged until then.
+
+**Methodology**
+- Combinatorial purged cross-validation and Probability of Backtest Overfitting, as a companion to the Deflated Sharpe Ratio.
+- Keep the textbook momentum portfolio as a permanent control and test the score function against it, not just against random draws.
+
+**Product**
+- Rebuild Zaman Makinesi on the pipeline backtest logic.
+- Map US share-class tickers, migrate off `use_container_width`, finish the English UI, add a hash-pinned lockfile.
+
+**Fixed in the October 2026 review**
+- A loss-making or negative-equity company received the *maximum* valuation score (negative P/E and P/B were read as huge discounts).
+- Time Machine benchmark return was always 0 after a yfinance format change, so its "alpha" was the raw return.
+- Portfolyum showed a single-stock portfolio at −100% (price read as 0); the US list could not price a single symbol.
+- Information Ratio subtracted a nominal index return from an inflation-adjusted portfolio return, and US (dollar) portfolios were deflated with Turkish inflation.
+- Analysis history was not saved on older local databases, and the reading side used a different column name from the writing side.
+- A duplicated month in the ENAG defaults overwrote an official value with an estimate on fresh installs.
 
 ---
 
@@ -128,21 +191,13 @@ Both markets have the same seven-page shape. The US pages are the same render fu
 
 Two themes (light "Gazete", dark "Obsidyen"). Market is deep-linkable via `?piyasa=US`, theme via `?tema=`.
 
-The **Signal Tracker** logs every signal the system generates and checks its forward return at 1/3/7/14/30 days — live production tracking, not backtesting.
-
 ---
 
 ## Automation
 
-`daily_robot.py` runs on GitHub Actions twice on weekdays — after the BIST close and again after the US close, since deciding on US positions mid-session would use half-day prices. Each run:
+`daily_robot.py` runs on GitHub Actions twice on weekdays — after the BIST close and again after the US close. Each run updates NAV, refreshes weekly shadow and control cohorts, runs daily management and the rule audit, checks risk alerts and records the market regime. A second step writes every score component for the whole BIST universe to the database, with a run-quality row so broken days can be excluded later.
 
-1. Updates NAV for every active portfolio (per market)
-2. Refreshes weekly shadow and control cohorts
-3. Runs daily portfolio management
-4. Runs the rule audit
-5. Checks risk alerts
-6. Records the market regime
-7. Handles monthly calibration and inflation-data reminders
+The robot probes the database before doing anything and exits non-zero on failure: an earlier incident ran green for a week while doing nothing, because success was never actually asserted.
 
 ---
 
@@ -153,9 +208,10 @@ The **Signal Tracker** logs every signal the system generates and checks its for
 | UI | Streamlit + Plotly |
 | Price data | yfinance |
 | Universe & analyst targets | TradingView screener |
-| News | feedparser (20+ RSS sources), borsapy for KAP disclosures |
-| Sentiment | Turkish BERT (optional) with keyword fallback |
-| Storage | Turso (libSQL over HTTP) with local SQLite fallback |
+| News | feedparser (RSS sources), borsapy and the KAP API for disclosures |
+| Financial statements | İş Yatırım via borsapy, converted with official TÜFE |
+| Sentiment | Rule layers validated against prices; optional Turkish BERT |
+| Storage | Turso (libSQL over HTTP) when configured, otherwise local SQLite — never a silent fallback between them |
 | Automation | GitHub Actions |
 
 ---
@@ -169,41 +225,37 @@ pip install -r requirements.txt
 streamlit run bist_analyzer.py
 ```
 
-Dependencies are pinned to exact versions as a supply-chain measure — CI installs them with a database write token in the environment, so an unpinned hijacked release could exfiltrate it. Bump versions deliberately, not automatically.
+Dependencies are pinned to exact versions as a supply-chain measure — CI installs them with a database write token in the environment, so an unpinned hijacked release could exfiltrate it.
 
 Optional `.env`:
 
 ```
 ANTHROPIC_API_KEY=...      # AI-generated Turkish summaries
-TURSO_DATABASE_URL=...     # cloud persistence; falls back to local SQLite
+TURSO_DATABASE_URL=...     # cloud persistence; without it, local SQLite
 TURSO_AUTH_TOKEN=...
 APP_EDIT_KEY=...           # write protection (see below)
-```
-
-Optional Turkish BERT sentiment (~2 GB, not in requirements because Streamlit Cloud's free tier is RAM-constrained):
-
-```bash
-pip install transformers torch
 ```
 
 ### Research tools
 
 ```bash
-python weight_calibration.py build-tech      # build the point-in-time panel
-python weight_calibration.py analyze         # IC analysis + suggested weights
-python pipeline_backtest.py run 5            # full-pipeline simulation
-python pipeline_backtest.py sweep 5          # management-rule sweep
-python pipeline_backtest.py validate 8       # out-of-sample validation
-python tools/pmdb_admin.py enag-list         # database maintenance
+python pipeline_backtest.py run 8         # full pipeline vs XU100 / BIST-30 / random-6
+python pipeline_backtest.py karsilastir 8 # managed vs unmanaged
+python pipeline_backtest.py walkforward 8 5
+python pipeline_backtest.py momentum 8    # system vs textbook momentum, BIST/US/UK
+python pipeline_backtest.py dsr 8         # deflated Sharpe
+python pipeline_backtest.py kasa          # data vault status
+python tools/kap_olay.py --min-ornek 50   # KAP event study
+python bilanco.py oran THYAO              # one stock's ratio history
 ```
+
+`CLAUDE.md` is the full research log: every measurement, the reasoning behind each change, and every result that was later withdrawn.
 
 ---
 
 ## Security
 
-The public demo runs with database write credentials and Streamlit has no built-in auth. If `APP_EDIT_KEY` is set, every UI write action — saving portfolios, editing the inflation table, changing rule parameters — requires unlocking via the sidebar; reads stay public. With the key unset (local development) writes are unguarded and behaviour is unchanged.
-
-External RSS content rendered as HTML is escaped and link schemes are checked. SQL is parameterised throughout. The daily robot runs with least privilege (`contents: read`).
+The public demo runs with database write credentials and Streamlit has no built-in auth. If `APP_EDIT_KEY` is set, every UI write action requires unlocking via the sidebar; reads stay public. External RSS content rendered as HTML is escaped and link schemes are checked. SQL is parameterised throughout. The daily robot runs with least privilege (`contents: read`).
 
 **Do not enter real personal holdings into the public demo** — the write guard prevents pollution, not disclosure.
 
@@ -211,7 +263,7 @@ External RSS content rendered as HTML is escaped and link schemes are checked. S
 
 ## Disclaimer
 
-For informational and educational purposes only. This is not financial advice, and nothing here is a recommendation to buy or sell any security. All investment decisions carry risk, past performance does not guarantee future results, and the live evidence for this system currently spans weeks — far too short to establish skill. Do your own research.
+For informational and educational purposes only. This is not financial advice, and nothing here is a recommendation to buy or sell any security. The backtest does not establish a statistically defensible edge, and the live evidence spans weeks. Do your own research.
 
 ---
 

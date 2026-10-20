@@ -208,7 +208,9 @@ WEIGHTS = {
 # v4: fiyat yankısı başlıkları haber skorundan çıkarıldı (2026-09-27, news_engine._FIYAT_YANKISI)
 # v5: haber öbekleri fiyata karşı ölçüldü; etkisizler susturuldu, kanıtsız olumlu
 #     skoru yükseltmez (2026-09-27, tools/haber_olcum.py → haber_olcum.json)
-SCORING_VERSION = "v5"
+# v6: değerlemede eksi F/K ve eksi PD/DD artık 0 puan (eskiden tavan 100'dü;
+#     2026-10-20, ValuationEngine.compute)
+SCORING_VERSION = "v6"
 
 # BISTScore JSON serialization
 
@@ -430,6 +432,13 @@ class AnalysisHistoryDB:
                 conn.execute("ALTER TABLE analysis_history ADD COLUMN full_data BLOB")
             except sqlite3.OperationalError:
                 pass
+            # Eski şemada fiyat kolonu 'current_price' idi; CREATE IF NOT EXISTS
+            # eski tabloyu değiştirmediği için her kayıt "no column named price"
+            # ile sessizce düşüyordu (analiz geçmişi hiç yazılmıyordu).
+            try:
+                conn.execute("ALTER TABLE analysis_history ADD COLUMN price REAL")
+            except sqlite3.OperationalError:
+                pass
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS alerts (
@@ -625,7 +634,17 @@ class AnalysisHistoryDB:
             rows = conn.execute(
                 "SELECT * FROM analysis_history ORDER BY last_analyzed DESC"
             ).fetchall()
-        return [dict(r) for r in rows]
+        # Yazan taraf 'price' kolonunu, okuyan sayfalar 'current_price'
+        # anahtarını kullanıyor (eski şemanın adı). İkisi de dolu dönsün.
+        out = []
+        for r in rows:
+            d = dict(r)
+            if not d.get("current_price"):
+                d["current_price"] = d.get("price")
+            if not d.get("price"):
+                d["price"] = d.get("current_price")
+            out.append(d)
+        return out
 
     def delete(self, ticker: str) -> None:
         """Bir hisseyi geçmişten siler."""
@@ -1054,6 +1073,32 @@ class StockData:
     current_price: float     = 0.0
     market_cap: Optional[float] = None
     error: Optional[str]     = None
+
+
+def _kapanis_serisi(df: pd.DataFrame, sym: str = None) -> pd.Series:
+    """yf.download çıktısından TEK sembolün kapanış serisi.
+
+    yfinance ≥0.2.48 tek sembolde bile MultiIndex döndürür; düzen
+    group_by="ticker" ile (sembol, alan), onsuz (alan, sembol) olur. Eski kod
+    "tek sembolse df['Close']" varsayıyordu: (sembol, alan) düzeninde KeyError
+    → fiyat 0.0 (Portfolyum'da tek hisseli portföy %−100 görünüyordu);
+    (alan, sembol) düzeninde DataFrame → float() TypeError → sessiz atlama.
+    """
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    if isinstance(df.columns, pd.MultiIndex):
+        l0 = df.columns.get_level_values(0)
+        if sym is not None and sym in l0:
+            s = df[sym]["Close"] if "Close" in df[sym].columns else pd.Series(dtype=float)
+        elif "Close" in l0:
+            s = df["Close"]
+            if isinstance(s, pd.DataFrame):
+                s = s[sym] if (sym is not None and sym in s.columns) else s.iloc[:, 0]
+        else:
+            return pd.Series(dtype=float)
+    else:
+        s = df["Close"] if "Close" in df.columns else pd.Series(dtype=float)
+    return pd.to_numeric(s, errors="coerce").dropna()
 
 
 class DataFetcher:
@@ -1715,17 +1760,27 @@ class ValuationEngine:
         # 2. Gelişmiş Değerleme Puanı (F/K, PD/DD, ROE Kombinasyonu)
         sub_scores = []
         
-        # F/K Puanı
+        # F/K Puanı. Eksi F/K = zarar: "sektöre göre iskontolu" DEĞİLDİR.
+        # Eskiden formül eksi F/K'yı dev bir iskonto sayıp tavan puan (100)
+        # veriyordu; zarar eden şirket değerlemede en iyi puanı alıyordu.
         if result.stock_fk is not None and result.sector_fk is not None:
-            result.fk_discount = round(float((result.sector_fk - result.stock_fk) / result.sector_fk * 100), 1)
-            fk_score = max(0.0, min(100.0, 50.0 + result.fk_discount))
-            sub_scores.append(fk_score)
-            
-        # PD/DD Puanı
+            if float(result.stock_fk) <= 0:
+                sub_scores.append(0.0)
+            else:
+                result.fk_discount = round(float((result.sector_fk - result.stock_fk) / result.sector_fk * 100), 1)
+                fk_score = max(0.0, min(100.0, 50.0 + result.fk_discount))
+                sub_scores.append(fk_score)
+
+        # PD/DD Puanı. Eksi PD/DD = eksi özkaynak (teknik iflas yakını); aynı
+        # hata buradaydı: 100 − (eksi sayı) tavana çıkıyordu (2026-10-19
+        # günlüğünde CRFSA ve NETAS değerleme puanı 100).
         if result.stock_pb is not None:
-            pb_score = 100.0 - (float(result.stock_pb) / 1.5 * 50.0)
-            result.pb_discount = round(pb_score, 1)
-            sub_scores.append(max(0.0, min(100.0, pb_score)))
+            if float(result.stock_pb) <= 0:
+                sub_scores.append(0.0)
+            else:
+                pb_score = 100.0 - (float(result.stock_pb) / 1.5 * 50.0)
+                result.pb_discount = round(pb_score, 1)
+                sub_scores.append(max(0.0, min(100.0, pb_score)))
             
         # ROE Puanı (Özsermaye Karlılığı)
         if result.stock_roe is not None:
@@ -2861,7 +2916,11 @@ ENAG_MOM_DEFAULTS = {
     "2024-02": (4.32, "resmi-arsiv"), "2024-05": (5.66, "resmi-arsiv"),
     "2024-06": (4.27, "resmi-arsiv"), "2024-12": (2.34, "resmi-arsiv"),
     "2025-02": (3.37, "resmi-arsiv"),
-    "2025-01": (5.10, "tahmini"), "2025-02": (5.10, "tahmini"),
+    # 2025-02 yukarıda resmi-arşiv (3.37). Burada ikinci kez "tahmini 5.10"
+    # yazılıydı ve sözlükte SONRAKİ anahtar kazandığı için resmi değeri
+    # eziyordu (canlı tablo INSERT OR IGNORE ile doğru kaldı; sorun yalnız
+    # sıfırdan kurulan veritabanlarındaydı).
+    "2025-01": (5.10, "tahmini"),
     "2025-03": (5.10, "tahmini"), "2025-04": (4.46, "resmi"),
     "2025-05": (3.66, "resmi"),   "2025-06": (1.94, "resmi"),
     "2025-07": (5.10, "tahmini"), "2025-08": (3.23, "resmi"),
@@ -2871,6 +2930,10 @@ ENAG_MOM_DEFAULTS = {
     "2026-03": (4.10, "resmi"),   "2026-04": (5.07, "resmi"),
     "2026-05": (2.16, "resmi"),   "2026-06": (1.94, "resmi"),
 }
+
+
+class _ReelYok(Exception):
+    """risk_metrics içi: bu piyasada reelleştirme yapılmaz (US, dolar)."""
 
 
 class TursoUnavailable(RuntimeError):
@@ -4102,7 +4165,7 @@ class PortfolioManager:
             return {}, pd.Series(dtype=float)
 
     @staticmethod
-    def risk_metrics(nav_df: pd.DataFrame) -> dict:
+    def risk_metrics(nav_df: pd.DataFrame, market: str = "BIST") -> dict:
         """Kurumsal risk metrikleri (Roadmap-C). En az 10 NAV noktası ister.
 
         Sharpe/Sortino: ENAG ile REELLEŞTİRİLMİŞ günlük getirilerden
@@ -4113,13 +4176,21 @@ class PortfolioManager:
         faizi enflasyonun altında kaldığı için bu MUHAFAZAKÂR bir varsayımdır
         (gerçek reel risksiz negatifti, yani asıl Sharpe biraz daha yüksek).
         IR (Information Ratio): XU100'e göre fazla getirinin tutarlılığı.
+        İKİ TARAF DA NOMİNAL hesaplanır. Eskiden reelleştirilmiş portföy
+        getirisinden nominal endeks getirisi çıkarılıyordu; fark her gün
+        enflasyon kadar aşağı kayıyor ve IR sistematik olarak eksi çıkıyordu.
+        US (dolar) portföyleri ENAG ile reelleştirilmez: Türk enflasyonu
+        dolar getirisine uygulanırsa Sharpe anlamsızlaşır.
         """
         out = {"sharpe": None, "sortino": None, "maxdd": None, "ir": None,
                "n_gun": len(nav_df)}
         if len(nav_df) < 10:
             return out
+        r_nominal = nav_df["nav"].astype(float).pct_change().dropna()
         # ENAG ile reelleştir — nominal seri Sharpe'ı şişirir
         try:
+            if market == "US":
+                raise _ReelYok()
             _d0 = str(nav_df["date"].iloc[0])[:10]
             _gun = [(datetime.strptime(str(d)[:10], "%Y-%m-%d")
                      - datetime.strptime(_d0, "%Y-%m-%d")).days for d in nav_df["date"]]
@@ -4129,6 +4200,8 @@ class PortfolioManager:
             nav_df = nav_df.copy()
             nav_df["nav"] = [float(v) / ((1 + _g_enf) ** g)
                              for v, g in zip(nav_df["nav"], _gun)]
+        except _ReelYok:
+            pass
         except Exception as _e:
             log.warning("risk_metrics reelleştirme atlandı: %s", _e)
         nav = nav_df["nav"].astype(float)
@@ -4141,8 +4214,7 @@ class PortfolioManager:
         out["maxdd"] = round(float(((nav / nav.cummax()) - 1).min() * 100), 2)
         xu = nav_df["xu100_close"].astype(float)
         if (xu > 0).all():
-            aktif = r - xu.pct_change().dropna()
-            aktif = aktif.dropna()
+            aktif = (r_nominal - xu.pct_change()).dropna()
             if len(aktif) > 2 and aktif.std() > 0:
                 out["ir"] = round(float(aktif.mean() / aktif.std() * np.sqrt(252)), 2)
         return out
@@ -4477,7 +4549,7 @@ class PortfolioManager:
             perf = _perfs[p["id"]]
             if perf["gun"] < 1:
                 continue
-            _rm = PortfolioManager.risk_metrics(_navs.get(p["id"], pd.DataFrame()))
+            _rm = PortfolioManager.risk_metrics(_navs.get(p["id"], pd.DataFrame()), market=market)
             rows.append({"Vade": p["horizon"], "Profil": p["profile"],
                          "Yönetim": ("Yönetilen" if int(p.get("managed") or 0) == 1
                                      else "Pasif"),
@@ -5586,18 +5658,17 @@ class TimeMachineEngine:
         try:
             pit_str   = pit_date.strftime("%Y-%m-%d")
             today_str = datetime.now().strftime("%Y-%m-%d")
+            # Eskiden MultiIndex kolonlarda c.strip() hata verip sessizce 0.0
+            # dönüyordu: endeks getirisi HER ZAMAN 0, "alfa" = ham getiri.
             df = yf.download(idx, start=pit_str, end=today_str, progress=False)
-            if df.empty or "Close" not in df.columns:
+            cl = _kapanis_serisi(df, idx)
+            if len(cl) < 2:
+                log.warning("Zaman Makinesi: %s endeks verisi alınamadı", idx)
                 return 0.0
-            df.index = pd.to_datetime(df.index).tz_localize(None)
-            col_rn = {c: c.strip().title() for c in df.columns
-                      if c.strip().title() in ("Close",)}
-            if col_rn:
-                df = df.rename(columns=col_rn)
-            start_p = float(df["Close"].iloc[0])
-            end_p   = float(df["Close"].iloc[-1])
+            start_p, end_p = float(cl.iloc[0]), float(cl.iloc[-1])
             return round(((end_p / start_p) - 1) * 100, 1) if start_p > 0 else 0.0
-        except Exception:
+        except Exception as exc:
+            log.warning("Zaman Makinesi endeks getirisi hatası: %s", exc)
             return 0.0
 
     # Strateji Notu Hesaplama (0-100)
@@ -9408,19 +9479,7 @@ def render_us_stock_list_page(ui_lang: str):
             is_multi = len(symbols) > 1
             for t in tickers_tuple:
                 try:
-                    if is_multi:
-                        if isinstance(raw.columns, pd.MultiIndex):
-                            lvl0 = raw.columns.get_level_values(0)
-                            if "Close" in lvl0:
-                                col = raw["Close"][t].dropna()
-                            elif t in lvl0:
-                                col = raw[t]["Close"].dropna()
-                            else:
-                                continue
-                        else:
-                            col = raw["Close"].dropna() if "Close" in raw.columns else pd.Series(dtype=float)
-                    else:
-                        col = raw["Close"].dropna() if "Close" in raw.columns else pd.Series(dtype=float)
+                    col = _kapanis_serisi(raw, t)
                     if len(col) >= 2:
                         cur  = float(col.iloc[-1])
                         prev = float(col.iloc[-2])
@@ -10340,8 +10399,7 @@ def render_portfolio_page(ui_lang):
                 for tick in bist_ticks:
                     yt = _yf_symbol(tick, "BIST")
                     try:
-                        col = df[yt]["Close"] if len(bist_ticks) > 1 else df["Close"]
-                        col = col.dropna()
+                        col = _kapanis_serisi(df, yt)
                         result[tick] = float(col.iloc[-1]) if not col.empty else 0.0
                     except Exception:
                         result[tick] = 0.0
@@ -10355,8 +10413,7 @@ def render_portfolio_page(ui_lang):
                 df_us = yf.download(us_symbols, period="2d", group_by="ticker", auto_adjust=True, progress=False)
                 for tick, sym in zip(us_ticks, us_symbols):
                     try:
-                        col = df_us[sym]["Close"] if len(us_symbols) > 1 else df_us["Close"]
-                        col = col.dropna()
+                        col = _kapanis_serisi(df_us, sym)
                         result[tick] = float(col.iloc[-1]) if not col.empty else 0.0
                     except Exception:
                         result[tick] = 0.0
@@ -11909,7 +11966,7 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
                       f"%{_pf['reel']:+.1f}" if _pf.get('reel') is not None else "—")
             i3.metric(f"{_bench_ad(market)}'e Göre", f"%{_pf['xu100_rel']:+.1f}")
             i4.metric("Gün", _pf["gun"])
-            _rm = PortfolioManager.risk_metrics(_nav if _nav is not None else pd.DataFrame())
+            _rm = PortfolioManager.risk_metrics(_nav if _nav is not None else pd.DataFrame(), market=market)
             r1, r2, r3, r4 = st.columns(4)
             _fmt = lambda v, s="": (f"{v}{s}" if v is not None else "—")
             r1.metric("Sharpe", _fmt(_rm["sharpe"]), help="Getiri/oynaklık (yıllık, rf=0). >1 iyi, >2 çok iyi")

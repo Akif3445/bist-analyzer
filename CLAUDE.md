@@ -2102,6 +2102,77 @@ the earlier reading:
   ≤35%, long-term debt / permanent capital <1/3 for industry and <1/2 for
   services, receivable collection 2–3 months.
 
+### Pre-publication review (2026-10-20): secrets, calculations, crashes
+
+Requested before making the repo public for a CV.
+
+**Secrets: clean.** The real `.env` values (Anthropic key, Turso URL and token)
+appear nowhere in the 30 tracked files or in the full git history. Generic
+patterns (sk-ant, JWT, libsql URL, GitHub/Telegram/AWS tokens, hard-coded
+passwords) also come up empty. Going public **would** expose the commit email
+`battes45@gmail.com`; the other address is the GitHub noreply one.
+
+**Crashes: none at first render.** Every page was rendered through Streamlit
+`AppTest` with Turso disabled, and none raised: 13 menu pages, 3 retired pages
+and the EN toggle. Analysis (THYAO, NETAS, invalid code), manual backtest and
+US analysis were also clicked through. Pages already sit inside
+`_safe_render`, so an exception would show an error box rather than kill the
+app. The Time Machine run from the Backtest page did not finish in 10
+minutes. Static check: pyflakes reports no undefined names.
+
+**Calculation bugs fixed** (scoring v6):
+- **Valuation:** a negative P/E or P/B scored the **maximum** (100). The
+  formula treated it as a huge discount. Live 2026-10-19: CRFSA and NETAS
+  (negative equity) had valuation 100. Both now score 0.
+- **Time Machine benchmark was always 0.** yfinance now returns MultiIndex
+  columns even for one symbol, `c.strip()` raised on the tuple, and the
+  `except` returned 0.0, so "alpha" was the raw return. A new helper,
+  `_kapanis_serisi`, reads a single symbol's close from either column layout.
+- **Portfolyum:** a single-holding portfolio priced at 0 (shown as −100%).
+  The US list could not price a single symbol either. Same root cause, same
+  helper.
+- **`risk_metrics`:**
+  - the IR subtracted a nominal XU100 return from an ENAG-deflated portfolio
+    return, so it was biased negative by the daily inflation rate;
+  - US (dollar) portfolios were deflated with Turkish ENAG.
+
+  The IR is now computed nominal on both sides, and the US is not deflated.
+- **`analysis_history`:**
+  - the writer uses `price` while the readers use `current_price`;
+  - old local databases lacked `price`, so every save failed silently.
+
+  A migration and a read alias fix both.
+- **`ENAG_MOM_DEFAULTS`** listed `2025-02` twice, and the later estimate
+  (5.10) overwrote the archived official value (3.37). Only fresh installs
+  were affected: the live table was seeded with `INSERT OR IGNORE` and holds
+  3.37.
+
+**Found and NOT fixed: awaiting a decision, because it moves every real-return
+number in this file.**
+- **ENAG has no rows before 2020-01.** `_monthly_rate` fills missing months
+  with the mean of the **latest** 12 known months, about 3.6% a month (54% a
+  year). So 2018-08 → 2019-12 is deflated by **1.774**, while official TÜFE
+  for the same months is **1.198**.
+- **Effect:** every real figure on the vault window (2018-08 → 2024-08)
+  understates real return by roughly 6–7 points a year. Managed −0.8%/yr is
+  probably around +6%/yr. Percentiles, rankings and every between-strategy
+  comparison are unaffected, because all series share the deflator.
+- **The 2020–2024 rows** are flat annual equivalents with some archived
+  months overlaid. The yearly totals therefore drift from the stated annuals:
+  2020 40.6% vs 36.7%, 2021 69.8% vs 82.8%, 2022 127.3% vs 137.5%, 2023
+  132.4% vs 127.2%. 2024 matches.
+- **Months after 2026-06** have not been entered, so they also take the
+  trailing average.
+- **Proposed fix:** official TÜFE for the months before ENAG existed, and
+  non-archived months scaled so each year matches its published annual. This
+  writes to the live `enag_monthly` table and then needs every real-return
+  table re-run.
+
+Other open items are listed in README "Known Issues": nominal MaxDD,
+closed-trade drawdown in the single-stock backtest, Cutler RSI, dotted US
+share classes, 87 `use_container_width` calls, and local SQLite schema drift
+in the old Time Machine tables.
+
 ### 1.4 turnover — `pipeline_backtest.py devir [yil]` (2026-09-27): the live manager is not the tested manager
 
 **Live, measured first** (Turso `pm_trades`, managed BIST portfolios). The
