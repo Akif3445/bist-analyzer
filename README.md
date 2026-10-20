@@ -148,7 +148,7 @@ Found in a code and calculation review in October 2026. Fixed items are listed u
 **Behaviour and robustness**
 - **US share classes with a dot** (e.g. `BRK.A`) are not converted to Yahoo's `BRK-A` format and are silently skipped.
 - **No migration system for local SQLite.** A database created by a much older version can carry renamed columns (seen in the old Time Machine tables); fresh installs are unaffected.
-- **Zaman Makinesi** (Time Machine) still simulates the old portfolio logic, not the validated pipeline, and a run from the Backtest page took more than 10 minutes in testing with no way to cancel it.
+- **Zaman Makinesi** (Time Machine) still simulates the old portfolio logic, not the validated pipeline, and a run took more than 10 minutes in testing with no way to cancel it. It is disabled for demo visitors for that reason.
 - **`use_container_width`** is used ~85 times; it works on the pinned Streamlit 1.59 but is deprecated and will break on upgrade.
 - **English UI translation is partial.**
 - **Live evidence is short.** Live cohorts have run for weeks and carry four configuration breaks; managed portfolios also converge on the same names (35 portfolios held 49 unique stocks).
@@ -179,6 +179,8 @@ Found in a code and calculation review in October 2026. Fixed items are listed u
 - Portfolyum showed a single-stock portfolio at −100% (price read as 0); the US list could not price a single symbol.
 - Information Ratio subtracted a nominal index return from an inflation-adjusted portfolio return, and US (dollar) portfolios were deflated with Turkish inflation.
 - Analysis history was not saved on older local databases, and the reading side used a different column name from the writing side.
+- My Portfolio crashed as soon as the first stock was added on a fresh database (the same kind of column-name mismatch), and its per-stock cards had been accidentally deleted long ago, so only "Remove" buttons were visible.
+- Signal Tracker crashed whenever a period contained SELL signals but no BUY signals.
 - A duplicated month in the ENAG defaults overwrote an official value with an estimate on fresh installs.
 - **Inflation before 2020 was wrong.** ENAG has no data before 2020, and those months were filled with the latest year's average (~54%/yr instead of ~20%). Every real return on the 2018–2024 window was understated by about 5 points a year. Managed BIST moved from −0.8% to +4.8% per year; rankings against random portfolios did not change. 2020–2024 yearly totals now also match ENAG's published annual figures.
 
@@ -256,7 +258,7 @@ python bilanco.py oran THYAO              # one stock's ratio history
 
 ## Security
 
-The public demo runs with database write credentials and Streamlit has no built-in auth. If `APP_EDIT_KEY` is set, every UI write action requires unlocking via the sidebar; reads stay public. External RSS content rendered as HTML is escaped and link schemes are checked. SQL is parameterised throughout. The daily robot runs with least privilege (`contents: read`).
+The public demo runs with database write credentials and Streamlit has no built-in auth. If `APP_EDIT_KEY` is set, every UI write action requires unlocking via the sidebar; reads stay public. Visitors see all system portfolios and their live performance, but **My Portfolio** becomes a private sandbox for each visitor: what they add stays in their own browser session and is never stored or shown to anyone else. Long-running Time Machine jobs are disabled for visitors. External RSS content rendered as HTML is escaped and link schemes are checked. SQL is parameterised throughout. The daily robot runs with least privilege (`contents: read`).
 
 **Do not enter real personal holdings into the public demo** — the write guard prevents pollution, not disclosure.
 

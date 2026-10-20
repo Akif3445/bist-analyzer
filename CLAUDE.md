@@ -2430,6 +2430,34 @@ It followed the pre-publication review (see that section):
 Public repos get free Actions minutes, but the 60-day inactivity cron rule
 still applies.
 
+**Visitor model (2026-10-20, user-approved).** "Visitor" means
+`_writes_locked()`, i.e. `APP_EDIT_KEY` is set and the editor is not
+unlocked.
+- **System portfolios stay public:** shadow, managed and control cohorts are
+  the showcase.
+- **Portfolyum becomes a per-session sandbox for visitors.**
+  - `_pf_kum_modu` / `_pf_getir` / `_pf_ekle` / `_pf_sil` keep the list in
+    `st.session_state["_pf_kum"]`; nothing is persisted or shared.
+  - All 6 call sites go through these helpers: the page form, remove, the
+    analysis "add" button, the US "add" button, and the alerts.
+  - The owner's list and their sidebar alerts are not shown to visitors.
+    "Mark all read" had been an unguarded write.
+  - Before this, on Streamlit Cloud the single `/tmp` SQLite file was shared
+    by every visitor.
+- **The Time Machine is gated by `_agir_is_izni`** (3 run paths). A run takes
+  10+ minutes on a single-process free tier.
+
+Bugs found while testing this, both already present in fresh installs and
+on Streamlit Cloud:
+- **Portfolyum crashed on the first added stock.** The schema writes `qty`;
+  the page and alerts read `item["quantity"]`. Old local databases had
+  `quantity`, so the insert failed there instead. `get_portfolio` now returns
+  both keys, and `add_portfolio` writes whichever column exists.
+- **The per-stock card HTML had been deleted in 341ba0e.** Only "Sil" buttons
+  showed. It is restored, with theme colours and the ticker escaped.
+- **Signal Tracker raised `UnboundLocalError`** whenever a period had SELL
+  signals but no BUY: `col_rename` was defined only in the BUY branch.
+
 Two Actions notes for a private repo: minutes are metered (free tier 2000/month; this robot uses ~220), and GitHub disables scheduled workflows after 60 days with no repository activity — check the Actions tab occasionally during quiet stretches.
 
 ## Known constraints

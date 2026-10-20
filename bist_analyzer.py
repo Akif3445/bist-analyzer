@@ -108,6 +108,51 @@ def _guard_write() -> bool:
     return False
 
 
+def _agir_is_izni() -> bool:
+    """Dakikalar süren işlerden (Zaman Makinesi) önce çağrılır. Ziyaretçide
+    kapalı: ücretsiz Streamlit sunucusu tek süreç, 10+ dakikalık bir koşu
+    siteyi o sırada herkes için yavaşlatır ya da bellekten düşürür."""
+    if not _writes_locked():
+        return True
+    st.info("⏳ Zaman Makinesi demoda kapalı: tek koşusu 10 dakikayı aşabiliyor "
+            "ve sunucuyu herkes için yavaşlatıyor. Manuel backtest açık.")
+    return False
+
+
+# ── Portfolyum: ziyaretçiye oturuma özel deneme alanı ─────────────────────
+# Editör kilidi kapalıyken (yerel geliştirme ya da editör girişi yapılmış)
+# Portfolyum veritabanını kullanır. Kilitliyken (halka açık demonun
+# ziyaretçisi) liste yalnız o tarayıcı oturumunda tutulur: ziyaretçi hisse
+# ekleyip silebilir, ama ne kalıcı olur ne başka birine görünür. Eskiden
+# Streamlit Cloud'da /tmp'deki TEK SQLite dosyası bütün ziyaretçiler
+# arasında paylaşılıyordu (bkz. CLAUDE.md > Security).
+def _pf_kum_modu() -> bool:
+    return _writes_locked()
+
+
+def _pf_getir() -> list:
+    if _pf_kum_modu():
+        return list(st.session_state.get("_pf_kum", {}).values())
+    return _history_db.get_portfolio()
+
+
+def _pf_ekle(ticker: str, buy_price: float, qty: int) -> None:
+    if _pf_kum_modu():
+        kum = st.session_state.setdefault("_pf_kum", {})
+        kum[ticker.upper()] = {"ticker": ticker.upper(), "buy_price": float(buy_price),
+                               "quantity": int(qty), "qty": int(qty),
+                               "add_date": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    else:
+        _history_db.add_portfolio(ticker, buy_price, qty)
+
+
+def _pf_sil(ticker: str) -> None:
+    if _pf_kum_modu():
+        st.session_state.get("_pf_kum", {}).pop(ticker.upper(), None)
+    else:
+        _history_db.remove_portfolio(ticker)
+
+
 # News Engine
 try:
     from news_engine import analyze_news, render_news_panel, NewsAnalysisResult
@@ -653,11 +698,19 @@ class AnalysisHistoryDB:
             conn.commit()
 
     # Portfolio Methods
+    @staticmethod
+    def _adet_kolonu(conn) -> str:
+        """Adet kolonunun adı. Yeni şema 'qty', eski şema 'quantity' —
+        CREATE IF NOT EXISTS eski tabloyu değiştirmediği için ikisi de yaşıyor."""
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio)")}
+        return "quantity" if "quantity" in cols else "qty"
+
     def add_portfolio(self, ticker: str, buy_price: float, qty: int) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO portfolio (ticker, buy_price, qty, add_date)
+            col = self._adet_kolonu(conn)
+            conn.execute(f"""
+                INSERT OR REPLACE INTO portfolio (ticker, buy_price, {col}, add_date)
                 VALUES (?, ?, ?, ?)
             """, (ticker.upper(), buy_price, qty, now))
             conn.commit()
@@ -671,7 +724,15 @@ class AnalysisHistoryDB:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM portfolio ORDER BY add_date DESC").fetchall()
-        return [dict(r) for r in rows]
+        # Okuyan sayfalar item["quantity"] kullanıyor; yeni şemada kolon 'qty'.
+        # Eskiden ilk hisse eklenince Portfolyum KeyError ile çöküyordu.
+        out = []
+        for r in rows:
+            d = dict(r)
+            adet = d.get("quantity", d.get("qty")) or 0
+            d["quantity"] = d["qty"] = adet
+            out.append(d)
+        return out
 
     # Accuracy / Backtest Methods
     def evaluate_accuracy(self):
@@ -7746,6 +7807,13 @@ def _render_price_chart_with_trades(ticker: str, period: str, trades: list, heig
 
 # SKOR DOĞRULAMA RAPORU SAYFASI
 
+def _sinyal_kolon_adlari(ui_lang: str) -> dict:
+    tr = ui_lang == "TR"
+    return {"ticker": "Hisse" if tr else "Ticker", "signal": "Sinyal" if tr else "Signal",
+            "score": "Skor" if tr else "Score", "signal_date": "Tarih" if tr else "Date",
+            "signal_price": "Fiyat" if tr else "Price"}
+
+
 def render_validation_page(ui_lang: str):
     """Sinyal takip paneli — AL/SAT sinyallerini günlük, haftalık, aylık gösterir."""
     st.markdown("# " + ("Sinyal Takip Paneli" if ui_lang == "TR" else "Signal Tracker"))
@@ -7930,14 +7998,7 @@ def render_validation_page(ui_lang: str):
             else:
                 al_display[p_label] = "—"
 
-        col_rename = {
-            "ticker": "Hisse" if ui_lang == "TR" else "Ticker",
-            "signal": "Sinyal" if ui_lang == "TR" else "Signal",
-            "score": "Skor" if ui_lang == "TR" else "Score",
-            "signal_date": "Tarih" if ui_lang == "TR" else "Date",
-            "signal_price": "Fiyat" if ui_lang == "TR" else "Price",
-        }
-        al_display.rename(columns=col_rename, inplace=True)
+        al_display.rename(columns=_sinyal_kolon_adlari(ui_lang), inplace=True)
         st.dataframe(al_display, use_container_width=True, hide_index=True)
     else:
         st.info(
@@ -7962,7 +8023,9 @@ def render_validation_page(ui_lang: str):
             else:
                 sat_display[p_label] = "—"
 
-        sat_display.rename(columns=col_rename, inplace=True)
+        # Eskiden col_rename yalnız AL kolunda tanımlıydı: dönemde yalnız SAT
+        # sinyali varsa sayfa UnboundLocalError ile çöküyordu.
+        sat_display.rename(columns=_sinyal_kolon_adlari(ui_lang), inplace=True)
         st.dataframe(sat_display, use_container_width=True, hide_index=True)
     else:
         st.info(
@@ -8319,7 +8382,7 @@ def render_time_machine_page(ui_lang: str):
     prev_runs = TimeMachineEngine.load_previous_runs(tm_market)
 
     # ÖZEL PORTFÖY TESTİ
-    if run_custom_btn and custom_tickers:
+    if run_custom_btn and custom_tickers and _agir_is_izni():
         st.markdown("## 🎯 Özel Portföy — Zaman Makinesi Testi")
         _tm_run_analysis(
             custom_tickers, tm_years, tm_market, "custom",
@@ -8327,7 +8390,7 @@ def render_time_machine_page(ui_lang: str):
         )
 
     # PIT ANALİZİ ÇALIŞTIR
-    if run_pit_btn:
+    if run_pit_btn and _agir_is_izni():
         style_label = _styles[tm_style]["label"]
         st.markdown(f"## 🕰️ {tm_years} Yıl Öncesi — {style_label} Portföy Testi")
 
@@ -9184,8 +9247,8 @@ def render_us_markets_page(ui_lang: str, mode_override: str = None):
         with pf_col3:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Add to Portfolio", key="us_add_pf",
-                         use_container_width=True) and _guard_write():
-                _history_db.add_portfolio(f"{us_symbol}:US", pf_cost, pf_qty)
+                         use_container_width=True):
+                _pf_ekle(f"{us_symbol}:US", pf_cost, pf_qty)
                 st.success(f"{us_symbol} added to portfolio!")
 
         # Combined chart: Candlestick + Volume + RSI
@@ -10035,7 +10098,7 @@ def render_backtest_page(ui_lang: str):
 
     # ==================== ZAMAN MAKİNESİ ====================
     else:
-        if run_btn:
+        if run_btn and _agir_is_izni():
             _styles = TimeMachineEngine.PORTFOLIO_STYLES
             is_custom = len(custom_tickers) > 0
 
@@ -10368,6 +10431,12 @@ def _render_backtest_results(ui_lang: str):
 def render_portfolio_page(ui_lang):
     title = "Portföyüm & Favoriler" if ui_lang == "TR" else "Portfolio & Favorites"
     st.markdown(f"# {title}")
+    if _pf_kum_modu():
+        st.info("🧪 Deneme alanı: eklediğin hisseler yalnız bu tarayıcı oturumunda "
+                "tutulur, kimseyle paylaşılmaz ve sayfayı kapatınca silinir."
+                if ui_lang == "TR" else
+                "🧪 Sandbox: stocks you add live only in this browser session, "
+                "are not shared with anyone, and disappear when you close the page.")
 
     st.markdown("### Yeni Hisse Ekle" if ui_lang == "TR" else "### Add Stock")
     with st.form("portfolio_ekle_form", clear_on_submit=True):
@@ -10395,15 +10464,15 @@ def render_portfolio_page(ui_lang):
             st.markdown("<br>", unsafe_allow_html=True)
             submitted = st.form_submit_button("Ekle (Add)", use_container_width=True)
 
-        if submitted and p_tick and _guard_write():
-            _history_db.add_portfolio(p_tick, p_cost, p_qty)
+        if submitted and p_tick:
+            _pf_ekle(p_tick, p_cost, p_qty)
             st.success(f"{p_tick} portföye eklendi." if ui_lang == "TR" else f"{p_tick} added to portfolio.")
             st.rerun()
 
     st.markdown("---")
     st.markdown("### Mevcut Portföy" if ui_lang == "TR" else "### Current Portfolio")
 
-    portfolio_items = _history_db.get_portfolio()
+    portfolio_items = _pf_getir()
     if not portfolio_items:
         st.info(
             "Portföyünüz henüz boş. Yukarıdaki formu kullanarak hisse ekleyebilir "
@@ -10503,11 +10572,31 @@ def render_portfolio_page(ui_lang):
         c_color  = "#1d6f4e" if sinyal in ["AL", "GUCLU AL"] else "#9e2b25" if sinyal in ["SAT", "GUCLU SAT"] else "#6b6357"
         kz_color = "#1d6f4e" if kar_zarar >= 0 else "#9e2b25"
 
+        # Kart HTML'i 341ba0e'de yanlışlıkla silinmişti: o günden beri her hisse
+        # için yalnız bir "Sil" düğmesi görünüyordu (ad, maliyet, K/Z yoktu).
+        # Renkler temadan; kod kullanıcı girdisi olduğu için kaçışlanır.
+        _t = _theme()
+        _skor_txt = f"{skor:.0f}/100" if isinstance(skor, (int, float)) else "—"
         with st.container():
             st.markdown(f"""
-    """, unsafe_allow_html=True)
-            if st.button("Sil (Remove)", key=f"p_del_page_{tick}") and _guard_write():
-                _history_db.remove_portfolio(tick)
+            <div style="background:{_t['bg2']}; border:1px solid {_t['line']}; border-radius:10px; padding:15px; margin-bottom:10px; color:{_t['ink']};">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <div style="flex:1; min-width:140px;">
+                        <span style="font-size:20px; font-weight:bold;">{html.escape(display_tick)}</span>{market_badge}<br>
+                        <span style="color:{_t['muted']}; font-size:14px;">{adet} Adet · Maliyet: {maliyet:.2f} {currency}</span>
+                    </div>
+                    <div style="flex:1; min-width:140px; text-align:center;">
+                        <span style="font-size:16px;">Güncel: <b>{guncel_fiyat:.2f} {currency}</b></span><br>
+                        <span style="color:{kz_color}; font-size:15px; font-weight:bold;">K/Z: {kar_zarar:+.2f} {currency} ({kar_pct:+.1f}%)</span>
+                    </div>
+                    <div style="flex:1; min-width:100px; text-align:right;">
+                        <span style="color:{c_color}; font-size:18px; font-weight:bold;">{html.escape(str(sinyal))}</span> <span style="font-size:14px;">({_skor_txt})</span>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("Sil (Remove)", key=f"p_del_page_{tick}"):
+                _pf_sil(tick)
                 st.rerun()
 
     # Genel Durum Özeti
@@ -10962,8 +11051,8 @@ def render_analysis_page(ui_lang):
                 st.markdown(f"**Web:** [{web}]({web})")
                 
             if st.button("Favorilere (Portföye) Ekle" if ui_lang == "TR" else "Add to Portfolio",
-                         key=f"fav_{ticker_input}") and _guard_write():
-                _history_db.add_portfolio(ticker_input, score.stock.current_price, 0)
+                         key=f"fav_{ticker_input}"):
+                _pf_ekle(ticker_input, score.stock.current_price, 0)
                 st.success(f"{ticker_input} portföyünüze/favorilerinize eklendi!" if ui_lang == "TR" else f"{ticker_input} added!")
 
     # Top Metrics (responsive: 3+3 layout)
@@ -12426,6 +12515,10 @@ def render_portfolio_manager_page(ui_lang, market: str = "BIST"):
 
 
 def check_portfolio_alerts(ui_lang):
+    # Ziyaretçinin deneme listesi için alarm üretilmez: alarmlar paylaşılan
+    # veritabanına yazılır ve herkesin yan menüsünde görünürdü.
+    if _pf_kum_modu():
+        return
     portfolio = _history_db.get_portfolio()
     unread_alerts = [a["ticker"] for a in _history_db.get_unread_alerts()]
     history = {r["ticker"]: r for r in _history_db.load_all()}
@@ -12456,6 +12549,10 @@ def check_portfolio_alerts(ui_lang):
 
 def display_sidebar_alerts(ui_lang):
     _history_db.evaluate_accuracy()
+    # Bildirimler sahibin Portfolyum'undan üretilir; ziyaretçiye gösterilmez
+    # ("Tümünü Okundu İşaretle" de kilitsiz bir yazma düğmesiydi).
+    if _pf_kum_modu():
+        return
     check_portfolio_alerts(ui_lang)
     unread = _history_db.get_unread_alerts()
     

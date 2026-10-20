@@ -148,7 +148,7 @@ Ekim 2026'daki kod ve hesap incelemesinde bulundu. Düzeltilenler Yol Haritası'
 **Davranış ve sağlamlık**
 - **Noktalı ABD hisse sınıfları** (örn. `BRK.A`) Yahoo'nun `BRK-A` biçimine çevrilmiyor ve sessizce atlanıyor.
 - **Yerel SQLite için göç (migration) sistemi yok.** Çok eski bir sürümün oluşturduğu veritabanında sütun adları farklı olabilir (eski Zaman Makinesi tablolarında görüldü); sıfırdan kurulumda sorun yok.
-- **Zaman Makinesi** hâlâ eski portföy mantığını simüle ediyor, doğrulanmış hattı değil; Backtest sayfasından başlatılan bir koşu testte 10 dakikayı aştı ve iptal edilemiyor.
+- **Zaman Makinesi** hâlâ eski portföy mantığını simüle ediyor, doğrulanmış hattı değil; bir koşu testte 10 dakikayı aştı ve iptal edilemiyor. Bu yüzden demo ziyaretçilerine kapalı.
 - **`use_container_width`** ~85 yerde kullanılıyor; sabitlenmiş Streamlit 1.59'da çalışıyor ama kullanımdan kalkıyor, sürüm yükseltilince bozulur.
 - **İngilizce arayüz çevirisi yarım.**
 - **Canlı kanıt kısa.** Canlı kohortlar haftalardır çalışıyor ve dört yapılandırma kırılması taşıyor; yönetilen portföyler de aynı hisselere yakınsıyor (35 portföy 49 farklı hisse tutuyordu).
@@ -179,6 +179,8 @@ Ekim 2026'daki kod ve hesap incelemesinde bulundu. Düzeltilenler Yol Haritası'
 - Portfolyum tek hisselik portföyü %−100 gösteriyordu (fiyat 0 okunuyordu); ABD listesi tek sembolü fiyatlayamıyordu.
 - Bilgi Oranı enflasyondan arındırılmış portföy getirisinden nominal endeks getirisini çıkarıyordu; ABD (dolar) portföyleri Türk enflasyonuyla düşülüyordu.
 - Eski yerel veritabanlarında analiz geçmişi kaydedilmiyordu; okuyan taraf yazan taraftan farklı bir sütun adı kullanıyordu.
+- Portfolyum, sıfırdan kurulan veritabanında ilk hisse eklenince çöküyordu (aynı türden sütun adı uyuşmazlığı); hisse kartları da uzun zaman önce yanlışlıkla silinmişti, sayfada yalnız "Sil" düğmeleri görünüyordu.
+- Sinyal Takip, dönemde SAT sinyali olup AL sinyali olmadığında çöküyordu.
 - ENAG varsayılanlarında iki kez yazılmış bir ay, sıfırdan kurulumda resmi değeri bir tahminle eziyordu.
 - **2020 öncesi enflasyon yanlıştı.** ENAG'ın 2020 öncesi verisi yok ve o aylar son yılın ortalamasıyla (~%20 yerine ~yıllık %54) dolduruluyordu. 2018–2024 penceresindeki her reel getiri yılda yaklaşık 5 puan düşük görünüyordu. Yönetilen BIST portföyü yılda −%0,8'den +%4,8'e çıktı; rastgele portföylere göre sıralama değişmedi. 2020–2024 yıllık toplamları da artık ENAG'ın yayımladığı rakamları tutuyor.
 
@@ -256,7 +258,7 @@ python bilanco.py oran THYAO              # bir hissenin oran geçmişi
 
 ## Güvenlik
 
-Halka açık demo veritabanı yazma yetkisiyle çalışır ve Streamlit'in yerleşik kimlik doğrulaması yoktur. `APP_EDIT_KEY` tanımlıysa her arayüz yazma işlemi kenar çubuğundan kilit açmayı gerektirir; okuma herkese açık kalır. HTML olarak gösterilen dış RSS içeriği kaçışlanır ve bağlantı şemaları kontrol edilir. SQL baştan sona parametrelidir. Günlük robot en az yetkiyle (`contents: read`) çalışır.
+Halka açık demo veritabanı yazma yetkisiyle çalışır ve Streamlit'in yerleşik kimlik doğrulaması yoktur. `APP_EDIT_KEY` tanımlıysa her arayüz yazma işlemi kenar çubuğundan kilit açmayı gerektirir; okuma herkese açık kalır. Ziyaretçiler tüm sistem portföylerini ve canlı performanslarını görür, ama **Portfolyum** her ziyaretçi için kişisel bir deneme alanına dönüşür: eklediği hisseler yalnız kendi tarayıcı oturumunda kalır, hiçbir yere kaydedilmez ve kimseye görünmez. Uzun süren Zaman Makinesi koşuları ziyaretçilere kapalıdır. HTML olarak gösterilen dış RSS içeriği kaçışlanır ve bağlantı şemaları kontrol edilir. SQL baştan sona parametrelidir. Günlük robot en az yetkiyle (`contents: read`) çalışır.
 
 **Halka açık demoya gerçek kişisel varlık bilgisi girmeyin** — yazma koruması kirlenmeyi önler, ifşayı değil.
 
