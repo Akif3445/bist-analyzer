@@ -3222,14 +3222,27 @@ class InflationEngine:
         _PMDB.execute_batch(stmts)
         InflationEngine._initialized = True
 
+    # Süreç içi önbellek. Tablo ayda bir değişir, ama deflator() her portföy
+    # hesabında rates()'i çağırıyordu: Portföy Yöneticisi (BIST) tek açılışta
+    # ~420 Turso turu atıyor, 53 sn'nin ~35'i buydu (ölçüldü 2026-10-20).
+    # set_rate önbelleği boşaltır; başka bir süreç (robot) yazarsa en geç
+    # _RATES_TTL sonra görülür.
+    _RATES_TTL = 600
+    _rates_cache = None          # (zaman, dict)
+
     @staticmethod
     def rates() -> dict:
+        _c = InflationEngine._rates_cache
+        if _c and time.time() - _c[0] < InflationEngine._RATES_TTL:
+            return _c[1]
         InflationEngine._init_table()
         try:
             rows = _PMDB.execute("SELECT ym, mom_pct, kaynak FROM enag_monthly ORDER BY ym")["rows"]
-            return {r["ym"]: (r["mom_pct"], r["kaynak"]) for r in rows}
+            out = {r["ym"]: (r["mom_pct"], r["kaynak"]) for r in rows}
         except Exception:
             return {k: v for k, v in ENAG_MOM_DEFAULTS.items()}
+        InflationEngine._rates_cache = (time.time(), out)
+        return out
 
     @staticmethod
     def set_rate(ym: str, pct: float, kaynak: str = "resmi"):
@@ -3239,6 +3252,7 @@ class InflationEngine:
         InflationEngine._init_table()
         _PMDB.execute("INSERT OR REPLACE INTO enag_monthly (ym, mom_pct, kaynak) VALUES (?,?,?)",
                       (ym, pct, kaynak))
+        InflationEngine._rates_cache = None
 
     @staticmethod
     def _monthly_rate(ym: str, table: dict) -> float:
@@ -10751,8 +10765,12 @@ def render_bist_list_page(ui_lang):
         key="bist_list_search"
     ).strip().upper()
 
-    # Tüm tickerları düz listeye al (arama için)
-    all_tickers_flat = list({t for cats in BIST_STOCKS.values() for t in cats})
+    # Tüm kategorilerin fiyatı TEK indirmede. st.tabs tembel değildir: her
+    # sekmenin gövdesi her açılışta çalışır, bu yüzden kategori başına ayrı
+    # indirme 10 Yahoo çağrısı ve ~14 sn demekti (ölçüldü 2026-10-20).
+    all_tickers_flat = tuple(sorted({t for cats in BIST_STOCKS.values() for t in cats}))
+    with st.spinner("Fiyatlar güncelleniyor..."):
+        _tum_fiyatlar = fetch_bist_daily_changes(all_tickers_flat)
 
     # Kategori sekmeleri
     cat_names = list(BIST_STOCKS.keys())
@@ -10769,8 +10787,7 @@ def render_bist_list_page(ui_lang):
                     st.info("Arama sonucu bulunamadı.")
                     continue
 
-            with st.spinner("Fiyatlar güncelleniyor..."):
-                prices = fetch_bist_daily_changes(tickers_in_cat)
+            prices = _tum_fiyatlar
 
             # Başlık satırı
             header_cols = st.columns([2, 2, 2, 3])
@@ -12682,6 +12699,40 @@ def _inject_gazete_css():
     """, unsafe_allow_html=True)
 
 
+# Gün içi NAV tazeleme. Eskiden HER yeni oturum update_navs'ı ekranı bekleterek
+# çalıştırıyordu: iki piyasanın tüm pozisyonları Yahoo'dan iniyor, 458
+# portföyün satırı Turso'ya yazılıyordu. İlk açılışın 44 sn'sinin ~30'u,
+# önbellek ısınmış ikinci ziyaretin bile 28 sn'sinin ~27'si buydu (ölçüldü
+# 2026-10-20). Şimdi süreç başına en fazla _NAV_TAZE_SN'de bir ve arka planda;
+# sayfa son yazılmış NAV'ı gösterir. Kapanış sonrası asıl NAV'ı robot yazar.
+_NAV_TAZE_SN = 900
+# Başlamadan önce bekleme: tazeleme hemen başlarsa ziyaretçinin ilk sayfasıyla
+# aynı anda Yahoo'ya ve Turso'ya gidip onu yavaşlatıyordu (ölçüldü: Kokpit
+# 8 → 22 sn). İlk sayfa çizildikten sonra çalışsın.
+_NAV_GECIKME_SN = 45
+_nav_kilit = threading.Lock()
+_nav_son = [0.0]
+
+
+def _nav_tazele_arka_planda():
+    if time.time() - _nav_son[0] < _NAV_TAZE_SN:
+        return
+    if not _nav_kilit.acquire(blocking=False):
+        return                                   # başka bir oturum zaten tazeliyor
+    _nav_son[0] = time.time()
+
+    def _is():
+        try:
+            time.sleep(_NAV_GECIKME_SN)
+            PortfolioManager.update_navs()
+        except Exception as exc:
+            log.warning("Arka plan NAV tazeleme hatası: %s", exc)
+        finally:
+            _nav_kilit.release()
+
+    threading.Thread(target=_is, daemon=True, name="nav-tazele").start()
+
+
 def run_app():
     st.set_page_config(
         page_title="Piyasa Defteri — BIST Akıllı Yatırım",
@@ -12712,10 +12763,7 @@ def run_app():
                     _mc.commit()
         except Exception:
             pass
-        try:
-            PortfolioManager.update_navs()  # portföy değerleri her oturumda taze (hızlı: toplu)
-        except Exception:
-            pass
+        _nav_tazele_arka_planda()
         st.session_state["validation_checked"] = True
 
     # TOP BAR — Market Secici (BIST vs US)

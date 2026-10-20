@@ -2458,6 +2458,35 @@ on Streamlit Cloud:
 - **Signal Tracker raised `UnboundLocalError`** whenever a period had SELL
   signals but no BUY: `col_rename` was defined only in the BUY branch.
 
+### Demo load time (2026-10-20)
+
+Profiled with Streamlit `AppTest` against the real Turso, by wrapping
+`yf.download`, `_PMDB.execute` and the heavy methods.
+
+| | Before | After (cold process) | After (warm) |
+|---|---|---|---|
+| First visit (run_app → Kokpit) | 44.5 s | 12.6 s | — |
+| Second visit (new session) | 28.2 s | — | 2.2 s |
+| Portföy Yöneticisi BIST | 53.4 s | 22.0 s | 11.1 s |
+| BIST Listesi | 14.6 s | 8.5 s | — |
+
+Three causes:
+1. **`update_navs` ran synchronously for every new session.** It took
+   ~27–31 s: both markets' positions downloaded and 458 rows written. It now
+   runs in a background thread (`_nav_tazele_arka_planda`), at most once per
+   `_NAV_TAZE_SN` (15 min) per process, and starts after `_NAV_GECIKME_SN`
+   (45 s). Started immediately, it competed with the visitor's first page:
+   Kokpit went 8 → 22 s. The robot still writes the post-close NAV.
+2. **`InflationEngine.rates()` hit Turso on every call.** `deflator()` calls
+   it once per portfolio, so the BIST PM page made ~420 round trips (592
+   queries, 48 s). It now has a 10-minute in-process cache, cleared by
+   `set_rate`.
+3. **BIST Listesi downloaded once per category tab.** `st.tabs` is not lazy,
+   so that meant 10 Yahoo calls; it is now a single download.
+
+Not fixable in code: Streamlit Cloud puts an idle free-tier app to sleep, and
+waking it takes roughly 30–60 s before any of this code runs.
+
 Two Actions notes for a private repo: minutes are metered (free tier 2000/month; this robot uses ~220), and GitHub disables scheduled workflows after 60 days with no repository activity — check the Actions tab occasionally during quiet stretches.
 
 ## Known constraints
