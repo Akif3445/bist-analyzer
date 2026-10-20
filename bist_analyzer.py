@@ -1307,6 +1307,7 @@ class TechnicalResult:
     sma_gap_pct: float   = 0.0    # (SMA50 - SMA200) / SMA200 * 100
 
     score: float         = 50.0
+    ham_score: float     = 50.0   # 0-100'e kırpılmadan önceki toplam (yalnız gösterim)
 
 
 class TechnicalEngine:
@@ -1471,6 +1472,7 @@ class TechnicalEngine:
                 log.warning("ADX hesaplama hatası: %s", exc)
 
         result.score = TechnicalEngine._compute_score(result, style)
+        result.ham_score = TechnicalEngine._compute_score(result, style, ham=True)
         return result
 
     # Yardımcı Hesaplamalar
@@ -1528,8 +1530,15 @@ class TechnicalEngine:
             return 0.0
 
     @staticmethod
-    def _compute_score(r: TechnicalResult, style: str = "dengeli") -> float:
-        """0-100 teknik skor.
+    def _compute_score(r: TechnicalResult, style: str = "dengeli", ham: bool = False) -> float:
+        """0-100 teknik skor (ham=True: 0-100'e kırpılmadan önceki toplam).
+
+        Toplam 0'dan başlar, göstergeler ekler/çıkarır; aralık kabaca −60…+110
+        ve sonda 0-100'e kırpılır. Zayıf piyasada çoğu hisse 0'a yapışır
+        (2026-10-19: 435 hissenin 323'ü). Ölçek bu hâliyle kalibre edildi ve
+        tüm eşikler (SCORE_MIN, skor_cikis, sinyal bantları) ona göre seçildi;
+        değiştirmek ön kayıtlı bir test ister. Ham değer yalnız GÖSTERİM için
+        (TechnicalResult.ham_score): "0" ile "−30" arasındaki fark görünsün.
 
         style="dengeli"  : Orijinal karma mantık — aşırı satım (düşük RSI/BB/52w)
                            ödüllendirilir. Kalibrasyon (weight_calibration.py, 2026-07)
@@ -1733,6 +1742,8 @@ class TechnicalEngine:
             if adx_multiplier < 1.0:
                 score = score * (0.85 + 0.15 * adx_multiplier)
 
+        if ham:
+            return round(score, 1)
         return round(min(100.0, max(0.0, score)), 1)
 
 
@@ -1933,8 +1944,13 @@ def compute_bist_score(
     """
     result = BISTScore(ticker=ticker.upper())
 
-    # Fetch Data
-    stock        = DataFetcher.fetch(ticker, period=period, market=market)
+    # Fetch Data. Teknik skor HER ZAMAN en az 1 yıllık veriyle hesaplanır:
+    # SMA200 için 200, 52 haftalık konum için ~252 bar gerekir. Eskiden
+    # Hisse Analizi'nde "6 Ay" seçilince 125 barla hesaplanıyordu; SMA200
+    # yokluğu "altında" sayılıyor, 52 hafta 6 aya iniyordu (2026-10-20:
+    # ASELS 1y 24 → 6mo 0, BIMAS 11.6 → 0). Periyot yalnız grafiği belirler.
+    _kisa_gun = {"1mo": 31, "3mo": 92, "6mo": 183}.get(period)
+    stock        = DataFetcher.fetch(ticker, period="1y" if _kisa_gun else period, market=market)
     result.stock = stock
     if stock.error:
         result.signal = "HATA"
@@ -1942,6 +1958,8 @@ def compute_bist_score(
 
     # Technical Analysis — stil hisse segmentine göre (bkz. _tech_style_for)
     technical           = TechnicalEngine.compute(stock.df, style=_tech_style_for(ticker, market))
+    if _kisa_gun and stock.df is not None and not stock.df.empty:
+        stock.df = stock.df[stock.df.index >= stock.df.index[-1] - pd.Timedelta(days=_kisa_gun)]
 
     # .5: Endekse göre göreli güç (14 gün) — YALNIZ ÖLÇÜLÜR, skora EKLENMEZ.
     #
@@ -11140,6 +11158,14 @@ def render_analysis_page(ui_lang):
                        else ("Strong" if val >= 65 else "Weak" if val < 40 else "Moderate")
             st.markdown(f"**{loc_label}** — {_quality} ({weight}%)", help=loc_desc)
             st.progress(_val_int, text=f"{val:.0f}/100")
+            _ham = getattr(score.technical, "ham_score", 50.0)
+            if key == "Technical Analysis" and val <= 0 and _ham < 0:
+                st.caption(
+                    f"0 alt sınırdır: göstergelerin toplamı {_ham:+.0f} çıktı (aralık kabaca −60…+110). "
+                    "Fiyat ortalamaların altında, momentum ve trend olumsuz demektir."
+                    if ui_lang == "TR" else
+                    f"0 is the floor: the indicators summed to {_ham:+.0f} (range roughly −60…+110). "
+                    "Price is below its averages and momentum and trend are negative.")
 
     # Chart
     st.markdown("---")

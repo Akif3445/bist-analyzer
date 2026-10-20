@@ -2458,6 +2458,32 @@ on Streamlit Cloud:
 - **Signal Tracker raised `UnboundLocalError`** whenever a period had SELL
   signals but no BUY: `col_rename` was defined only in the BUY branch.
 
+### "Technical score is 0" (2026-10-20)
+
+The user reported Hisse Analizi showing a technical score of 0. Two separate
+things were behind it.
+
+1. **The scale floor (by design, kept).**
+   - `_compute_score` starts at 0, adds or subtracts per indicator, and clips
+     to 0–100. The raw sum spans roughly −60…+110.
+   - In the current Ayı regime most stocks sum negative, so they all sit at 0:
+     on 2026-10-19, 323 of 435 had 0 and the median was 0. THYAO's raw sum
+     is −30.
+   - The backtest (`_vectorized_scores`) clips the same way, and every
+     threshold was chosen on this scale, so it is **not** changed.
+   - The raw sum is now kept as `TechnicalResult.ham_score` for display only.
+     Hisse Analizi explains a 0 as "the floor; indicators summed to −30".
+2. **A real bug: the score depended on the chart period.**
+   - Hisse Analizi's "Periyot" selector fed the scoring data too. On "6 Ay"
+     (125 bars) SMA200 could not be computed, which was scored as "below",
+     and the 52-week position shrank to 6 months. ASELS went 24 → 0 and BIMAS
+     11.6 → 0.
+   - `compute_bist_score` now always scores on at least 1 year and trims
+     `stock.df` to the chosen period afterwards. Verified: 6mo, 1y and 2y give
+     identical scores.
+   - The logs and the robot always used 1y, so `SCORING_VERSION` is
+     unchanged.
+
 ### Demo load time (2026-10-20)
 
 Profiled with Streamlit `AppTest` against the real Turso, by wrapping
